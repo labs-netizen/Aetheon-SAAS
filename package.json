@@ -26,6 +26,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/crypto-js": "^4.2.2",
     "@types/node": "^20.17.0",
     "@types/papaparse": "^5.3.14",

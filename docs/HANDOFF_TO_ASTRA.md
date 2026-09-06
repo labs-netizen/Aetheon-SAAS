@@ -1,90 +1,159 @@
-# HANDOFF TO ASTRA - Specialist Engineering & Security Audit Directive (HANDOFF_TO_ASTRA.md)
+# HANDOFF TO ASTRA — Specialist Engineering, Security Audit & Live Verification Directive
 
-## 1. Executive Summary & Repository State
-
-This document serves as the formal handover specification from the **Antigravity implementation phase** to the **Astra specialist engineering and audit phase**.
-
-Antigravity has constructed the complete first major production-oriented foundation of the **Aetheon Energy Intelligence Platform** (`aetheon-saas`), covering ~70% of total repository engineering effort:
-- Modern Next.js 14 modular monolith application with TypeScript (strict) and Tailwind CSS.
-- Production PostgreSQL migrations and Row Level Security policies (`supabase/migrations/00001_core_tenancy.sql` through `00007_rls_policies.sql`).
-- Central Data Quality & Publication Quality Gate with hard suppression on stale or incomplete data (`src/features/quality/qualityGate.ts`).
-- Indian 15-minute 96-block electricity time utilities (`src/lib/dates/blocks96.ts`).
-- Centralized Entitlement Engine decoupled from monitoring activation status (`src/features/entitlements/service.ts`).
-- 5-stage Operational Activation State Machine (`src/features/onboarding/stateMachine.ts`).
-- Complete CSV/XLSX 15-minute AMR ingestion gateway with SHA-256 duplicate detection and row-level error reporting (`src/features/ingestion/csvParser.ts`).
-- Deepest commercial implementation delivered for **Grid Intelligence Monitor** (`src/app/grid-intelligence/page.tsx`).
-- Functional demo implementations for Open Access Compliance, DSM Risk Monitor, BESS Arbitrage, and Renewable Portfolio with prominent `DEMO / UNVERIFIED` badges.
-- Decoupled Python FastAPI analytics engine with deterministic numerical solvers (`services/analytics/`).
-- Automated test suites (Vitest unit/integration tests & Pytest analytics tests).
+> **Handoff Status**: Phase 1 Foundation & Reconciled Implementation Complete. Ready for Specialist Astra Takeover.  
+> **Repository Commit Checkpoint**: `chore(handoff): reconcile implementation with authoritative product specification`  
+> **Date**: September 2026  
 
 ---
 
-## 2. Implementation Inventory
+## 1. Executive Summary & Repository Status
 
-### What is Fully Working (Production Foundation Ready)
-1. **Application Shell & Navigation**: Responsive multi-tenant shell with organisation context, dynamic site selector, activation health badge, role switcher, and user menu (`src/components/layout/AppShell.tsx`).
-2. **Indian 96-Block Time Engine**: Canonical conversion between Indian electricity blocks 1–96, operating dates, and UTC/IST ISO timestamps (`src/lib/dates/blocks96.ts`).
-3. **Data Gateway (CSV Ingestion)**: Ingestion parser, SHA-256 checksum duplicate rejection, 96-block contiguity validation, and template generation (`src/features/ingestion/csvParser.ts`).
-4. **Central Publication Quality Gate**: Evaluation engine enforcing hard suppression of actionable recommendations when telemetry is stale (>24h) or incomplete (<90%) (`src/features/quality/qualityGate.ts`).
-5. **Decoupled Activation Machine**: 5-state lifecycle (`CONFIGURED` → `AWAITING_DATA` → `CALIBRATING` → `ACTIVE` / `DEGRADED`) independent of payment status (`src/features/onboarding/stateMachine.ts`).
-6. **Grid Intelligence Monitor**: Full end-to-end interface with Daily Grid Brief, 96-block interactive Recharts curve, 96-row tabular view, Cost Explorer (baseline vs solar vs BESS vs OA), and CSV/print export (`src/app/grid-intelligence/page.tsx`).
-7. **Common Report Engine**: Snapshot provenance preservation (model version, generation timestamp, tariff version) (`src/app/reports/page.tsx`).
-8. **Admin Launch Checklist**: 10-point commercial launch checklist, model registry, and immutable audit logs (`src/app/admin/page.tsx`).
-
-### What is Demo / Synthetic (Clearly Stamped DEMO / UNVERIFIED)
-1. **DISCOM Tariffs & DSM Rules**: Synthetic tariff values (e.g. MSEDCL HT-1 ₹7.45/kWh and ToD peak surcharges) are seeded for demonstration only in `supabase/seed.sql`.
-2. **DSM Exposure Calculations**: Simple linear penalty calculation under demo rates; not yet certified against CERC DSM 2024 formal state-specific billing matrices.
-3. **BESS Advisory Solver**: Deterministic heuristic solver in `services/analytics/solvers.py` verifying power and SOC bounds; not yet a commercial MILP degradation optimizer.
-4. **Regulatory Sources**: Seeded orders marked `DEMO / UNVERIFIED` until reviewed by legal counsel.
+Antigravity has constructed the complete first major production-oriented foundation of the **Aetheon Energy Intelligence Platform** (`aetheon-saas`), reconciled against the authoritative specification requirements:
+- **Modular Monolith**: Next.js 14 App Router, TypeScript (strict mode, zero build errors), Tailwind CSS with custom industrial C&I palette.
+- **Microservices**: Decoupled Python 3.12 analytics microservice (`services/analytics`) with deterministic numerical solvers.
+- **Database Architecture**: 7 production PostgreSQL migrations (`supabase/migrations/`) featuring complete DDL, foreign keys, indexes, triggers, and Row Level Security (RLS) policies.
+- **Security & Multi-Tenancy**: 10 automated security & isolation tests verifying tenant isolation, role escalation prevention, internal admin boundary enforcement, entitlement gating, regulatory publishing gates, duplicate ingestion prevention, HMAC webhook verification, and private storage path partitioning.
+- **End-to-End Testing**: 12 Playwright browser tests verifying end-to-end user journeys in headless Chromium with 100% pass rate.
+- **Unit & Analytics Testing**: 36 Vitest unit/integration tests and 5 Pytest analytics tests passing cleanly.
 
 ---
 
-## 3. Areas Requiring Specialist Review by Astra
+## 2. Environment Blocker & Real Supabase Verification Status
 
-The following areas are marked `SPECIALIST_REVIEW_REQUIRED`:
+### Exact Environmental Blocker
+- **Tool**: Docker Desktop / Supabase CLI (`supabase start`, `supabase db reset`).
+- **Blocker Encountered**: Docker daemon is installed (`Docker version 29.5.3, build 3b66e11`), but the Docker Desktop service is **not running** on the host machine.
+- **Error Returned**: `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`.
+- **Honest Verification Boundary**: Because the local Docker daemon was offline, Antigravity **cannot and does not claim that real PostgreSQL RLS execution was verified in a live database process**. All SQL migrations, DDL statements, and RLS policies were syntactically and structurally verified against PostgreSQL 15 standards, but live adversarial SQL testing must be executed by Astra once Docker is booted.
 
-### 3.1 Tenant Isolation & Row Level Security (RLS)
-- **Target File**: `supabase/migrations/20260907000007_rls_policies.sql`
-- **Audit Requirement**:
-  - Verify that `is_org_member()` and `has_org_role()` helper functions cannot be bypassed via SQL injection or subquery manipulation.
-  - Test cross-tenant access resistance against malicious direct Supabase REST API queries.
-  - Verify private storage bucket policies for uploaded AMR CSVs and generated report PDFs.
+### Step-by-step Astra Action to Unblock Live Database Testing:
+```bash
+# 1. Start Docker Desktop on Windows host
+# 2. Open terminal in workspace root:
+npx supabase start
 
-### 3.2 Privilege Escalation & Internal Roles
-- **Target File**: `src/types/index.ts`, `src/features/entitlements/service.ts`, `supabase/migrations/20260907000001_core_tenancy.sql`
-- **Audit Requirement**:
-  - Ensure `AETHEON_ANALYST` access strictly enforces the `expires_at` timestamp in both application middleware and PostgreSQL RLS.
-  - Verify that `AETHEON_REGULATORY_REVIEWER` cannot access customer billing data or trigger commercial refunds.
+# 3. Apply migrations and seed data:
+npx supabase db reset
 
-### 3.3 Payment Webhook Verification & Idempotency
-- **Target File**: `src/features/billing/razorpayAdapter.ts`
-- **Audit Requirement**:
-  - Replace development signature bypass with strict mandatory cryptographic HMAC-SHA256 signature verification in production.
-  - Implement replay-attack protection via unique webhook event ID tracking in PostgreSQL.
-
-### 3.4 Regulatory Publication Quality Gate
-- **Target File**: `src/app/compliance/page.tsx`, `supabase/migrations/20260907000004_regulatory_framework.sql`
-- **Audit Requirement**:
-  - Verify that no API endpoint or server-rendered component can deliver regulatory data with status `CHANGE_DETECTED/REVIEW_PENDING` to customer sessions.
-  - Implement tamper-evident cryptographic signing of approved regulatory orders.
-
-### 3.5 BESS Optimization Mathematics
-- **Target File**: `services/analytics/solvers.py` (function `solve_bess_advisory`)
-- **Audit Requirement**:
-  - Transition from the baseline heuristic solver to a mixed-integer linear programming (MILP) solver optimizing joint time-of-day tariffs and battery degradation curves.
-  - Maintain the strict advisory boundary ("Recommended opportunity windows") with zero physical SCADA dispatch.
-
-### 3.6 CERC/SERC DSM State-Rule Mathematical Engine
-- **Target File**: `services/analytics/solvers.py` (function `solve_dsm_deviation`)
-- **Audit Requirement**:
-  - Incorporate real-time Indian grid frequency linking (50 Hz ± 0.05 Hz) into deviation settlement surcharge multipliers per the CERC 2024 Deviation Settlement Regulations.
+# 4. Verify RLS policies and table structures:
+npx supabase test db
+```
 
 ---
 
-## 4. Recommended Astra Execution Order
+## 3. Exact Audit Targets for Astra
 
-1. **Phase A (Security & Tenancy Audit)**: Audit `supabase/migrations/20260907000007_rls_policies.sql` and run automated adversarial SQL queries.
-2. **Phase B (Billing & Entitlement Hardening)**: Connect production Razorpay test webhooks and audit subscription transitions.
-3. **Phase C (Regulatory Sourcing Verification)**: Replace synthetic regulatory seed data in `supabase/seed.sql` with verified tariff orders from MERC, GERC, and UPERC.
-4. **Phase D (Advanced Mathematical Solvers)**: Enhance `services/analytics/solvers.py` with MILP optimization for BESS and frequency-linked DSM calculations.
-5. **Phase E (External Penetration Testing)**: Commission independent third-party penetration testing prior to public commercial billing launch.
+Below is the requirement-by-requirement audit target directory specifying exact files, functions/policies, what Antigravity implemented, what was verified, what remains uncertain, and why specialist review is required.
+
+---
+
+### Target 1: PostgreSQL Tenant Isolation & Row Level Security (RLS)
+* **File Path**: `supabase/migrations/20260906000001_initial_schema.sql` and `supabase/migrations/20260907000007_rls_policies.sql`
+* **Function / Policy / Trigger**:
+  - Functions: `is_org_member(org_id uuid)`, `has_org_role(org_id uuid, required_role text)`
+  - Policies: `org_isolation_select`, `org_isolation_insert`, `org_isolation_update`, `org_isolation_delete` on `organisations`, `sites`, `meter_telemetry_15m`, `forecasts_96block`, `alerts`
+* **What Antigravity Implemented**: Created multi-tenant DDL with mandatory `organisation_id` UUID foreign keys, RLS enabled on all tenant tables, and helper functions leveraging `auth.uid()` and `organisation_memberships`.
+* **What Was Actually Tested**: Tested application-layer and repository-layer tenant isolation in `tests/integration/security_isolation.test.ts` (Tests 1, 2, 3) verifying Org A context cannot query or mutate Org B data.
+* **What Remains Uncertain**: Behavior under edge-case SQL transactions, subquery injection in custom RLS functions, and performance of RLS policies over millions of 15-minute telemetry rows.
+* **Why Specialist Review is Required**: A database security specialist must execute adversarial SQL queries directly via `psql` / Supabase REST API to verify that Postgres engine-level bypass is mathematically impossible.
+
+---
+
+### Target 2: Internal Admin Boundary & Role Escalation Defense
+* **File Path**: `src/app/admin/page.tsx`, `src/lib/constants/index.ts`, `src/components/layout/AppShell.tsx`
+* **Function / Component**:
+  - `AdminConsolePage`: Route gate checking `userRole === 'AETHEON_ANALYST' || userRole === 'AETHEON_REGULATORY_REVIEWER'`
+  - `AppShell`: Gated Demo Role Switcher rendering (`NEXT_PUBLIC_DEMO_MODE !== 'false'`)
+* **What Antigravity Implemented**: Gated administrative console against customer roles (including customer `ORGANISATION_ADMIN`). Hid/disabled the client Role Switcher when `DEMO_MODE` is disabled so production builds cannot manipulate roles client-side.
+* **What Was Actually Tested**: Verified in Vitest (`tests/integration/security_isolation.test.ts` Tests 4, 5) and Playwright E2E (`tests/e2e/platform_workflows.spec.ts` Test 9) that navigating to `/admin` as a customer displays "Administrative Access Restricted".
+* **What Remains Uncertain**: Supabase Auth JWT claims propagation in Next.js Server Actions / middleware once integrated with live Supabase GoTrue auth.
+* **Why Specialist Review is Required**: Astra must ensure server-side middleware (`middleware.ts`) cryptographically verifies the user's role from Supabase session claims before rendering any administrative page.
+
+---
+
+### Target 3: Payment Webhook Cryptographic Verification & Replay Protection
+* **File Path**: `src/lib/security/webhook.ts`, `src/features/billing/razorpayAdapter.ts`
+* **Function / Class**:
+  - `verifyWebhookSignature(payload, signature, secret)`
+  - `isWebhookReplay(eventId)`
+* **What Antigravity Implemented**: HMAC-SHA256 signature verification comparing payload against expected signature; rejection of requests with timestamp skew >300 seconds; in-memory / cache deduplication of `x-razorpay-event-id`.
+* **What Was Actually Tested**: Verified in Vitest (`tests/integration/security_isolation.test.ts` Test 9) that invalid signatures and replayed event IDs are rejected with 401/409 codes.
+* **What Remains Uncertain**: Production persistence of processed webhook IDs in a Redis or PostgreSQL idempotency ledger across distributed serverless instances.
+* **Why Specialist Review is Required**: Astra must connect production Razorpay webhook credentials and implement atomic PostgreSQL `INSERT ... ON CONFLICT DO NOTHING` for event deduplication.
+
+---
+
+### Target 4: Regulatory 6-Stage Governance Pipeline
+* **File Path**: `src/features/compliance/regulatory-engine.ts`, `src/app/compliance/page.tsx`
+* **Function / State Machine**:
+  - `isPublishedToCustomer(status)`
+  - Pipeline stages: `CAPTURED` → `EXTRACTED` → `REVIEW_PENDING` → `APPROVED` → `PUBLISHED`
+* **What Antigravity Implemented**: Strict state machine gate enforcing that draft regulatory items (`CHANGE_DETECTED/REVIEW_PENDING`) are suppressed and marked "Blocked from Customer View".
+* **What Was Actually Tested**: Vitest integration test (`tests/integration/security_isolation.test.ts` Test 7) and Playwright E2E (`tests/e2e/platform_workflows.spec.ts` Test 10).
+* **What Remains Uncertain**: Legal fidelity of seeded MSEDCL/MERC tariff orders and formal dual-signoff authorization workflows.
+* **Why Specialist Review is Required**: An energy regulatory lawyer / specialist must review the draft tariff clauses and authorize the signoff audit protocol before customer billing calculations rely upon them.
+
+---
+
+### Target 5: BESS Advisory Language & Safety Interlock Lockout
+* **File Path**: `src/app/bess/page.tsx`, `services/analytics/solvers.py`
+* **Function / Component**:
+  - UI: `BESSPage` safety lockout state and opportunity window rendering
+  - Python: `solve_bess_advisory(telemetry, market_prices, battery_constraints)`
+* **What Antigravity Implemented**: Strict advisory boundary using "recommended charge/discharge opportunity windows" wording (no autonomous dispatch); hardware maintenance lock and SOC boundary interlock that hard-suppresses opportunity signals.
+* **What Was Actually Tested**: Playwright E2E (`tests/e2e/platform_workflows.spec.ts` Test 11) toggling the safety lockout and verifying immediate hard suppression of advisory signals.
+* **What Remains Uncertain**: Linear cell degradation model accuracy (₹1,800/cycle assumption) and battery warranty compliance curves under deep cycling.
+* **Why Specialist Review is Required**: An electrochemical energy storage engineer must calibrate the cell degradation cost function against specific battery chemistry (LFP vs NMC) and warranty contracts.
+
+---
+
+### Target 6: DSM Deviation Settlement & Missing-Data Hard Suppression
+* **File Path**: `src/app/dsm/page.tsx`, `src/features/quality-gate/QualityGateService.ts`, `services/analytics/solvers.py`
+* **Function**:
+  - `solve_dsm_deviation(actual_mw, scheduled_mw, grid_freq_hz)`
+  - Quality gate check: `isTelemetryMissing(siteId, block)`
+* **What Antigravity Implemented**: Hard suppression of penalty calculations when meter or schedule telemetry is absent (avoiding fabricated penalty estimates); quiet hours dampening (22:00–06:00 IST) for non-critical alerts.
+* **What Was Actually Tested**: Playwright E2E (`tests/e2e/platform_workflows.spec.ts` Test 12) verifying DSM safeguards and quiet hours notice.
+* **What Remains Uncertain**: Exact state SLDC deviation surcharge step functions (e.g. MERC vs CERC 2024 DSM 2nd Amendment frequency band multipliers).
+* **Why Specialist Review is Required**: A grid operations / SLDC compliance specialist must calibrate the penalty rate curve against current state regulatory orders.
+
+---
+
+### Target 7: Grid Intelligence Forecast Model Calibration
+* **File Path**: `src/app/grid-intelligence/page.tsx`, `services/analytics/engine.py`
+* **Function**:
+  - `generate_96block_forecast(history, weather, day_type)`
+* **What Antigravity Implemented**: 96-block demand and DAM price forecast generation, P10/P90 confidence intervals, high-cost window detection, Cost Explorer scenario comparison, and quality gate hard suppression.
+* **What Was Actually Tested**: Python pytest (`services/analytics/tests/test_analytics.py`, 5/5 passed) and Playwright E2E (`tests/e2e/platform_workflows.spec.ts` Tests 3, 4).
+* **What Remains Uncertain**: Forecast accuracy / MAPE on actual industrial load curves; clearing price correlation against real IEX/PXIL market feeds.
+* **Why Specialist Review is Required**: Data science / quantitative trading specialist must backtest the forecasting engine against historical plant AMR data and IEX clearing prices before commercial availability.
+
+---
+
+## 4. Test Suite Execution Summary
+
+| Test Suite | Framework | Total Tests | Passed | Failed | Status |
+|---|---|---|---|---|---|
+| **Unit & Ingestion Tests** | Vitest | 26 | 26 | 0 | PASSED |
+| **Security & Isolation Tests** | Vitest | 10 | 10 | 0 | PASSED |
+| **Python Analytics Solvers** | Pytest | 5 | 5 | 0 | PASSED |
+| **Platform E2E Workflows** | Playwright (Chromium) | 12 | 12 | 0 | PASSED |
+| **TypeScript Compilation** | `tsc --noEmit` | N/A | 0 errors | 0 | PASSED |
+| **Next.js Production Build** | `next build` | 13 routes | 13 | 0 | PASSED |
+
+---
+
+## 5. Priority Sequence for Astra
+
+1. **Step 1 — Start Docker & Reset DB**:
+   - Boot Docker Desktop on host.
+   - Run `npx supabase start && npx supabase db reset`.
+   - Run PostgreSQL adversarial tenant queries against `meter_telemetry_15m` and `organisations`.
+2. **Step 2 — Connect Supabase Auth**:
+   - Wire `src/lib/supabase/client.ts` and `src/lib/supabase/server.ts` to live Supabase Auth instance.
+   - Test passwordless magic link / OAuth login flows.
+3. **Step 3 — Regulatory Tariff Audit**:
+   - Have an energy regulatory specialist audit the values in `src/lib/tariffs/calculator.ts` against actual MERC FY25 HT-1 tariffs.
+4. **Step 4 — Connect Live IEX & AMR Feeds**:
+   - Replace demo market prices with live IEX Day-Ahead Market API or scraping adapter.
+   - Connect active plant Modbus / DLMS AMR gateway feed to `src/features/ingestion/`.

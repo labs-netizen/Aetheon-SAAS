@@ -113,3 +113,18 @@ Operational intelligence is verified by `PublicationQualityGate` before display:
 | **DSM Risk Monitor** | Scheduled vs actual deviation, risk bands (Normal/Watch/High/Critical), incidents | Secondary Target | Functional Framework / Demo Engine |
 | **BESS Arbitrage** | Opportunity windows, degradation-aware net value calculation | Secondary Target | Functional Framework / Safe Demo Solver |
 | **Renewable Portfolio** | Generation vs model, self-consumption %, carbon emissions tracking | Secondary Target | Functional Framework / Demo Assets |
+
+---
+
+## 5. Automated Verification Harness
+
+The architecture includes a three-tier automated verification harness:
+1. **Unit & Fast Integration Tests (`vitest`)**:
+   - 36 tests across unit business logic (`tests/unit/`) and security isolation (`tests/integration/security_isolation.test.ts`).
+   - Validates 96-block conversions, tariff calculations, CSV parsing, data quality gate rules, and 10 security/tenant-isolation boundaries.
+2. **Python Analytics Service Tests (`pytest`)**:
+   - 5 tests verifying forecast generation, BESS advisory heuristic optimization, and DSM penalty solvers (`services/analytics/tests/`).
+3. **End-to-End Browser Tests (`playwright`)**:
+   - 12 comprehensive browser journey tests (`tests/e2e/platform_workflows.spec.ts`) running headless Chromium against the live Next.js application server.
+   - Verifies dashboard navigation, site context switching, 96-block charts, data quality suppression states, CSV ingestion workflows, unsubscribed feature gates, report generation, incident acknowledgment, admin route blocking, regulatory approval boundaries, BESS safety interlocks, and DSM safeguards.
+

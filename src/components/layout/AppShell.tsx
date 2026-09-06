@@ -119,23 +119,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <DemoBadge />
         </div>
 
-        {/* Right: Role Switcher & User Profile */}
+        {/* Right: Role Indicator / Demo Role Switcher & User Profile */}
         <div className="flex items-center gap-3">
-          <div className="hidden xl:flex items-center gap-1 bg-slate-950/80 px-2 py-1 rounded border border-slate-800 text-xs">
-            <UserCheck className="w-3.5 h-3.5 text-slate-400" />
-            <span className="text-slate-500">Role:</span>
-            <select
-              value={activeRole}
-              onChange={(e) => switchRole(e.target.value as PlatformRole)}
-              className="bg-transparent text-slate-300 text-xs focus:outline-none cursor-pointer font-medium"
-            >
-              {roles.map((r) => (
-                <option key={r} value={r} className="bg-slate-900 text-slate-100">
-                  {r.replace(/_/g, ' ')}
-                </option>
-              ))}
-            </select>
-          </div>
+          {process.env.NEXT_PUBLIC_DEMO_MODE !== 'false' ? (
+            <div className="hidden xl:flex items-center gap-1 bg-slate-950/80 px-2 py-1 rounded border border-slate-800 text-xs">
+              <UserCheck className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-500">Demo Role:</span>
+              <select
+                aria-label="Demo Role Switcher"
+                value={activeRole}
+                onChange={(e) => switchRole(e.target.value as PlatformRole)}
+                className="bg-transparent text-slate-300 text-xs focus:outline-none cursor-pointer font-medium"
+              >
+                {roles.map((r) => (
+                  <option key={r} value={r} className="bg-slate-900 text-slate-100">
+                    {r.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="hidden xl:flex items-center gap-1 bg-slate-950/80 px-2.5 py-1 rounded border border-slate-800 text-xs text-slate-400">
+              <UserCheck className="w-3.5 h-3.5 text-teal-400" />
+              <span>{activeRole.replace(/_/g, ' ')}</span>
+            </div>
+          )}
 
           <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-semibold text-teal-300">
             {activeRole === 'ORGANISATION_ADMIN' ? 'OA' : activeRole.substring(0, 2)}

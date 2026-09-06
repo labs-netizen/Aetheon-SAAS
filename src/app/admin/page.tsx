@@ -19,8 +19,9 @@ export default function AdminPage() {
   const { activeRole } = useSite();
   const [activeTab, setActiveTab] = useState<'checklist' | 'models' | 'regulatory' | 'audit'>('checklist');
 
-  // Check if role has internal administrative or regulatory review access
-  const hasAccess = activeRole === 'ORGANISATION_ADMIN' || activeRole === 'AETHEON_ANALYST' || activeRole === 'AETHEON_REGULATORY_REVIEWER';
+  // Internal platform administration is restricted to Aetheon staff
+  const isInternalAdmin = activeRole === 'AETHEON_ANALYST' || activeRole === 'AETHEON_REGULATORY_REVIEWER';
+  const hasAccess = isInternalAdmin;
 
   const launchChecklist = [
     { title: 'Supported State Jurisdiction & DISCOMs', status: 'READY', desc: 'MSEDCL, UGVCL, PVVNL profiles active with verified voltage brackets.' },
@@ -55,8 +56,8 @@ export default function AdminPage() {
         <Lock className="w-10 h-10 text-rose-400 mx-auto mb-3" />
         <h3 className="text-base font-bold text-slate-200">Administrative Access Restricted</h3>
         <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
-          Your current active role ({activeRole}) does not have platform administration privileges.
-          Use the top-right role switcher to simulate an Organisation Admin or Aetheon Analyst role.
+          Customer accounts cannot access internal Aetheon platform administration.
+          Your current active role ({activeRole}) is restricted to customer-facing views.
         </p>
       </Card>
     );

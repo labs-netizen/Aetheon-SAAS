@@ -9,7 +9,7 @@ export const PRODUCTS = {
     basePricePaise: 1990000, // ₹19,900
     displayPrice: '₹19,900/site/month',
     description: '96-block price & demand forecast, Daily Grid Brief, and landed cost optimization.',
-    availabilityStatus: 'AVAILABLE',
+    availabilityStatus: 'INTERNAL_VALIDATION',
   },
   OA_COMPLIANCE: {
     id: 'OA_COMPLIANCE',
