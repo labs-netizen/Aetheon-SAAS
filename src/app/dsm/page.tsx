@@ -220,7 +220,7 @@ export default function DSMPage() {
         <CardHeader>
           <div>
             <CardTitle className="text-slate-100">
-              Today's 96-Block Deviation Log
+              Today&apos;s 96-Block Deviation Log
             </CardTitle>
             <CardDescription>
               Actual drawal vs approved SLDC schedule across every 15-minute block.

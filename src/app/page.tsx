@@ -84,7 +84,7 @@ export default function DashboardPage() {
           </div>
           <p className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1">
             <TrendingDown className="w-3 h-3" />
-            4.2% lower than yesterday's clearing price
+            4.2% lower than yesterday&apos;s clearing price
           </p>
         </Card>
 
