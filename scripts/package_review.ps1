@@ -29,6 +29,7 @@ Copy-Item -Recurse -Path ".github" -Destination "$target\.github"
 
 Write-Host "=== Step 3: Copying root configuration files ==="
 $rootFiles = @(
+    "AGENTS.md",
     "package.json",
     "package-lock.json",
     "tsconfig.json",
@@ -107,7 +108,7 @@ if ($foundEnv) {
       "eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
       # Service role JWT literals
       "service_role.*eyJ",
-      "SUPABASE_SERVICE_ROLE_KEY\s*[=:]\s*[\"']?eyJ",
+      'SUPABASE_SERVICE_ROLE_KEY\s*[=:]\s*["'']?eyJ',
       # Razorpay test/live secrets
       "rzp_test_[0-9a-zA-Z]{14}",
       # Analytics shared-secret literals (if not explicitly permitted test fixtures)
@@ -115,9 +116,10 @@ if ($foundEnv) {
   )
 
 foreach ($pattern in $secretPatterns) {
-    $matches = Get-ChildItem -Path $target -Recurse -File | Select-String -Pattern $pattern
+    $matches = Get-ChildItem -Path $target -Recurse -File | Where-Object { $_.Name -ne "package_review.ps1" -and $_.Name -ne "verify_zip.ps1" } | Select-String -Pattern $pattern
     if ($matches) {
-        $violations += "Potential live secret pattern ($pattern) matched in files!"
+        $matchedPaths = ($matches | Select-Object -ExpandProperty Path -Unique) -join ", "
+        $violations += "Potential live secret pattern ($pattern) matched in files: $matchedPaths"
     }
 }
 
@@ -129,7 +131,7 @@ if ($violations.Count -gt 0) {
 }
 
 Write-Host "=== Step 6: Creating codex review.zip ==="
-Compress-Archive -Path "$target\*" -DestinationPath $zipFile -CompressionLevel Optimal
+Compress-Archive -Path "$target" -DestinationPath $zipFile -CompressionLevel Optimal
 
 Write-Host "=== Step 7: Cleaning up temporary staging directory ==="
 Remove-Item -Recurse -Force $target

@@ -37,7 +37,7 @@ SERVICE_TOKEN = os.getenv("ANALYTICS_SERVICE_TOKEN")
 if not SERVICE_TOKEN:
     if ENVIRONMENT == "production":
         raise RuntimeError("CRITICAL: ANALYTICS_SERVICE_TOKEN must be explicitly configured in production environment")
-    SERVICE_TOKEN = "internal-dev-secret-token"
+    SERVICE_TOKEN = "local-dev-analytics-token"
 
 
 def verify_service_token(authorization: str = Header(default="")):

@@ -8,15 +8,10 @@ const isProduction = process.env.NODE_ENV === 'production';
 const ANALYTICS_BASE_URL = process.env.ANALYTICS_SERVICE_URL || 'http://127.0.0.1:8000';
 const ANALYTICS_SERVICE_TOKEN = process.env.ANALYTICS_SERVICE_TOKEN;
 
-if (!ANALYTICS_SERVICE_TOKEN) {
-  if (isProduction) {
-    throw new Error('CRITICAL: ANALYTICS_SERVICE_TOKEN must be set in production environment');
-  }
-  // Development fallback - explicitly named to avoid confusion with production secrets
-  console.warn('[ANALYTICS] WARNING: Using development fallback token. Set ANALYTICS_SERVICE_TOKEN for production.');
+if (!process.env.ANALYTICS_SERVICE_TOKEN && isProduction) {
+  throw new Error('CRITICAL: ANALYTICS_SERVICE_TOKEN must be set in production environment');
 }
-const DEV_TOKEN = 'internal-dev-secret-token';
-const effectiveToken = ANALYTICS_SERVICE_TOKEN || (isProduction ? '' : DEV_TOKEN);
+const effectiveToken = process.env.ANALYTICS_SERVICE_TOKEN || '';
 
 export interface GridForecastParams {
   siteId: string;

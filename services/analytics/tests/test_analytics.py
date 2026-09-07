@@ -128,10 +128,11 @@ def test_service_token_authentication():
     assert invalid_res.status_code == 401
 
     # Calling with correct token must succeed
+    from main import SERVICE_TOKEN
     authorized_res = client.post(
         "/v1/grid/forecast",
         json=payload,
-        headers={"Authorization": "Bearer internal-dev-secret-token"}
+        headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
     )
     assert authorized_res.status_code == 200
 
