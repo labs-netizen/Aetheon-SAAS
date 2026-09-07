@@ -69,7 +69,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ## 4. Demo Mode & Seed Data
 
 The application operates out of the box in **DEMO MODE**:
-- Pre-seeded with **Aetheon Demo Industries Pvt Ltd** and **Chakan Auto Components Plant 1** (33kV, 2,500 kVA, MSEDCL).
+- Pre-seeded with **Aetheon Demo Industries Pvt Ltd** and **Aetheon Demo Manufacturing Facility 1** (33kV, 2,500 kVA, MSEDCL).
 - Prominent `DEMO DATA / UNVERIFIED` badges appear across all modules.
 - Includes a live 15-minute AMR CSV uploader in **Settings & Ingestion** with pre-configured template downloads.
 

@@ -7,7 +7,7 @@ test.describe('Aetheon Platform E2E Critical Workflows', () => {
     await expect(page).toHaveTitle(/Aetheon/i);
     await expect(page.getByText('AETHEON', { exact: true })).toBeVisible();
     await expect(page.getByText('Energy Intelligence', { exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Chakan Auto Components Plant 1/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Aetheon Demo Manufacturing Facility 1/i })).toBeVisible();
     await expect(page.getByText('Day-Ahead Average Price')).toBeVisible();
   });
 
@@ -17,11 +17,11 @@ test.describe('Aetheon Platform E2E Critical Workflows', () => {
     await expect(siteSelect).toBeVisible();
     
     // Switch to Sanand site (AWAITING_DATA)
-    await siteSelect.selectOption({ label: 'Sanand Engineering Unit 2 (Gujarat - UGVCL)' });
+    await siteSelect.selectOption({ label: 'Aetheon Demo Engineering Unit 2 (Gujarat - UGVCL)' });
     await expect(page.getByText('AWAITING_DATA').first()).toBeVisible();
 
-    // Switch back to Chakan site (ACTIVE)
-    await siteSelect.selectOption({ label: 'Chakan Auto Components Plant 1 (Maharashtra - MSEDCL)' });
+    // Switch back to Facility 1 site (ACTIVE)
+    await siteSelect.selectOption({ label: 'Aetheon Demo Manufacturing Facility 1 (Maharashtra - MSEDCL)' });
     await expect(page.getByText('ACTIVE').first()).toBeVisible();
   });
 
@@ -37,14 +37,14 @@ test.describe('Aetheon Platform E2E Critical Workflows', () => {
     await page.goto('/grid-intelligence');
     const siteSelect = page.locator('header select').first();
     // Switch to Sanand site which is AWAITING_DATA
-    await siteSelect.selectOption({ label: 'Sanand Engineering Unit 2 (Gujarat - UGVCL)' });
+    await siteSelect.selectOption({ label: 'Aetheon Demo Engineering Unit 2 (Gujarat - UGVCL)' });
 
     // Verify Publication Quality Gate triggers hard suppression
     await expect(page.getByText('Actionable Recommendations Hard-Suppressed')).toBeVisible();
     await expect(page.getByRole('button', { name: /Upload Current Data/i })).toBeVisible();
 
-    // Switch back to Chakan
-    await siteSelect.selectOption({ label: 'Chakan Auto Components Plant 1 (Maharashtra - MSEDCL)' });
+    // Switch back to Facility 1
+    await siteSelect.selectOption({ label: 'Aetheon Demo Manufacturing Facility 1 (Maharashtra - MSEDCL)' });
   });
 
   test('5. CSV Import workflow & 96-block template download', async ({ page }) => {

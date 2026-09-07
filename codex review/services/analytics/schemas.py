@@ -4,7 +4,7 @@ Defines strongly-typed request and response contracts for 96-block numerical pro
 """
 
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class BlockData(BaseModel):
@@ -15,8 +15,8 @@ class BlockData(BaseModel):
 
 
 class GridForecastRequest(BaseModel):
-    site_id: str
-    operating_date: str = Field(..., description="YYYY-MM-DD")
+    site_id: str = Field(..., min_length=1)
+    operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD")
     contract_demand_kw: float = Field(..., gt=0)
     historical_load_kw: Optional[List[float]] = None
     seed: Optional[int] = 42
@@ -57,11 +57,11 @@ class DSMDeviationBlock(BaseModel):
 
 
 class DSMCalculationRequest(BaseModel):
-    site_id: str
-    operating_date: str
+    site_id: str = Field(..., min_length=1)
+    operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     scheduled_drawal_kw: List[float] = Field(..., min_length=96, max_length=96)
     actual_drawal_kw: List[float] = Field(..., min_length=96, max_length=96)
-    contract_demand_kw: float
+    contract_demand_kw: float = Field(..., gt=0)
 
 
 class DSMCalculationResponse(BaseModel):
@@ -80,9 +80,9 @@ class DSMCalculationResponse(BaseModel):
 
 
 class BESSSolverRequest(BaseModel):
-    battery_id: str
-    site_id: str
-    operating_date: str
+    battery_id: str = Field(..., min_length=1)
+    site_id: str = Field(..., min_length=1)
+    operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     usable_capacity_kwh: float = Field(..., gt=0)
     power_rating_kw: float = Field(..., gt=0)
     initial_soc_pct: float = Field(..., ge=0, le=100)
@@ -92,6 +92,14 @@ class BESSSolverRequest(BaseModel):
     discharge_efficiency: float = Field(default=0.92, gt=0, le=1.0)
     degradation_cost_per_cycle_inr: float = Field(default=1500.0, ge=0)
     prices_inr_per_mwh: List[float] = Field(..., min_length=96, max_length=96)
+
+    @model_validator(mode="after")
+    def validate_soc_bounds(self) -> "BESSSolverRequest":
+        if self.min_soc_pct >= self.max_soc_pct:
+            raise ValueError("min_soc_pct must be strictly less than max_soc_pct")
+        if not (self.min_soc_pct <= self.initial_soc_pct <= self.max_soc_pct):
+            raise ValueError("initial_soc_pct must be within [min_soc_pct, max_soc_pct]")
+        return self
 
 
 class BESSDispatchBlock(BaseModel):

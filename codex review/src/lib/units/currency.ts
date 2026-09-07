@@ -18,6 +18,8 @@ export function formatPaiseToInr(paise: number, includeDecimals = false): string
   }).format(inr);
 }
 
+export const formatCurrencyFromPaise = formatPaiseToInr;
+
 /**
  * Convert INR floating amount to integer paise.
  */

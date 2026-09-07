@@ -39,8 +39,8 @@ export interface ParseResult {
     end_time: string;
     load_kw: number;
     solar_generation_kw: number;
-    actual_drawal_kw: number;
-    scheduled_drawal_kw: number;
+    actual_drawal_kw: number | null;
+    scheduled_drawal_kw: number | null;
   }>;
 }
 
@@ -117,10 +117,10 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
       return;
     }
 
-    // 4. Optional fields
-    const solar = row.solar_generation_kw ? parseFloat(row.solar_generation_kw as string) : 0.0;
-    const actual = row.actual_drawal_kw ? parseFloat(row.actual_drawal_kw as string) : load;
-    const scheduled = row.scheduled_drawal_kw ? parseFloat(row.scheduled_drawal_kw as string) : load;
+    // 4. Optional fields - DO NOT fabricate DSM data if missing
+    const solar = row.solar_generation_kw !== undefined && row.solar_generation_kw !== '' ? parseFloat(row.solar_generation_kw as string) : 0.0;
+    const actual = row.actual_drawal_kw !== undefined && row.actual_drawal_kw !== '' ? parseFloat(row.actual_drawal_kw as string) : null;
+    const scheduled = row.scheduled_drawal_kw !== undefined && row.scheduled_drawal_kw !== '' ? parseFloat(row.scheduled_drawal_kw as string) : null;
 
     const timings = getBlockTimes(block);
 
@@ -131,9 +131,28 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
       end_time: timings.endTime,
       load_kw: load,
       solar_generation_kw: isNaN(solar) ? 0.0 : Math.max(0, solar),
-      actual_drawal_kw: isNaN(actual) ? load : Math.max(0, actual),
-      scheduled_drawal_kw: isNaN(scheduled) ? load : Math.max(0, scheduled),
+      actual_drawal_kw: actual !== null && !isNaN(actual) ? Math.max(0, actual) : null,
+      scheduled_drawal_kw: scheduled !== null && !isNaN(scheduled) ? Math.max(0, scheduled) : null,
     });
+  });
+
+  // Check for duplicate blocks within the same date
+  const blockMap = new Map<string, Set<number>>();
+  acceptedData.forEach((row, idx) => {
+    if (!blockMap.has(row.operating_date)) {
+      blockMap.set(row.operating_date, new Set());
+    }
+    const seen = blockMap.get(row.operating_date)!;
+    if (seen.has(row.block_index)) {
+      errors.push({
+        rowNumber: idx + 2,
+        column: 'block_index',
+        value: row.block_index,
+        reason: `DUPLICATE_BLOCK: Block ${row.block_index} appears multiple times for date ${row.operating_date}.`,
+      });
+    } else {
+      seen.add(row.block_index);
+    }
   });
 
   // If no errors, record checksum as processed
@@ -150,6 +169,34 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
     errors,
     parsedData: acceptedData,
   };
+}
+
+/**
+ * Validate that an interval dataset forms a strictly contiguous 1-96 block set per operating date
+ */
+export function validate96BlockContiguity(data: ParseResult['parsedData']): {
+  isContiguous: boolean;
+  missingBlocksByDate: Record<string, number[]>;
+} {
+  const dates = [...new Set(data.map((d) => d.operating_date))];
+  const missing: Record<string, number[]> = {};
+  let allContiguous = true;
+
+  for (const date of dates) {
+    const presentBlocks = new Set(data.filter((d) => d.operating_date === date).map((d) => d.block_index));
+    const missingForDate: number[] = [];
+    for (let b = 1; b <= 96; b++) {
+      if (!presentBlocks.has(b)) {
+        missingForDate.push(b);
+      }
+    }
+    if (missingForDate.length > 0) {
+      missing[date] = missingForDate;
+      allContiguous = false;
+    }
+  }
+
+  return { isContiguous: allContiguous, missingBlocksByDate: missing };
 }
 
 /**
