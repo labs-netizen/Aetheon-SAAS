@@ -25,7 +25,9 @@ export interface Block96Point {
 }
 
 export interface Block96ChartProps {
-  data: Block96Point[];
+  data?: Block96Point[];
+  points?: Block96Point[];
+  title?: string;
   showPrice?: boolean;
   showSolar?: boolean;
   height?: number;
@@ -33,14 +35,17 @@ export interface Block96ChartProps {
 
 export function Block96Chart({
   data,
+  points,
+  title,
   showPrice = true,
   showSolar = false,
   height = 360,
 }: Block96ChartProps) {
+  const chartData = data || points || [];
   return (
     <div className="w-full bg-slate-950/60 p-4 rounded-lg border border-slate-800">
       <div className="flex items-center justify-between mb-3 text-xs text-slate-400">
-        <span className="font-semibold text-slate-200">Day-Ahead 96-Block Profile (15-Minute Resolution)</span>
+        <span className="font-semibold text-slate-200">{title || 'Day-Ahead 96-Block Profile (15-Minute Resolution)'}</span>
         <span>Blocks 1 (00:00) to 96 (24:00) IST</span>
       </div>
       <div style={{ width: '100%', height }}>

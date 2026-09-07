@@ -4,12 +4,24 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { Organisation, Site, PlatformRole } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 
+export type TenancyStatus =
+  | 'LOADING'
+  | 'READY'
+  | 'NO_ORGANISATION'
+  | 'ONBOARDING_REQUIRED'
+  | 'ACCESS_DENIED'
+  | 'ERROR';
+
 export interface SiteContextValue {
-  currentOrg: Organisation;
-  currentSite: Site;
+  currentOrg: Organisation | null;
+  currentSite: Site | null;
   activeRole: PlatformRole;
   sites: Site[];
+  entitlements: string[];
+  isEntitled: (productId: string) => boolean;
   isLoading: boolean;
+  tenancyStatus: TenancyStatus;
+  errorMessage: string | null;
   switchSite: (siteId: string) => void;
   switchRole: (role: PlatformRole) => void;
   refreshSites: () => Promise<void>;
@@ -61,37 +73,62 @@ const DEMO_SITES: Site[] = [
   },
 ];
 
+const ALL_PRODUCT_ENTITLEMENTS = [
+  'GRID_INTELLIGENCE',
+  'OPEN_ACCESS_COMPLIANCE',
+  'DSM_MONITOR',
+  'DSM_RISK_MONITOR',
+  'BESS_ARBITRAGE',
+  'RENEWABLE_PORTFOLIO',
+];
+
 const SiteContext = createContext<SiteContextValue | undefined>(undefined);
 
 export function SiteProvider({ children }: { children: React.ReactNode }) {
-  const [currentOrg, setCurrentOrg] = useState<Organisation>(DEMO_ORG);
-  const [sites, setSites] = useState<Site[]>(DEMO_SITES);
-  const [currentSiteId, setCurrentSiteId] = useState<string>(DEMO_SITES[0].id);
+  const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+  const [currentOrg, setCurrentOrg] = useState<Organisation | null>(isDemo ? DEMO_ORG : null);
+  const [sites, setSites] = useState<Site[]>(isDemo ? DEMO_SITES : []);
+  const [currentSiteId, setCurrentSiteId] = useState<string>(isDemo ? DEMO_SITES[0].id : '');
+  const [entitlements, setEntitlements] = useState<string[]>(isDemo ? ALL_PRODUCT_ENTITLEMENTS : []);
   const [activeRole, setActiveRole] = useState<PlatformRole>('ORGANISATION_ADMIN');
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(!isDemo);
+  const [tenancyStatus, setTenancyStatus] = useState<TenancyStatus>(isDemo ? 'READY' : 'LOADING');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const supabase = createClient();
 
   const loadUserData = React.useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
-      if (isDemo) {
-        setIsLoading(false);
-        return;
-      }
+    if (isDemo) {
+      setCurrentOrg(DEMO_ORG);
+      setSites(DEMO_SITES);
+      setCurrentSiteId(DEMO_SITES[0].id);
+      setEntitlements(ALL_PRODUCT_ENTITLEMENTS);
+      setTenancyStatus('READY');
+      setIsLoading(false);
+      return;
+    }
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        setCurrentOrg(null);
+        setSites([]);
+        setEntitlements([]);
+        setTenancyStatus('ACCESS_DENIED');
         setIsLoading(false);
         return;
       }
 
       // Query user memberships and organization
-      const { data: membershipData } = await supabase
+      const { data: membershipData, error: memError } = await supabase
         .from('memberships')
         .select(`
           role,
+          is_active,
           organisation_id,
           organisations:organisation_id (
             id,
@@ -103,43 +140,95 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
           )
         `)
         .eq('user_id', user.id)
-        .eq('is_active', true)
         .limit(1)
         .maybeSingle();
 
-      if (membershipData && membershipData.organisations) {
-        const org = Array.isArray(membershipData.organisations)
-          ? membershipData.organisations[0]
-          : membershipData.organisations;
+      if (memError) {
+        setCurrentOrg(null);
+        setSites([]);
+        setEntitlements([]);
+        setErrorMessage(memError.message);
+        setTenancyStatus('ERROR');
+        setIsLoading(false);
+        return;
+      }
 
-        setCurrentOrg(org as unknown as Organisation);
-        if (membershipData.role) {
-          setActiveRole(membershipData.role as PlatformRole);
-        }
+      if (!membershipData || !membershipData.organisations) {
+        setCurrentOrg(null);
+        setSites([]);
+        setEntitlements([]);
+        setTenancyStatus('NO_ORGANISATION');
+        setIsLoading(false);
+        return;
+      }
 
-        // Query sites for this organisation
-        const { data: sitesData } = await supabase
-          .from('sites')
-          .select('*')
-          .eq('organisation_id', org.id);
+      if (membershipData.is_active === false) {
+        setCurrentOrg(null);
+        setSites([]);
+        setEntitlements([]);
+        setTenancyStatus('ACCESS_DENIED');
+        setIsLoading(false);
+        return;
+      }
 
-        if (sitesData && sitesData.length > 0) {
-          setSites(sitesData as Site[]);
-          setCurrentSiteId(sitesData[0].id);
-        }
+      const org = Array.isArray(membershipData.organisations)
+        ? membershipData.organisations[0]
+        : membershipData.organisations;
+
+      setCurrentOrg(org as unknown as Organisation);
+      if (membershipData.role) {
+        setActiveRole(membershipData.role as PlatformRole);
+      }
+
+      // Query entitlements for this organisation
+      const { data: entData } = await supabase
+        .from('entitlements')
+        .select('product_id, is_active')
+        .eq('organisation_id', org.id)
+        .eq('is_active', true);
+
+      if (entData) {
+        const activeIds = entData.map((e) => e.product_id);
+        setEntitlements(activeIds);
+      }
+
+      // Query sites for this organisation
+      const { data: sitesData, error: sitesError } = await supabase
+        .from('sites')
+        .select('*')
+        .eq('organisation_id', org.id);
+
+      if (sitesError) {
+        setErrorMessage(sitesError.message);
+        setTenancyStatus('ERROR');
+        setIsLoading(false);
+        return;
+      }
+
+      if (!sitesData || sitesData.length === 0) {
+        setSites([]);
+        setTenancyStatus('ONBOARDING_REQUIRED');
+      } else {
+        setSites(sitesData as Site[]);
+        setCurrentSiteId((prev) => (prev && sitesData.some((s) => s.id === prev) ? prev : sitesData[0].id));
+        setTenancyStatus('READY');
       }
     } catch (err) {
-      console.warn('Error fetching live tenancy context, keeping fallback:', err);
+      setCurrentOrg(null);
+      setSites([]);
+      setEntitlements([]);
+      setErrorMessage(err instanceof Error ? err.message : 'Unknown tenancy resolution error');
+      setTenancyStatus('ERROR');
     } finally {
       setIsLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, isDemo]);
 
   useEffect(() => {
     loadUserData();
   }, [loadUserData]);
 
-  const currentSite = sites.find((s) => s.id === currentSiteId) || sites[0] || DEMO_SITES[0];
+  const currentSite = sites.find((s) => s.id === currentSiteId) || sites[0] || null;
 
   const switchSite = (siteId: string) => {
     setCurrentSiteId(siteId);
@@ -149,6 +238,13 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
     setActiveRole(role);
   };
 
+  const isEntitled = (productId: string): boolean => {
+    if (isDemo) return true;
+    return entitlements.includes(productId) ||
+      (productId === 'DSM_RISK_MONITOR' && entitlements.includes('DSM_MONITOR')) ||
+      (productId === 'DSM_MONITOR' && entitlements.includes('DSM_RISK_MONITOR'));
+  };
+
   return (
     <SiteContext.Provider
       value={{
@@ -156,7 +252,11 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
         currentSite,
         activeRole,
         sites,
+        entitlements,
+        isEntitled,
         isLoading,
+        tenancyStatus,
+        errorMessage,
         switchSite,
         switchRole,
         refreshSites: loadUserData,

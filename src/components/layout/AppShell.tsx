@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
   LayoutDashboard,
@@ -22,16 +22,205 @@ import {
   X,
   Radio,
   UserCheck,
+  AlertCircle,
+  PlusCircle,
+  LogOut,
+  Loader2,
+  ShieldX,
 } from 'lucide-react';
 import { useSite } from './SiteContext';
 import { DemoBadge } from '@/components/shared/DemoBadge';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
+import { createClient } from '@/lib/supabase/client';
 import type { PlatformRole } from '@/types';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { currentOrg, currentSite, sites, switchSite, activeRole, switchRole } = useSite();
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const router = useRouter();
+  const {
+    currentOrg,
+    currentSite,
+    sites,
+    switchSite,
+    activeRole,
+    switchRole,
+    tenancyStatus,
+    errorMessage,
+    refreshSites,
+  } = useSite();
 
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isCreatingOrg, setIsCreatingOrg] = useState(false);
+  const [newOrgName, setNewOrgName] = useState('');
+  const [newSiteName, setNewSiteName] = useState('');
+  const [creationError, setCreationError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const supabase = createClient();
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.push('/auth/login');
+  };
+
+  const handleCreateOrg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOrgName.trim()) return;
+
+    setIsSubmitting(true);
+    setCreationError(null);
+    try {
+      const res = await fetch('/api/organisations/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newOrgName.trim(),
+          siteName: newSiteName.trim() || undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create organisation');
+      }
+
+      await refreshSites();
+      setIsCreatingOrg(false);
+    } catch (err) {
+      setCreationError(err instanceof Error ? err.message : 'Error creating organisation');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 1. Loading State
+  if (tenancyStatus === 'LOADING') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6 space-y-4">
+        <Loader2 className="w-10 h-10 text-teal-400 animate-spin" />
+        <div className="text-center space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight text-slate-200">Resolving Tenancy Context</h2>
+          <p className="text-xs text-slate-500">Verifying enterprise memberships, site access, and cryptographic credentials...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. No Organisation / Onboarding Required State
+  if (tenancyStatus === 'NO_ORGANISATION') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
+        <Card variant="industrial" className="max-w-md w-full border-slate-800 bg-slate-900/80 shadow-2xl p-6 space-y-6">
+          <CardHeader className="p-0">
+            <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-3">
+              <Building2 className="w-6 h-6" />
+            </div>
+            <CardTitle className="text-xl">Enterprise Organisation Required</CardTitle>
+            <CardDescription className="text-xs text-slate-400 mt-1">
+              Your account is authenticated, but does not belong to any active industrial organisation.
+            </CardDescription>
+          </CardHeader>
+
+          {creationError && (
+            <div className="p-3 rounded bg-rose-950/40 border border-rose-800/60 text-xs text-rose-300 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>{creationError}</span>
+            </div>
+          )}
+
+          {isCreatingOrg ? (
+            <form onSubmit={handleCreateOrg} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Organisation Legal Name</label>
+                <Input
+                  required
+                  placeholder="e.g. Acme Precision Metals Pvt Ltd"
+                  value={newOrgName}
+                  onChange={(e) => setNewOrgName(e.target.value)}
+                  className="bg-slate-950 border-slate-800 text-xs"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Primary Facility / Site Name</label>
+                <Input
+                  placeholder="e.g. Pune Manufacturing Unit 1"
+                  value={newSiteName}
+                  onChange={(e) => setNewSiteName(e.target.value)}
+                  className="bg-slate-950 border-slate-800 text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-3 pt-2">
+                <Button type="submit" disabled={isSubmitting} className="flex-1 text-xs">
+                  {isSubmitting ? 'Initializing...' : 'Confirm & Initialize'}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setIsCreatingOrg(false)} className="text-xs">
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <div className="space-y-3">
+              <Button onClick={() => setIsCreatingOrg(true)} className="w-full flex items-center justify-center gap-2 text-xs">
+                <PlusCircle className="w-4 h-4" />
+                Register New Organisation
+              </Button>
+              <Button variant="outline" onClick={handleSignOut} className="w-full flex items-center justify-center gap-2 text-xs border-slate-800 hover:bg-slate-800/60 text-slate-400">
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </Button>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
+  // 3. Access Denied State
+  if (tenancyStatus === 'ACCESS_DENIED') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
+        <Card variant="industrial" className="max-w-md w-full border-rose-900/60 bg-slate-900/90 shadow-2xl p-6 text-center space-y-4">
+          <div className="mx-auto w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center">
+            <ShieldX className="w-6 h-6" />
+          </div>
+          <CardTitle className="text-xl text-rose-200">Access Denied</CardTitle>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Your user account is either inactive or does not possess verified membership privileges for this tenancy partition.
+          </p>
+          <Button variant="outline" onClick={handleSignOut} className="w-full text-xs border-slate-800 text-slate-300">
+            Sign In with Different Account
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+  // 4. Tenancy Error State
+  if (tenancyStatus === 'ERROR') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
+        <Card variant="industrial" className="max-w-md w-full border-slate-800 bg-slate-900/90 shadow-2xl p-6 space-y-4">
+          <div className="flex items-center gap-3 text-rose-400">
+            <AlertCircle className="w-6 h-6 shrink-0" />
+            <CardTitle className="text-lg">Tenancy Initialization Failed</CardTitle>
+          </div>
+          <p className="text-xs text-slate-400">{errorMessage || 'An unexpected database error occurred while querying organization records.'}</p>
+          <div className="flex items-center gap-3">
+            <Button onClick={() => refreshSites()} className="flex-1 text-xs">
+              Retry Resolution
+            </Button>
+            <Button variant="outline" onClick={handleSignOut} className="text-xs border-slate-800 text-slate-400">
+              Sign Out
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // 5. Ready State: Render Full Dashboard
   const navItems = [
     { label: 'Dashboard', href: '/', icon: LayoutDashboard },
     { label: 'Grid Intelligence', href: '/grid-intelligence', icon: Zap, badge: 'Primary' },
@@ -84,37 +273,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </Link>
 
-          <div className="hidden lg:flex items-center gap-2 ml-4 pl-4 border-l border-slate-800">
-            <Building2 className="w-3.5 h-3.5 text-slate-500" />
-            <span className="text-xs font-medium text-slate-300">{currentOrg.name}</span>
-          </div>
+          {currentOrg && (
+            <div className="hidden lg:flex items-center gap-2 ml-4 pl-4 border-l border-slate-800">
+              <Building2 className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-xs font-medium text-slate-300">{currentOrg.name}</span>
+            </div>
+          )}
         </div>
 
         {/* Center: Site Selector & Health status */}
         <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-md border border-slate-800 text-xs">
-            <MapPin className="w-3.5 h-3.5 text-teal-400" />
-            <span className="text-slate-400">Site:</span>
-            <select
-              value={currentSite.id}
-              onChange={(e) => switchSite(e.target.value)}
-              className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer"
-            >
-              {sites.map((s) => (
-                <option key={s.id} value={s.id} className="bg-slate-900 text-slate-100">
-                  {s.name} ({s.state} - {s.discom})
-                </option>
-              ))}
-            </select>
-          </div>
+          {currentSite && sites.length > 0 && (
+            <div className="hidden sm:flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-md border border-slate-800 text-xs">
+              <MapPin className="w-3.5 h-3.5 text-teal-400" />
+              <span className="text-slate-400">Site:</span>
+              <select
+                value={currentSite.id}
+                onChange={(e) => switchSite(e.target.value)}
+                className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer"
+              >
+                {sites.map((s) => (
+                  <option key={s.id} value={s.id} className="bg-slate-900 text-slate-100">
+                    {s.name} ({s.state} - {s.discom})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
-          <div className="hidden md:flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-md border border-slate-800 text-xs">
-            <Radio className={clsx("w-3 h-3", currentSite.activation_status === 'ACTIVE' ? 'text-emerald-400 animate-pulse' : 'text-amber-400')} />
-            <span className="text-slate-400">Monitoring:</span>
-            <span className={clsx("font-semibold", currentSite.activation_status === 'ACTIVE' ? 'text-emerald-300' : 'text-amber-300')}>
-              {currentSite.activation_status}
-            </span>
-          </div>
+          {currentSite && (
+            <div className="hidden md:flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-md border border-slate-800 text-xs">
+              <Radio className={clsx("w-3 h-3", currentSite.activation_status === 'ACTIVE' ? 'text-emerald-400 animate-pulse' : 'text-amber-400')} />
+              <span className="text-slate-400">Monitoring:</span>
+              <span className={clsx("font-semibold", currentSite.activation_status === 'ACTIVE' ? 'text-emerald-300' : 'text-amber-300')}>
+                {currentSite.activation_status}
+              </span>
+            </div>
+          )}
 
           <DemoBadge />
         </div>
@@ -219,20 +414,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
-          <div className="p-3 bg-slate-950/80 rounded-md border border-slate-800 text-[11px] text-slate-400 space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-300">Sanctioned Demand:</span>
-              <span className="text-slate-200 font-mono">{currentSite.contract_demand_value} {currentSite.contract_demand_unit}</span>
+          {currentSite && (
+            <div className="p-3 bg-slate-950/80 rounded-md border border-slate-800 text-[11px] text-slate-400 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-300">Sanctioned Demand:</span>
+                <span className="text-slate-200 font-mono">{currentSite.contract_demand_value} {currentSite.contract_demand_unit}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-300">Voltage:</span>
+                <span className="text-slate-200 font-mono">{currentSite.voltage_category}</span>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-800/80 text-[10px]">
+                <span>Timezone:</span>
+                <span className="text-teal-400">{currentSite.timezone}</span>
+              </div>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-300">Voltage:</span>
-              <span className="text-slate-200 font-mono">{currentSite.voltage_category}</span>
-            </div>
-            <div className="flex items-center justify-between pt-1 border-t border-slate-800/80 text-[10px]">
-              <span>Timezone:</span>
-              <span className="text-teal-400">{currentSite.timezone}</span>
-            </div>
-          </div>
+          )}
         </aside>
 
         {/* Main Content Area */}

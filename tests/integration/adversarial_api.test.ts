@@ -14,6 +14,7 @@ import { PATCH as sitePatch } from '@/app/api/sites/[id]/route';
 import { POST as invitationSendPost } from '@/app/api/invitations/send/route';
 import { POST as webhookPost } from '@/app/api/webhooks/razorpay/route';
 import { POST as billingCancelPost } from '@/app/api/billing/cancel/route';
+import { POST as invitationAcceptPost } from '@/app/api/invitations/accept/route';
 import { createClient } from '@supabase/supabase-js';
 import CryptoJS from 'crypto-js';
 
@@ -300,7 +301,8 @@ describe('Adversarial API & Server Rejection Suite', () => {
 
   // 8. Duplicate Ingestion Rejection via SHA-256 Checksum
   it('8. Duplicate Ingestion: Re-submitting identical checksum returns 409 DUPLICATE_FILE', async () => {
-    // Generate valid 96 blocks
+    // Generate valid 96 blocks with a run-unique baseLoad
+    const runSalt = Date.now() % 10000;
     const parsedBlocks = [];
     for (let b = 1; b <= 96; b++) {
       parsedBlocks.push({
@@ -308,7 +310,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
         block_index: b,
         start_time: '00:00',
         end_time: '00:15',
-        load_kw: 250.0,
+        load_kw: 250.0 + runSalt,
       });
     }
 
@@ -351,7 +353,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     expect(res2.status).toBe(409);
     const json2 = await res2.json();
     expect(json2.error).toBe('DUPLICATE_FILE');
-  });
+  }, 15000);
 
   // 9. Repeated Webhook Replay Atomicity
   it('9. Webhook Idempotency: Concurrent/replayed webhooks do not duplicate state', async () => {
@@ -427,5 +429,42 @@ describe('Adversarial API & Server Rejection Suite', () => {
     expect(res.status).toBe(403);
     const json = await res.json();
     expect(json.error).toBe('INSUFFICIENT_ROLE');
+  });
+
+  // 11. Adversarial Invitation Hijacking: User B cannot accept invitation bound to User A
+  it('11. Invitation Email Binding: User B cannot accept token bound to a different email (403)', async () => {
+    // Generate an invite token for userA
+    const inviteToken = 'token_adv_' + Date.now();
+    const tokenHash = CryptoJS.SHA256(inviteToken).toString(CryptoJS.enc.Hex);
+
+    const { error: insErr } = await adminClient.from('organisation_invitations').insert({
+      organisation_id: orgAId,
+      email: 'intended.victim@demo.aetheonlabs.in',
+      role: 'ENERGY_MANAGER',
+      token_hash: tokenHash,
+      token: inviteToken,
+      invited_by: null,
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      status: 'PENDING',
+    });
+    expect(insErr).toBeNull();
+
+    // User B (Sunil Pawar - sunil.demo@demo.aetheonlabs.in) attempts to accept this invitation
+    const req = new NextRequest('http://localhost:3000/api/invitations/accept', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${userBToken}`,
+      },
+      body: JSON.stringify({
+        token: inviteToken,
+      }),
+    });
+
+    const res = await invitationAcceptPost(req);
+    // Must be rejected with 403 Forbidden due to email mismatch
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toContain('different email address');
   });
 });

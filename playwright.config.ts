@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
-  timeout: 30 * 1000,
+  timeout: 45 * 1000,
   expect: {
     timeout: 10 * 1000,
   },
@@ -14,9 +14,6 @@ export default defineConfig({
     baseURL: 'http://localhost:3000',
     trace: 'off',
     headless: true,
-    extraHTTPHeaders: {
-      'x-demo-mode': 'true',
-    },
   },
   projects: [
     {

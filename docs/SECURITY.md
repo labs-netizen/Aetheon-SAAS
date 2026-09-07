@@ -11,7 +11,7 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, and Pytest solvers (69/69 passing):
+A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, and Pytest solvers (73/73 passing):
 
 ### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
 1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
@@ -24,19 +24,26 @@ A comprehensive automated security test suite has been implemented across Vitest
 8. **Site-Level Access Isolation**: Function `has_site_access()` verifies that a user assigned to Site 1 receives zero rows when querying Site 2 telemetry, even if both sites belong to the same organisation.
 9. **Regulatory Visibility Gate**: Unapproved regulatory rules (`REVIEW_PENDING`, `CHANGE_DETECTED`, `EXTRACTED`, `CAPTURED`) are strictly hidden from customer sessions; only `APPROVED` and `PUBLISHED` rules are visible.
 10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `bess_optimisation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
-11. **Tamper-Evident Audit Log Chaining**: `audit_logs` table enforces cryptographic SHA-256 hash chaining `H(previous_hash + payload)` and an immutability trigger blocks any UPDATE or DELETE operations.
+11. **Server-Generated Data Protection**: Customer accounts cannot forge or directly insert forecast runs.
 
-### 2.2 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 10/10 Passing)
+### 2.2 Live Tamper-Evident Audit Chaining (`tests/integration/audit_chaining.test.ts` - 4/4 Passing)
+1. **Deterministic Genesis Hash**: Event A receives a 64-character SHA-256 genesis hash computed deterministically.
+2. **Cryptographic Chaining**: Event B's `previous_hash` strictly matches Event A's `current_hash`.
+3. **UPDATE Immutability**: Database trigger rejects any UPDATE operation on `audit_logs`.
+4. **DELETE Immutability**: Database trigger rejects any DELETE operation on `audit_logs`.
+
+### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 11/11 Passing)
 1. **Unauthenticated Request Rejection**: Unauthenticated requests to `/api/forecast` return 401 Unauthorized.
 2. **Cross-Tenant Site Isolation**: Attempting to query an operational endpoint for a site belonging to a foreign organisation returns 403 Forbidden.
 3. **Site Boundary Isolation**: A user without an active `site_access` grant for a specific site is rejected with 403 Forbidden.
 4. **Subscription Entitlement Enforcement**: Requesting module endpoints without an active subscription entitlement returns 403 Forbidden.
-5. **Expired Entitlement Handling**: Accounts with an expired subscription end-date are blocked from accessing operational endpoints.
-6. **Role Boundary on Billing**: Non-admin roles (`OPERATOR`, `FINANCE_SUSTAINABILITY_VIEWER`) attempting billing cancellation or checkout return 403 Forbidden.
-7. **Privilege Escalation on Member Invitation**: Customer admins attempting to invite internal Aetheon roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`) return 403 Forbidden.
-8. **BESS Hardware Safety Interlocks**: BESS optimisation API rejects requests with 422 Unprocessable Entity when battery SOC is out of bounds (<10% or >90%), telemetry is stale, or maintenance locks are active.
-9. **Duplicate Ingestion Rejection**: Ingestion commit endpoint rejects duplicate CSV uploads matching an existing file SHA-256 checksum with 409 Conflict.
-10. **Webhook Replay Deduplication**: Replayed Razorpay webhook events with identical `x-razorpay-event-id` are rejected with 409 Conflict via atomic database pre-insertion.
+5. **Operator Role Rejection**: OPERATOR accounts attempting to modify site parameters return 403 Forbidden.
+6. **Internal Role Escalation**: Org Admin attempting to invite internal roles returns 403 Forbidden.
+7. **Missing DSM Inputs**: Missing schedule or meter data triggers result suppression (`MISSING_DATA`).
+8. **BESS Hardware Safety Interlocks**: BESS optimisation API suppresses recommendations when battery SOC is out of bounds or negative (`SAFETY_INTERLOCK`).
+9. **Duplicate Ingestion Rejection**: Ingestion commit endpoint computes SHA-256 on actual file content and rejects duplicates with 409 Conflict.
+10. **Webhook Replay Deduplication**: Replayed Razorpay webhook events are transactionally deduplicated via atomic pre-insertion.
+11. **Invitation Email Binding**: User B attempting to accept an invitation token issued to User A's email is rejected with 403 Forbidden.
 
 ---
 
@@ -85,8 +92,8 @@ A comprehensive automated security test suite has been implemented across Vitest
 - Synthetic demo parameters are explicitly stamped `DEMO / UNVERIFIED`.
 
 ### 4.3 Aetheon Admin Security Requirements
-- Multi-Factor Authentication (MFA) is strictly required for internal Aetheon platform administrators.
-- Analyst access sessions expire automatically after a maximum of 24 hours.
+- Multi-Factor Authentication (MFA / AAL2) Status: `PRODUCTION_CONFIG_REQUIRED`. For local development and CI testing, GoTrue AAL1 is functional; production deployment mandates enabling Supabase Auth TOTP/MFA for all accounts with internal roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`) or `is_platform_admin = true`.
+- Analyst access sessions expire automatically after a maximum of 24 hours (`expires_at` enforced at database and RLS layers).
 
 ### 4.4 Operational Failure & Fail-Safe Persistence
 - Operational API routes (`/api/forecast`, `/api/dsm`, `/api/bess`, `/api/renewables`) fail safely: if model run persistence fails, the route returns an error rather than publishing an unpersisted result.

@@ -1,89 +1,125 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { billingProvider } from '@/features/billing/razorpayAdapter';
+import { recordAuditEvent } from '@/lib/audit';
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    const { subscriptionId } = await req.json();
+    const adminClient = createAdminClient();
+    let user: any = null;
 
-    if (!subscriptionId) {
+    // Check Bearer token first
+    const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const jwt = authHeader.replace('Bearer ', '').trim();
+      const { data: userData } = await adminClient.auth.getUser(jwt);
+      user = userData?.user;
+    }
+
+    // Check cookies if no Bearer token
+    if (!user) {
+      const cookieStore = await cookies();
+      const supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return cookieStore.getAll();
+            },
+            setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+              try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                  cookieStore.set(name, value, options)
+                );
+              } catch {
+                // Ignore
+              }
+            },
+          },
+        }
+      );
+      const { data: authData } = await supabase.auth.getUser();
+      user = authData?.user;
+    }
+
+    if (!user) {
+      return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
+    // Role gate: Only ORGANISATION_ADMIN can cancel subscriptions
+    const { data: membership, error: memError } = await adminClient
+      .from('memberships')
+      .select('organisation_id, role, is_active')
+      .eq('user_id', user.id)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (memError || !membership || membership.role !== 'ORGANISATION_ADMIN') {
       return NextResponse.json(
-        { error: 'subscriptionId is required' },
-        { status: 400 }
+        { error: 'INSUFFICIENT_ROLE', message: 'Forbidden: Only ORGANISATION_ADMIN can manage or cancel subscriptions' },
+        { status: 403 }
       );
     }
 
-    const adminClient = createAdminClient();
+    const body = await request.json();
+    const { subscriptionId } = body;
+    if (!subscriptionId) {
+      return NextResponse.json({ error: 'subscriptionId is required' }, { status: 400 });
+    }
 
-    // 1. Fetch Subscription
-    const { data: sub, error: subErr } = await adminClient
+    // Verify subscription belongs to this organisation
+    const { data: sub, error: subError } = await adminClient
       .from('subscriptions')
-      .select('id, organisation_id, status, current_period_end, billing_provider_ref')
+      .select('*')
       .eq('id', subscriptionId)
+      .eq('organisation_id', membership.organisation_id)
       .single();
 
-    if (subErr || !sub) {
-      return NextResponse.json(
-        { error: 'SUBSCRIPTION_NOT_FOUND', message: 'Subscription record not found.' },
-        { status: 404 }
-      );
+    if (subError || !sub) {
+      return NextResponse.json({ error: 'Subscription not found' }, { status: 404 });
     }
 
-    // 2. Authorize: Only Organisation Admin has billing management permission (Section 21)
-    const authResult = await authorizeApiRequest(req, {
-      organisationId: sub.organisation_id,
-      requiredRoles: ['ORGANISATION_ADMIN'],
-    });
+    // Call provider cancellation
+    const cancelResult = await billingProvider.cancelSubscription(sub.billing_provider_ref || sub.id);
 
-    if (!authResult.authorized) {
-      return authResult.response;
-    }
-
-    // 3. Invoke Billing Provider Layer (Section 23)
-    const cancelResult = await billingProvider.cancelSubscription(subscriptionId);
-
-    // 4. Update Subscription in Database
-    const { error: updateErr } = await adminClient
+    // Update subscription in database: set cancel_at_period_end = true
+    const { error: updateError } = await adminClient
       .from('subscriptions')
       .update({
-        status: 'CANCELLED',
         cancel_at_period_end: true,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', subscriptionId);
+      .eq('id', sub.id);
 
-    if (updateErr) {
-      console.error('Failed to update subscription cancellation status:', updateErr);
-      return NextResponse.json(
-        { error: 'DATABASE_ERROR', message: 'Failed to update subscription in database.' },
-        { status: 500 }
-      );
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
-    // 5. Audit Event
-    await adminClient.from('audit_logs').insert({
-      actor_id: authResult.user.id,
-      actor_role: authResult.role,
-      organisation_id: sub.organisation_id,
-      event_type: 'SUBSCRIPTION_CANCELLED',
-      event_payload: {
-        subscriptionId,
-        providerMode: cancelResult.mode,
-        effectiveUntil: sub.current_period_end,
+    // Record audit event
+    await recordAuditEvent(adminClient, {
+      organisation_id: membership.organisation_id,
+      actor_id: user.id,
+      action: 'SUBSCRIPTION_CANCELLED',
+      entity_type: 'SUBSCRIPTION',
+      entity_id: sub.id,
+      details: {
+        product_id: sub.product_id,
+        cancel_at_period_end: true,
+        provider_mode: cancelResult.mode,
       },
     });
 
     return NextResponse.json({
       success: true,
-      message: 'Subscription scheduled for cancellation at the end of the current billing cycle.',
-      subscriptionId,
-      billingMode: cancelResult.mode,
-      effectiveUntil: sub.current_period_end,
+      message: 'Subscription set to cancel at end of current billing period.',
+      mode: cancelResult.mode,
     });
   } catch (err) {
     return NextResponse.json(
-      { error: 'Failed to cancel subscription', details: err instanceof Error ? err.message : String(err) },
+      { error: err instanceof Error ? err.message : 'Internal server error' },
       { status: 500 }
     );
   }

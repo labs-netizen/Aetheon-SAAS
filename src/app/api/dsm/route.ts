@@ -71,11 +71,53 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Persist identified incidents to dsm_incidents safely via service client
+    // 4. Derive incident groupings from returned deviation blocks
+    const incidents: any[] = [];
+    if (Array.isArray(calculationResult.blocks) && calculationResult.blocks.length > 0) {
+      let currentIncident: any = null;
+
+      for (const block of calculationResult.blocks) {
+        if (block.risk_level && block.risk_level !== 'NORMAL') {
+          const excessKwh = Math.max(0, (block.actual_drawal_kw || 0) - (block.scheduled_drawal_kw || 0)) * 0.25;
+          const devPct = Math.abs(block.deviation_pct || 0);
+
+          if (!currentIncident) {
+            currentIncident = {
+              start_block: block.block_index,
+              end_block: block.block_index,
+              severity: block.risk_level,
+              max_deviation_pct: Number(devPct.toFixed(2)),
+              total_excess_energy_kwh: Number(excessKwh.toFixed(2)),
+              estimated_exposure_inr: Number((block.estimated_penalty_inr || 0).toFixed(2)),
+              root_cause_tag: devPct > 15 ? 'UNSCHEDULED_SURGE' : 'SCHEDULE_DRIFT',
+            };
+          } else {
+            currentIncident.end_block = block.block_index;
+            if (block.risk_level === 'CRITICAL' || (block.risk_level === 'HIGH' && currentIncident.severity !== 'CRITICAL')) {
+              currentIncident.severity = block.risk_level;
+            }
+            currentIncident.max_deviation_pct = Number(Math.max(currentIncident.max_deviation_pct, devPct).toFixed(2));
+            currentIncident.total_excess_energy_kwh = Number((currentIncident.total_excess_energy_kwh + excessKwh).toFixed(2));
+            currentIncident.estimated_exposure_inr = Number((currentIncident.estimated_exposure_inr + (block.estimated_penalty_inr || 0)).toFixed(2));
+          }
+        } else {
+          if (currentIncident) {
+            incidents.push(currentIncident);
+            currentIncident = null;
+          }
+        }
+      }
+      if (currentIncident) {
+        incidents.push(currentIncident);
+      }
+    }
+    calculationResult.incidents = incidents;
+
+    // 5. Persist identified incidents to dsm_incidents safely via service client
     const adminClient = createAdminClient();
     try {
-      if (calculationResult.incidents && Array.isArray(calculationResult.incidents) && calculationResult.incidents.length > 0) {
-        const incidentRows = calculationResult.incidents.map((inc: any) => ({
+      if (incidents.length > 0) {
+        const incidentRows = incidents.map((inc) => ({
           site_id: siteId,
           operating_date: operatingDate,
           start_block: inc.start_block,
@@ -84,7 +126,7 @@ export async function POST(req: NextRequest) {
           max_deviation_pct: inc.max_deviation_pct,
           total_excess_energy_kwh: inc.total_excess_energy_kwh,
           estimated_exposure_inr: inc.estimated_exposure_inr,
-          root_cause_tag: inc.root_cause_tag || 'DEVIATION_SPIKE',
+          root_cause_tag: inc.root_cause_tag,
         }));
 
         const { error: incError } = await adminClient.from('dsm_incidents').insert(incidentRows);

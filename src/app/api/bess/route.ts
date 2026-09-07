@@ -129,17 +129,22 @@ export async function POST(req: NextRequest) {
     // 4. Persist to bess_signal_runs safely via service client
     const adminClient = createAdminClient();
     try {
+      const grossArbitrage = advisoryResult.gross_arbitrage_value_inr ?? advisoryResult.gross_arbitrage_inr ?? 0;
+      const degradationCost = advisoryResult.estimated_degradation_cost_inr ?? advisoryResult.degradation_cost_inr ?? 0;
+      const netOpportunity = advisoryResult.net_opportunity_value_inr ?? advisoryResult.net_opportunity_inr ?? 0;
+      const cyclesEquivalent = advisoryResult.cycles_equivalent ?? advisoryResult.equivalent_cycles ?? 0;
+
       const { error: persistError } = await adminClient
         .from('bess_signal_runs')
         .upsert(
           {
             battery_id: batteryId,
             operating_date: operatingDate,
-            solver_version: advisoryResult.solver_version || 'BESS_ADVISORY_v1.0',
-            gross_arbitrage_inr: advisoryResult.gross_arbitrage_inr || 0,
-            degradation_cost_inr: advisoryResult.degradation_cost_inr || 0,
-            net_opportunity_inr: advisoryResult.net_opportunity_inr || 0,
-            equivalent_cycles: advisoryResult.equivalent_cycles || 0,
+            solver_version: advisoryResult.solver_version || 'BESS_ADVISORY_HEURISTIC_DEMO_v1.0',
+            gross_arbitrage_inr: grossArbitrage,
+            degradation_cost_inr: degradationCost,
+            net_opportunity_inr: netOpportunity,
+            equivalent_cycles: cyclesEquivalent,
             is_suppressed: advisoryResult.is_suppressed || false,
             suppression_reason: advisoryResult.suppression_reason || null,
           },
@@ -150,6 +155,14 @@ export async function POST(req: NextRequest) {
         throw new Error(persistError.message);
       }
 
+      advisoryResult.gross_arbitrage_inr = grossArbitrage;
+      advisoryResult.gross_arbitrage_value_inr = grossArbitrage;
+      advisoryResult.degradation_cost_inr = degradationCost;
+      advisoryResult.estimated_degradation_cost_inr = degradationCost;
+      advisoryResult.net_opportunity_inr = netOpportunity;
+      advisoryResult.net_opportunity_value_inr = netOpportunity;
+      advisoryResult.equivalent_cycles = cyclesEquivalent;
+      advisoryResult.cycles_equivalent = cyclesEquivalent;
       advisoryResult.persisted = true;
     } catch (dbErr) {
       console.error('CRITICAL: BESS persistence failure:', dbErr);

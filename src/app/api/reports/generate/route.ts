@@ -114,28 +114,55 @@ export async function POST(req: NextRequest) {
     }
 
     const csvContent = csvLines.join('\n');
-    const storagePath = `reports/${authResult.organisationId}/${siteId}/${reportType}_${pStart}_${Date.now()}.csv`;
+    const storagePath = `tenants/${authResult.organisationId}/${siteId}/${reportType}_${pStart}_${Date.now()}.csv`;
 
-    // 4. Record into report_records table via trusted admin client
+    // Attempt to store in private tenant-reports bucket
+    try {
+      await adminClient.storage
+        .from('tenant-reports')
+        .upload(storagePath, csvContent, {
+          contentType: 'text/csv',
+          upsert: true,
+        });
+    } catch (storageErr) {
+      console.warn('Storage upload notice (falling back to inline summary persistence):', storageErr);
+    }
+
+    const reportModule = reportType.startsWith('GRID')
+      ? 'GRID'
+      : reportType.startsWith('DSM')
+      ? 'DSM'
+      : reportType.startsWith('BESS')
+      ? 'BESS'
+      : 'RENEWABLE';
+
+    const reportTitle = `${siteName} - ${reportType.replace(/_/g, ' ')} (${pStart})`;
+
+    // 4. Record into report_records table matching actual database schema
     const { data: record, error: recordErr } = await adminClient
       .from('report_records')
       .insert({
         organisation_id: authResult.organisationId,
         site_id: siteId,
+        module: reportModule,
         report_type: reportType,
         period_start: pStart,
         period_end: pEnd,
-        generated_by: authResult.user.id,
-        metadata: {
+        title: reportTitle,
+        summary: {
+          ...summaryData,
           siteName,
           state,
           discom,
           contractDemand,
-          summary: summaryData,
-          model_version: 'AETHEON_REPORT_ENGINE_v1.0',
-          tariff_version: 'MERC_MYT_2024_DEMO',
+          storage_path: storagePath,
+          csv_content: csvContent,
         },
-        storage_path: storagePath,
+        quality_status: 'PASSED',
+        model_version: 'AETHEON_REPORT_ENGINE_v1.0',
+        tariff_version: 'MERC_MYT_2024_DEMO',
+        rule_version: 'CERC_2024_V1',
+        generated_by: authResult.user.id,
       })
       .select()
       .single();
@@ -143,10 +170,16 @@ export async function POST(req: NextRequest) {
     if (recordErr || !record) {
       console.error('Failed to create report record:', recordErr);
       return NextResponse.json(
-        { error: 'DATABASE_ERROR', message: 'Failed to record generated report.' },
+        { error: 'DATABASE_ERROR', message: 'Failed to record generated report.', details: recordErr?.message },
         { status: 500 }
       );
     }
+
+    const downloadUrl = `/api/reports/${record.id}/download`;
+    await adminClient
+      .from('report_records')
+      .update({ download_url: downloadUrl })
+      .eq('id', record.id);
 
     return NextResponse.json({
       success: true,
@@ -157,8 +190,7 @@ export async function POST(req: NextRequest) {
       periodStart: pStart,
       periodEnd: pEnd,
       generatedAt: record.created_at,
-      csvContent,
-      downloadUrl: `/api/reports/${record.id}/download`,
+      downloadUrl,
     });
   } catch (err) {
     return NextResponse.json(

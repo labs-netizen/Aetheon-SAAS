@@ -90,14 +90,18 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
     siteB2Id = site2.id;
 
     // Insert dummy interval data into Site B2
-    await adminClient.from('interval_data_96').insert({
+    const { error: insertIntervalErr } = await adminClient.from('interval_data_96').insert({
       site_id: siteB2Id,
       operating_date: '2026-09-01',
       block_index: 1,
-      meter_reading_kw: 1200,
-      sourcing_mix: { grid_pct: 100 },
-      source_checksum: 'test-checksum-site-b2',
+      timestamp_utc: '2026-09-01T00:00:00Z',
+      load_kw: 1200,
+      actual_drawal_kw: 1200,
+      scheduled_drawal_kw: 1200,
+      data_quality: 'PASSED',
     });
+    expect(insertIntervalErr).toBeNull();
+
 
     // 3. Create Auth User for Org B Admin
     const testAdminEmail = `org-b-admin-${Date.now()}@demo.aetheonlabs.in`;

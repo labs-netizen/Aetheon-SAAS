@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -14,30 +15,66 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Authenticate accepting user
-    const serverSupabase = createServerSupabaseClient();
-    const { data: authData } = await serverSupabase.auth.getUser();
-    if (!authData?.user) {
+    const adminClient = createAdminClient();
+
+    // 1. Authenticate accepting user (support both Bearer header and session cookie)
+    let user: any = null;
+    const authHeader = req.headers.get('authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const jwt = authHeader.replace('Bearer ', '');
+      const { data: jwtUser, error: jwtErr } = await adminClient.auth.getUser(jwt);
+      if (!jwtErr && jwtUser?.user) {
+        user = jwtUser.user;
+      }
+    }
+
+    if (!user) {
+      const serverSupabase = createServerSupabaseClient();
+      const { data: authData } = await serverSupabase.auth.getUser();
+      user = authData?.user;
+    }
+
+    if (!user) {
       return NextResponse.json(
         { error: 'UNAUTHENTICATED', message: 'You must be logged in to accept an invitation.' },
         { status: 401 }
       );
     }
-    const user = authData.user;
 
-    const adminClient = createAdminClient();
+    // 2. Fetch invitation by token or token_hash
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-    // 2. Fetch invitation by token
-    const { data: invitation, error: inviteErr } = await adminClient
+    let { data: invitation, error: inviteErr } = await adminClient
       .from('organisation_invitations')
       .select('*')
-      .eq('token', token)
+      .eq('token_hash', tokenHash)
       .maybeSingle();
+
+    if (!invitation) {
+      const tokenLookup = await adminClient
+        .from('organisation_invitations')
+        .select('*')
+        .eq('token', token)
+        .maybeSingle();
+      invitation = tokenLookup.data;
+      inviteErr = tokenLookup.error;
+    }
 
     if (inviteErr || !invitation) {
       return NextResponse.json(
         { error: 'INVALID_TOKEN', message: 'Invitation not found or invalid token.' },
         { status: 404 }
+      );
+    }
+
+    // Section 17: Strict email binding verification
+    if (user.email?.toLowerCase() !== invitation.email?.toLowerCase()) {
+      return NextResponse.json(
+        {
+          error: 'This invitation was issued to a different email address',
+          message: `This invitation was issued to '${invitation.email}', but you are signed in as '${user.email}'.`,
+        },
+        { status: 403 }
       );
     }
 
@@ -81,7 +118,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Create site access if site-scoped
+    // 4. Create site access matching actual table schema (no is_active column)
     if (invitation.site_id) {
       await adminClient
         .from('site_access')
@@ -89,7 +126,7 @@ export async function POST(req: NextRequest) {
           {
             site_id: invitation.site_id,
             user_id: user.id,
-            is_active: true,
+            granted_by: invitation.invited_by || user.id,
           },
           { onConflict: 'site_id,user_id' }
         );
@@ -101,14 +138,16 @@ export async function POST(req: NextRequest) {
       .update({ status: 'ACCEPTED' })
       .eq('id', invitation.id);
 
-    // 6. Record audit log
+    // 6. Record audit log matching actual database schema
     await adminClient.from('audit_logs').insert({
       actor_id: user.id,
       actor_role: invitation.role,
       organisation_id: invitation.organisation_id,
-      event_type: 'INVITATION_ACCEPTED',
-      event_payload: {
-        invitationId: invitation.id,
+      action: 'INVITATION_ACCEPTED',
+      entity_type: 'INVITATION',
+      entity_id: invitation.id,
+      details: {
+        email: invitation.email,
         role: invitation.role,
         siteId: invitation.site_id,
       },

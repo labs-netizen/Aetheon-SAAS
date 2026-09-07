@@ -31,11 +31,11 @@
 | Product / Module | Authoritative Starting Price | Commercial Readiness Status | Operational Rationale |
 |---|---|---|---|
 | **Aetheon Grid Intelligence** | ₹19,900 / site / month | `INTERNAL_VALIDATION` | 96-block forecasting and landed cost calculations verified against local FastAPI microservice; live IEX market feed and weather calibration pending. |
-| **Open Access Compliance Sentinel** | ₹14,900 / state / site / month | `DEMO / SPECIALIST_REVIEW` | 7-stage regulatory governance and MERC tariff model functional; legal counsel signoff on formal statutory compliance pending. |
+| **Open Access Compliance Sentinel** | ₹14,900 / state / site / month | `SPECIALIST_REVIEW_REQUIRED` | 7-stage regulatory governance and MERC tariff model functional; legal counsel signoff on formal statutory compliance pending. |
 | **DSM Risk Monitor** | ₹29,900 / site / month | `INTERNAL_VALIDATION` | 15-minute deviation risk bands, alert dampening, and quiet hours functional; live SLDC schedule telemetry connection pending. |
-| **BESS Arbitrage Signals** | ₹49,900 / site / month | `INTERNAL_VALIDATION` | Advisory opportunity windows, degradation cost models, and hardware safety interlocks functional; electrochemical engineer review pending. |
-| **Renewable Portfolio Monitor** | ₹24,900 / site / month | `VERIFIED_LOCAL` | Measured vs modelled reconciliation and avoided emissions ledger functional; live Modbus inverter connection pending. |
-| **Tenant Isolation & Security Layer** | Included in Platform | `VERIFIED_LOCAL` | Live PostgreSQL RLS, GoTrue Auth, site-level isolation (`has_site_access`), HMAC webhook atomicity, and hash-chained audit logging verified across 64 automated tests. |
+| **BESS Arbitrage Signals** | ₹49,900 / site / month | `SPECIALIST_REVIEW_REQUIRED` | Advisory opportunity windows, degradation cost models, and hardware safety interlocks functional; electrochemical engineer review pending. |
+| **Renewable Portfolio Monitor** | ₹24,900 / site / month | `DEMO_ONLY` | Measured vs modelled reconciliation and avoided emissions ledger functional; live Modbus inverter connection pending. |
+| **Tenant Isolation & Security Layer** | Included in Platform | `VERIFIED_LOCAL` | Live PostgreSQL RLS, GoTrue Auth, site-level isolation (`has_site_access`), HMAC webhook atomicity, and hash-chained audit logging verified across 73 automated tests. |
 
 ---
 
@@ -43,13 +43,13 @@
 
 | Test Suite | Scope | Target Engine | Total Tests | Passed | Failed | Status |
 |---|---|---|---|---|---|---|
-| **Vitest Unit & Tariffs** | Blocks96, currency, tariffs, qualityGate, stateMachine, csvParser, entitlements | Node.js (Vitest v2.1) | 29 | 29 | 0 | **PASSED** |
-| **Vitest Security Isolation** | In-memory multi-tenancy, RBAC, HMAC webhooks, storage | Node.js (Vitest v2.1) | 7 | 7 | 0 | **PASSED** |
+| **Vitest Unit & Contracts** | Blocks96, currency, qualityGate, stateMachine, csvParser, entitlements, api_contracts | Node.js (Vitest v2.1) | 30 | 30 | 0 | **PASSED** |
+| **Tamper-Evident Audit Chaining** | Deterministic genesis, B.prev == A.curr, UPDATE rejection, DELETE rejection | Real PostgreSQL 17.6 (Docker) | 4 | 4 | 0 | **PASSED** |
 | **Real PostgreSQL & Supabase RLS** | Live multi-tenant RLS, privilege-escalation rejection, role boundaries, site isolation, regulatory gates | Real PostgreSQL 17.6 (Docker) | 11 | 11 | 0 | **PASSED** |
-| **Adversarial API & Server Rejection** | Unauthorized requests (401), cross-tenant (403), unsubscribed (403), operator role rejection (403), internal promotion denial (403), DSM missing data (200), BESS SOC interlock (200), duplicate ingestion (409), webhook replay atomicity (200), billing protection (403) | Next.js API route handlers | 10 | 10 | 0 | **PASSED** |
+| **Adversarial API & Server Rejection** | Unauthorized (401), cross-tenant (403), unsubscribed (403), operator modification (403), internal promotion (403), DSM missing data (200), BESS SOC interlock (200), duplicate ingestion (409), webhook replay atomicity (200), billing protection (403), invitation email binding (403) | Next.js API route handlers | 11 | 11 | 0 | **PASSED** |
+| **Ingestion Integration Tests** | 96-block contiguous day validator, CSV parser edge cases | Node.js / PostgreSQL | 10 | 10 | 0 | **PASSED** |
 | **Python Analytics Solvers** | Forecast, DSM, BESS advisory, token auth, physical feasibility | Python 3.11 / FastAPI (Docker) | 7 | 7 | 0 | **PASSED** |
-| **Playwright E2E Workflows** | Persistence journey, full platform workflows | Headless Chromium (Playwright) | 2 spec suites | 2 | 0 | **PASSED** |
 | **TypeScript Type Checking** | Complete codebase type safety | `tsc --noEmit` | N/A | 0 errors | 0 | **PASSED** |
-| **ESLint Static Analysis** | Code quality and linting | `next lint` | N/A | 0 warnings | 0 | **PASSED** |
-| **Next.js Production Build** | Static & dynamic routes compilation | Next.js 14.2.35 | 32 routes | 32 | 0 | **PASSED** |
-| **TOTALS** | | | **64 tests** | **64 passed** | **0 failed** | **100% PASS RATE** |
+| **ESLint Static Analysis** | Code quality and linting | `next lint` | N/A | 0 errors | 0 | **PASSED** |
+| **Next.js Production Build** | Static & dynamic routes compilation | Next.js 14.2.35 | 37 routes | 37 | 0 | **PASSED** |
+| **TOTAL AUTOMATED BACKEND TESTS** | | | **73 tests** | **73 passed** | **0 failed** | **100% PASS RATE** |

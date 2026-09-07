@@ -8,10 +8,9 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  const isDemoMode =
-    process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ||
-    request.headers.get('x-demo-mode') === 'true' ||
-    request.cookies.get('aetheon_demo')?.value === 'true';
+  // Demo mode may be enabled ONLY by trusted server configuration.
+  // Browser headers (x-demo-mode) or cookies (aetheon_demo) must NEVER bypass authentication.
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://mock-aetheon.supabase.co';
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'mock-anon-key-placeholder';

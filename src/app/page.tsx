@@ -28,6 +28,10 @@ import { PRODUCTS } from '@/lib/constants';
 export default function DashboardPage() {
   const { currentSite, currentOrg } = useSite();
 
+  if (!currentSite || !currentOrg) {
+    return null;
+  }
+
   const isMonitoringActive = currentSite.activation_status === 'ACTIVE';
 
   return (

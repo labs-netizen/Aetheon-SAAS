@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Settings,
   Upload,
@@ -10,6 +11,11 @@ import {
   FileSpreadsheet,
   Check,
   RefreshCw,
+  CreditCard,
+  ShieldCheck,
+  Calendar,
+  AlertTriangle,
+  XCircle,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -21,9 +27,12 @@ import { parseAndValidateCsv, generateCsvTemplate, type ParseResult } from '@/fe
 import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants';
 
-export default function SettingsPage() {
-  const { currentSite, refreshSites } = useSite();
-  const [activeSubTab, setActiveSubTab] = useState<'upload' | 'site' | 'readiness'>('upload');
+function SettingsContent() {
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'billing' ? 'billing' : 'upload';
+
+  const { currentSite, activeRole, refreshSites } = useSite();
+  const [activeSubTab, setActiveSubTab] = useState<'upload' | 'site' | 'readiness' | 'billing'>(initialTab);
 
   // CSV Upload State
   const [fileContent, setFileContent] = useState<string>('');
@@ -35,25 +44,106 @@ export default function SettingsPage() {
   const [commitFeedback, setCommitFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Site Parameters Form State
-  const [siteName, setSiteName] = useState(currentSite.name);
-  const [siteState, setSiteState] = useState(currentSite.state);
-  const [siteDiscom, setSiteDiscom] = useState(currentSite.discom);
-  const [siteVoltage, setSiteVoltage] = useState(currentSite.voltage_category);
-  const [siteContractDemand, setSiteContractDemand] = useState(String(currentSite.contract_demand_value));
-  const [siteMeteringPoint, setSiteMeteringPoint] = useState(currentSite.metering_point);
-  const [siteLoadClass, setSiteLoadClass] = useState(currentSite.load_class);
+  const [siteName, setSiteName] = useState(currentSite?.name || '');
+  const [siteState, setSiteState] = useState(currentSite?.state || 'Maharashtra');
+  const [siteDiscom, setSiteDiscom] = useState(currentSite?.discom || 'MSEDCL');
+  const [siteVoltage, setSiteVoltage] = useState(currentSite?.voltage_category || '33kV');
+  const [siteContractDemand, setSiteContractDemand] = useState(String(currentSite?.contract_demand_value || 1000));
+  const [siteMeteringPoint, setSiteMeteringPoint] = useState(currentSite?.metering_point || 'Main Substation');
+  const [siteLoadClass, setSiteLoadClass] = useState(currentSite?.load_class || 'Continuous Process Industrial');
   const [isSavingSite, setIsSavingSite] = useState(false);
   const [siteFeedback, setSiteFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // Billing State
+  interface BillingData {
+    billingMode: 'MOCK_DEVELOPMENT' | 'RAZORPAY_TEST' | 'RAZORPAY_LIVE';
+    subscriptions: any[];
+    entitlements: any[];
+    invoices: any[];
+    userRole: string;
+  }
+  const [billingData, setBillingData] = useState<BillingData | null>(null);
+  const [isLoadingBilling, setIsLoadingBilling] = useState(false);
+  const [billingActionLoading, setBillingActionLoading] = useState(false);
+  const [billingFeedback, setBillingFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   useEffect(() => {
-    setSiteName(currentSite.name);
-    setSiteState(currentSite.state);
-    setSiteDiscom(currentSite.discom);
-    setSiteVoltage(currentSite.voltage_category);
-    setSiteContractDemand(String(currentSite.contract_demand_value));
-    setSiteMeteringPoint(currentSite.metering_point);
-    setSiteLoadClass(currentSite.load_class);
+    if (searchParams.get('tab') === 'billing') {
+      setActiveSubTab('billing');
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (currentSite) {
+      setSiteName(currentSite.name);
+      setSiteState(currentSite.state);
+      setSiteDiscom(currentSite.discom);
+      setSiteVoltage(currentSite.voltage_category);
+      setSiteContractDemand(String(currentSite.contract_demand_value));
+      setSiteMeteringPoint(currentSite.metering_point);
+      setSiteLoadClass(currentSite.load_class);
+    }
   }, [currentSite]);
+
+  const loadBillingData = async () => {
+    setIsLoadingBilling(true);
+    setBillingFeedback(null);
+    try {
+      const res = await fetch('/api/billing');
+      if (res.ok) {
+        const data = await res.json();
+        setBillingData(data);
+      }
+    } catch {
+      // Ignored
+    } finally {
+      setIsLoadingBilling(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSubTab === 'billing') {
+      loadBillingData();
+    }
+  }, [activeSubTab]);
+
+  const handleCancelSubscription = async (subscriptionId: string) => {
+    if (activeRole !== 'ORGANISATION_ADMIN') {
+      setBillingFeedback({ type: 'error', message: 'Only ORGANISATION_ADMIN can cancel subscriptions.' });
+      return;
+    }
+
+    setBillingActionLoading(true);
+    setBillingFeedback(null);
+    try {
+      const res = await fetch('/api/billing/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscriptionId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to cancel subscription');
+      }
+      setBillingFeedback({ type: 'success', message: data.message || 'Subscription cancelled at period end.' });
+      await loadBillingData();
+    } catch (err) {
+      setBillingFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Error cancelling subscription',
+      });
+    } finally {
+      setBillingActionLoading(false);
+    }
+  };
+
+  if (!currentSite) {
+    return (
+      <div className="p-8 text-center text-slate-400">
+        <p>No site selected or available. Please configure an industrial facility first.</p>
+      </div>
+    );
+  }
 
   // Readiness evaluation
   const readiness = evaluateGridReadiness({
@@ -108,7 +198,6 @@ export default function SettingsPage() {
         body: JSON.stringify({
           siteId: currentSite.id,
           filename: fileName,
-          checksum: parseResult.checksum,
           parsedData: parseResult.parsedData,
         }),
       });
@@ -183,11 +272,11 @@ export default function SettingsPage() {
             Settings, Site Operations & Data Gateway
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Manage site electrical boundaries, ingest 15-minute AMR meter data, and track module data readiness.
+            Manage site electrical boundaries, ingest 15-minute AMR meter data, and track subscription entitlements.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant={activeSubTab === 'upload' ? 'primary' : 'outline'}
             size="sm"
@@ -213,6 +302,15 @@ export default function SettingsPage() {
           >
             Data Readiness ({readiness.readinessPct}%)
           </Button>
+          <Button
+            variant={activeSubTab === 'billing' ? 'primary' : 'outline'}
+            size="sm"
+            onClick={() => setActiveSubTab('billing')}
+            className="text-xs gap-1.5"
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            Billing & Subscriptions
+          </Button>
         </div>
       </div>
 
@@ -236,7 +334,6 @@ export default function SettingsPage() {
               </Button>
             </CardHeader>
 
-            {/* Dropzone Area */}
             <div className="p-8 border-2 border-dashed border-slate-700 rounded-lg bg-slate-950/60 text-center space-y-3">
               <Upload className="w-10 h-10 text-teal-400 mx-auto" />
               <div>
@@ -258,7 +355,6 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {/* Ingestion Validation Results */}
             {parseResult && (
               <div className="mt-6 space-y-4 pt-4 border-t border-slate-800">
                 <div className="flex items-center justify-between">
@@ -500,6 +596,204 @@ export default function SettingsPage() {
           </div>
         </Card>
       )}
+
+      {/* Subtab 4: Real Billing & Subscription Management */}
+      {activeSubTab === 'billing' && (
+        <div className="space-y-6">
+          <Card variant="industrial">
+            <CardHeader>
+              <div className="flex items-center justify-between w-full">
+                <div>
+                  <CardTitle className="text-teal-400 flex items-center gap-2">
+                    <CreditCard className="w-5 h-5" />
+                    Subscription, Entitlements & Invoices
+                  </CardTitle>
+                  <CardDescription>
+                    Manage enterprise tier subscriptions, active product entitlements, and payment provenance.
+                  </CardDescription>
+                </div>
+                {billingData && (
+                  <Badge
+                    variant={
+                      billingData.billingMode === 'RAZORPAY_LIVE'
+                        ? 'success'
+                        : billingData.billingMode === 'RAZORPAY_TEST'
+                        ? 'warning'
+                        : 'outline'
+                    }
+                  >
+                    Provider Mode: {billingData.billingMode}
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+
+            <div className="p-6 pt-0 space-y-6">
+              {billingFeedback && (
+                <div
+                  className={`p-3 rounded-md text-xs flex items-center gap-2 ${
+                    billingFeedback.type === 'success'
+                      ? 'bg-emerald-950/50 border border-emerald-800 text-emerald-200'
+                      : 'bg-rose-950/50 border border-rose-800 text-rose-200'
+                  }`}
+                >
+                  {billingFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  )}
+                  <span>{billingFeedback.message}</span>
+                </div>
+              )}
+
+              {isLoadingBilling ? (
+                <div className="p-8 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-teal-400" />
+                  Loading subscription records...
+                </div>
+              ) : (
+                <>
+                  {/* Section 1: Active Subscriptions */}
+                  <div className="space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Active SaaS Subscriptions
+                    </h3>
+                    {!billingData?.subscriptions || billingData.subscriptions.length === 0 ? (
+                      <div className="p-4 rounded-md bg-slate-950 border border-slate-800 text-xs text-slate-400">
+                        No active commercial subscription currently on file. Platform operates under registered evaluation entitlement.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {billingData.subscriptions.map((sub: any) => (
+                          <div
+                            key={sub.id}
+                            className="p-4 rounded-md bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-slate-200 text-sm">
+                                  {sub.product_id ? sub.product_id.replace(/_/g, ' ') : 'Enterprise Platform'}
+                                </span>
+                                <Badge
+                                  variant={
+                                    sub.status === 'ACTIVE'
+                                      ? 'success'
+                                      : sub.status === 'CANCELLED'
+                                      ? 'danger'
+                                      : 'warning'
+                                  }
+                                >
+                                  {sub.status}
+                                </Badge>
+                                {sub.cancel_at_period_end && (
+                                  <Badge variant="warning">Cancels At Period End</Badge>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-400 flex items-center gap-3">
+                                <span>Period: {sub.current_period_start?.substring(0, 10) || 'N/A'} to {sub.current_period_end?.substring(0, 10) || 'N/A'}</span>
+                                {sub.amount_paise && (
+                                  <span>Amount: ₹{(sub.amount_paise / 100).toLocaleString('en-IN')}/mo</span>
+                                )}
+                              </p>
+                            </div>
+
+                            <div>
+                              {activeRole === 'ORGANISATION_ADMIN' ? (
+                                !sub.cancel_at_period_end && sub.status === 'ACTIVE' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={billingActionLoading}
+                                    onClick={() => handleCancelSubscription(sub.id)}
+                                    className="text-xs border-rose-800 text-rose-300 hover:bg-rose-950/40"
+                                  >
+                                    {billingActionLoading ? 'Cancelling...' : 'Cancel at Period End'}
+                                  </Button>
+                                ) : (
+                                  <span className="text-[11px] text-slate-500 italic">No actions available</span>
+                                )
+                              ) : (
+                                <span className="text-[11px] text-slate-500 italic">Admin role required</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Section 2: Module Entitlements */}
+                  <div className="space-y-3 pt-4 border-t border-slate-800">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Authorised Module Entitlements
+                    </h3>
+                    {!billingData?.entitlements || billingData.entitlements.length === 0 ? (
+                      <p className="text-xs text-slate-400">No active entitlements discovered.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {billingData.entitlements.map((ent: any) => (
+                          <div
+                            key={ent.id}
+                            className="p-3 rounded-md bg-slate-950 border border-slate-800 flex items-center justify-between"
+                          >
+                            <div className="flex items-center gap-2">
+                              <ShieldCheck className="w-4 h-4 text-teal-400" />
+                              <span className="text-xs font-semibold text-slate-200">
+                                {ent.product_id.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <Badge variant={ent.is_active ? 'success' : 'outline'}>
+                              {ent.is_active ? 'Entitled' : 'Revoked'}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Section 3: Invoices & Payment Provenance */}
+                  <div className="space-y-3 pt-4 border-t border-slate-800">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Tax Invoices & Payment Records
+                    </h3>
+                    {!billingData?.invoices || billingData.invoices.length === 0 ? (
+                      <div className="p-4 rounded-md bg-slate-950/50 border border-slate-800/80 text-xs text-slate-500 italic">
+                        No invoices recorded yet for this organization. Invoices generated from recurring cycles will appear here.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {billingData.invoices.map((inv: any) => (
+                          <div
+                            key={inv.id}
+                            className="p-3 rounded-md bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
+                          >
+                            <div>
+                              <span className="font-semibold text-slate-200">{inv.invoice_number || inv.id}</span>
+                              <span className="text-slate-500 ml-2">{inv.created_at?.substring(0, 10)}</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="font-mono text-slate-200">₹{((inv.amount_paise || 0) / 100).toLocaleString('en-IN')}</span>
+                              <Badge variant={inv.status === 'PAID' ? 'success' : 'warning'}>{inv.status}</Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-xs text-slate-500">Loading settings...</div>}>
+      <SettingsContent />
+    </Suspense>
   );
 }

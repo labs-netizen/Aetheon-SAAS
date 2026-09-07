@@ -6,9 +6,11 @@ export interface ProvenanceProps {
   sourceType?: string;
   completenessPct?: number;
   modelVersion: string;
-  modelGenerationTime: string;
+  modelGenerationTime?: string;
   tariffVersion?: string;
   ruleVersion?: string;
+  freshnessStatus?: string;
+  validationStatus?: string;
 }
 
 export function ProvenanceFooter({
@@ -16,7 +18,7 @@ export function ProvenanceFooter({
   sourceType = 'AMR Interval Data (Demo)',
   completenessPct = 100.0,
   modelVersion,
-  modelGenerationTime,
+  modelGenerationTime = new Date().toISOString(),
   tariffVersion = 'MERC_MYT_2024_DEMO',
   ruleVersion = 'CERC_DSM_2024_DEMO',
 }: ProvenanceProps) {
