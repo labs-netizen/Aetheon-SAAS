@@ -5,13 +5,15 @@ test.describe.configure({ retries: 0 });
 
 test.describe('Aetheon Platform E2E DEMO MODE Smoke Tests', () => {
   test.beforeEach(async ({ page }) => {
+    await page.goto('/');
     // Verify demo mode is enabled
     const isDemoMode = await page.evaluate(() => {
-      return window.__NEXT_PUBLIC_DEMO_MODE__ === 'true' || 
+      const win = window as unknown as { __NEXT_PUBLIC_DEMO_MODE__?: string };
+      return win.__NEXT_PUBLIC_DEMO_MODE__ === 'true' || 
              document.body.getAttribute('data-demo-mode') === 'true';
     });
-    if (!isDemoMode) {
-      test.skip('Demo mode not enabled - skipping demo smoke tests');
+    if (!isDemoMode && process.env.NEXT_PUBLIC_DEMO_MODE !== 'true') {
+      test.skip(true, 'Demo mode not enabled - skipping demo smoke tests');
     }
   });
 
@@ -49,6 +51,7 @@ test.describe('Aetheon Platform E2E DEMO MODE Smoke Tests', () => {
   test('4. Data Quality Gate suppression state when telemetry is missing/stale (DEMO MODE)', async ({ page }) => {
     await page.goto('/grid-intelligence');
     const siteSelect = page.locator('header select').first();
+    await expect(siteSelect).toBeVisible();
     // Switch to Sanand site which is AWAITING_DATA
     await siteSelect.selectOption({ label: 'Aetheon Demo Engineering Unit 2 (Gujarat - UGVCL)' });
 

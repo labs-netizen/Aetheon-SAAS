@@ -107,7 +107,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
         if (isDemo) {
           setCurrentOrg(DEMO_ORG);
           setSites(DEMO_SITES);
-          setCurrentSiteId(DEMO_SITES[0].id);
+          setCurrentSiteId((prev) => (prev && DEMO_SITES.some((s) => s.id === prev) ? prev : DEMO_SITES[0].id));
           setEntitlements(ALL_PRODUCT_ENTITLEMENTS);
           setTenancyStatus('READY');
           setIsLoading(false);

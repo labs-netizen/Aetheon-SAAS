@@ -217,30 +217,32 @@ export async function POST(req: NextRequest) {
       }
 
     } else if (reportType === 'BESS_PERFORMANCE_REPORT') {
-      const { data: runs } = await adminClient
-        .from('bess_signal_runs')
-        .select('*')
+      const { data: asset } = await adminClient
+        .from('bess_assets')
+        .select('id, name, updated_at')
         .eq('site_id', siteId)
-        .gte('operating_date', pStart)
-        .lte('operating_date', pEnd)
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .eq('is_active', true)
+        .maybeSingle();
 
-      const run = runs?.[0];
+      let run = null;
+      if (asset) {
+        const { data: runs } = await adminClient
+          .from('bess_signal_runs')
+          .select('*')
+          .eq('battery_id', asset.id)
+          .gte('operating_date', pStart)
+          .lte('operating_date', pEnd)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        run = runs?.[0];
+      }
+
       if (run) {
         // For BESS, we report from the persisted signal runs
         // Detailed dispatch blocks would require a dedicated schedule table
         csvLines.push(`# BESS SIGNAL RUN: ${run.id} | SOLVER: ${run.solver_version}`);
         csvLines.push(`operating_date,gross_arbitrage_inr,degradation_cost_inr,net_opportunity_inr,equivalent_cycles,is_suppressed,suppression_reason`);
         csvLines.push(`${run.operating_date},${run.gross_arbitrage_inr},${run.degradation_cost_inr},${run.net_opportunity_inr},${run.equivalent_cycles},${run.is_suppressed},${run.suppression_reason || ''}`);
-
-        // Fetch asset config version
-        const { data: asset } = await adminClient
-          .from('bess_assets')
-          .select('id, name, updated_at')
-          .eq('site_id', siteId)
-          .eq('is_active', true)
-          .maybeSingle();
 
         summaryData = {
           runId: run.id,

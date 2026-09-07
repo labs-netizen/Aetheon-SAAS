@@ -12,7 +12,7 @@
 
 Antigravity has executed the comprehensive final pre-Astra functional blocker corrective pass on the Aetheon platform. The application is a genuinely connected, persistent, locally functional SaaS V1 strictly aligned with [`docs/PRODUCT_SPECIFICATION.md`](file:///d:/Consultancy%20Project/Aetheon-SAAS/docs/PRODUCT_SPECIFICATION.md):
 
-- **Live Local Supabase Architecture**: Running in Docker on Windows (ports mapped to 15431–15437 to bypass Hyper-V exclusions). PostgreSQL 17.6 database is fully migrated with 12 migrations (`20260907000001` through `20260907000012_final_rls_and_pipeline_consistency.sql`) and seeded with tenant organizations, sites, site access grants, discom tariffs, regulatory records, verified CEA emission factors, and atomic transactional RPCs.
+- **Live Local Supabase Architecture**: Running in Docker on Windows (ports mapped to 15431–15437 to bypass Hyper-V exclusions). PostgreSQL 17.6 database is fully migrated with 13 migrations (`20260907000001` through `20260907000013_atomic_acknowledgement_audit.sql`) and seeded with tenant organizations, sites, site access grants, discom tariffs, regulatory records, verified CEA emission factors, and atomic transactional RPCs.
 - **Critical Privilege-Escalation Hardening & Analyst Expiry**:
   - `handle_new_user()` trigger sanitizes metadata and unconditionally creates unprivileged profiles (`is_platform_admin = false`).
   - `trg_protect_user_profile_escalation` blocks user-driven promotion to platform admin.

@@ -70,7 +70,7 @@ export default function AdminPage() {
   const models = [
     { name: 'Grid Day-Ahead Forecast Heuristic', version: 'v1.0-baseline', module: 'GRID', status: 'INTERNAL_VALIDATION' },
     { name: 'CERC DSM Deviation Settlement Engine', version: 'v2.1-heuristic', module: 'DSM', status: 'INTERNAL_VALIDATION' },
-    { name: 'BESS Degradation-Aware Advisory Solver', version: 'v1.0-milp-ref', module: 'BESS', status: 'INTERNAL_VALIDATION' },
+    { name: 'BESS Degradation-Aware Advisory Solver', version: 'v1.0-milp-ref', module: 'BESS', status: 'SPECIALIST_REVIEW_REQUIRED' },
     { name: 'CEA Grid Carbon Avoidance Ledger', version: 'v19-baseline', module: 'RENEWABLES', status: 'DEMO_ONLY' },
   ];
 

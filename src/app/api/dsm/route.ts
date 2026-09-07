@@ -150,11 +150,21 @@ export async function POST(req: NextRequest) {
       effectiveScheduled = scheduledDrawalKw;
       effectiveActual = actualDrawalKw;
 
-      if (!effectiveScheduled || !effectiveActual || !Array.isArray(effectiveScheduled) || !Array.isArray(effectiveActual) || effectiveScheduled.length !== 96 || effectiveActual.length !== 96) {
+      const hasNullOrInvalid =
+        !effectiveScheduled ||
+        !effectiveActual ||
+        !Array.isArray(effectiveScheduled) ||
+        !Array.isArray(effectiveActual) ||
+        effectiveScheduled.length !== 96 ||
+        effectiveActual.length !== 96 ||
+        effectiveScheduled.some((v) => v === null || v === undefined || !Number.isFinite(Number(v))) ||
+        effectiveActual.some((v) => v === null || v === undefined || !Number.isFinite(Number(v)));
+
+      if (hasNullOrInvalid) {
         return NextResponse.json(
           {
             is_suppressed: true,
-            suppression_reason: 'MISSING_DATA: Demo mode requires 96-block schedule and actual drawal arrays.',
+            suppression_reason: 'MISSING_DATA: Demo mode requires 96-block schedule and actual drawal arrays without missing or null values.',
             summary: {
               total_deviation_kwh: 0,
               estimated_penalty_inr: 0,

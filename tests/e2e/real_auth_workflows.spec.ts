@@ -7,7 +7,8 @@ test.describe('Aetheon Platform E2E REAL AUTH Workflows', () => {
   test.beforeEach(async ({ page }) => {
     // Verify we're NOT in demo mode, or we have real auth
     const isDemoMode = await page.evaluate(() => {
-      return window.__NEXT_PUBLIC_DEMO_MODE__ === 'true' || 
+      const win = window as unknown as { __NEXT_PUBLIC_DEMO_MODE__?: string };
+      return win.__NEXT_PUBLIC_DEMO_MODE__ === 'true' || 
              document.body.getAttribute('data-demo-mode') === 'true';
     });
     
@@ -16,7 +17,8 @@ test.describe('Aetheon Platform E2E REAL AUTH Workflows', () => {
     const testPassword = process.env.E2E_TEST_USER_PASSWORD;
     
     if (!testEmail || !testPassword) {
-      test.skip('E2E_TEST_USER_EMAIL and E2E_TEST_USER_PASSWORD required for real auth tests');
+      test.skip(true, 'E2E_TEST_USER_EMAIL and E2E_TEST_USER_PASSWORD required for real auth tests');
+      return;
     }
     
     // Login before each test

@@ -269,6 +269,8 @@ CREATE POLICY "Users can view activation history for permitted sites"
 DROP POLICY IF EXISTS "Members can insert bess signal runs" ON public.bess_signal_runs;
 
 -- Duplicate management policies cleanup
+DROP POLICY IF EXISTS "Members can view site access" ON public.site_access;
+DROP POLICY IF EXISTS "Users can view site access for their org" ON public.site_access;
 DROP POLICY IF EXISTS "Managers can modify bess assets" ON public.bess_assets;
 DROP POLICY IF EXISTS "Managers can modify renewable assets" ON public.renewable_assets;
 DROP POLICY IF EXISTS "Operators and managers can update dsm incidents" ON public.dsm_incidents;

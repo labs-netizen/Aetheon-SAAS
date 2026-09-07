@@ -112,9 +112,18 @@ export async function authorizeApiRequest(
 
   // 2. Handle Unauthenticated Requests
   if (!user) {
+    let unauthenticatedSiteIsDemo = false;
+    if (options.siteId) {
+      if (DEMO_SITE_IDS.includes(options.siteId)) {
+        unauthenticatedSiteIsDemo = true;
+      } else {
+        const { data: s } = await adminClient.from('sites').select('is_demo').eq('id', options.siteId).maybeSingle();
+        unauthenticatedSiteIsDemo = Boolean(s?.is_demo);
+      }
+    }
     // If demo mode is active and the requested site/org is a demo site/org
     const isTargetingDemo =
-      (options.siteId && siteIsDemo) ||
+      (options.siteId && unauthenticatedSiteIsDemo) ||
       (options.organisationId && DEMO_ORG_IDS.includes(options.organisationId));
 
     if (isDemoModeEnabled && isTargetingDemo) {

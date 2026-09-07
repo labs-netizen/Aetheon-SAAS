@@ -15,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className="bg-slate-950 text-slate-100 min-h-screen">
+      <body data-demo-mode={process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ? 'true' : 'false'} className="bg-slate-950 text-slate-100 min-h-screen">
         <SiteProvider>
           <AppShell>{children}</AppShell>
         </SiteProvider>

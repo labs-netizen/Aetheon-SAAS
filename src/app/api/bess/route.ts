@@ -116,6 +116,7 @@ export async function POST(req: NextRequest) {
 
     // For live mode, ALL safety-critical parameters come from trusted server-side data
     // Browser-supplied values are ONLY used in demo/test mode
+    const isDemoMode = Boolean(authResult.isDemo) || (await adminClient.from('sites').select('is_demo').eq('id', siteId).maybeSingle()).data?.is_demo === true;
     const isLiveMode = !isDemoMode;
     
     // Server-authoritative safety parameters
@@ -224,8 +225,6 @@ export async function POST(req: NextRequest) {
     
     // For live mode, server MUST resolve authoritative price series from persisted grid forecast
     // For demo mode only, client may provide pricesInrPerMwh
-    const isDemoMode = authResult.isDemo || (await adminClient.from('sites').select('is_demo').eq('id', siteId).maybeSingle()).data?.is_demo === true;
-    
     if (isDemoMode && Array.isArray(pricesInrPerMwh) && pricesInrPerMwh.length === 96) {
       effectivePrices = pricesInrPerMwh;
     } else {

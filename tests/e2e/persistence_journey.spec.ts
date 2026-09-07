@@ -24,7 +24,7 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
     await expect(page.getByText('Site Electrical Configuration')).toBeVisible();
 
     const testDemand = '2800';
-    const demandInput = page.locator('input[label="Sanctioned Contract Demand (kVA)"], input[type="number"]').first());
+    const demandInput = page.locator('input[label="Sanctioned Contract Demand (kVA)"], input[type="number"]').first();
     await demandInput.fill(testDemand);
     await page.getByRole('button', { name: 'Save Site Parameters' }).click();
 
