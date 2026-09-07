@@ -44,7 +44,7 @@ export default function LoginPage() {
   };
 
   const handleDemoSignIn = async () => {
-    setEmail('rajesh.sharma@demo-aetheon.in');
+    setEmail('rajesh.demo@demo.aetheonlabs.in');
     setPassword('AetheonDemo2026!');
   };
 
@@ -132,7 +132,7 @@ export default function LoginPage() {
                 className="w-full text-xs text-slate-400 border-slate-800 hover:text-slate-200"
                 onClick={handleDemoSignIn}
               >
-                Fill Demo Credentials (Rajesh Sharma, Admin)
+                Fill Demo Credentials (Rajesh Sharma, Org Admin)
               </Button>
             )}
           </form>

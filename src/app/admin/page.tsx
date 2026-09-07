@@ -44,10 +44,10 @@ export default function AdminPage() {
   ];
 
   const auditEvents = [
-    { id: 1, action: 'SITE_CREATED', actor: 'Rajesh Sharma', target: 'Chakan Auto Components Plant 1', time: '2026-09-01 10:00 IST' },
+    { id: 1, action: 'SITE_CREATED', actor: 'Rajesh Sharma (Demo Admin)', target: 'Aetheon Demo Manufacturing Facility 1', time: '2026-09-01 10:00 IST' },
     { id: 2, action: 'SUBSCRIPTION_ACTIVATED', actor: 'SYSTEM', target: 'Grid Intelligence Monitor', time: '2026-09-01 10:05 IST' },
-    { id: 3, action: 'DATA_INGESTED', actor: 'Vikram Desai', target: 'chakan_load_august2026.csv (96 blocks)', time: '2026-09-06 18:00 IST' },
-    { id: 4, action: 'ALERT_ACKNOWLEDGED', actor: 'Sunil Pawar', target: 'DSM Drawal Deviation Exceeded (+15.0%)', time: '2026-09-06 18:45 IST' },
+    { id: 3, action: 'DATA_INGESTED', actor: 'Vikram Desai (Demo Energy Manager)', target: 'aetheon_demo_load_august2026.csv (96 blocks)', time: '2026-09-06 18:00 IST' },
+    { id: 4, action: 'ALERT_ACKNOWLEDGED', actor: 'Sunil Pawar (Demo Operator)', target: 'DSM Drawal Deviation Exceeded (+15.0%)', time: '2026-09-06 18:45 IST' },
   ];
 
   if (!hasAccess) {

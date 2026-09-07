@@ -86,12 +86,13 @@ The local development and testing environment is configured as follows:
 
 ## 5. Seed Credentials for Local Testing
 
-| Role | Email | Password |
-|---|---|---|
-| **Organisation Admin** | `rajesh.sharma@demo-aetheon.in` | `AetheonDemo2026!` |
-| **Energy Manager** | `vikram.desai@demo-aetheon.in` | `AetheonDemo2026!` |
-| **Plant Operator** | `sunil.pawar@demo-aetheon.in` | `AetheonDemo2026!` |
-| **Finance Viewer** | `anita.roy@demo-aetheon.in` | `AetheonDemo2026!` |
-| **Aetheon Analyst** | `analyst@aetheonlabs.in` | `AetheonDemo2026!` |
-| **Regulatory Reviewer** | `regulatory@aetheonlabs.in` | `AetheonDemo2026!` |
-| **Platform Superadmin**| `admin@aetheonlabs.in` | `AetheonSuperAdmin2026!` |
+| Canonical Business Role | Demo Login Email | Password | Scope / Boundary |
+|---|---|---|---|
+| **ORGANISATION_ADMIN** | `rajesh.demo@demo.aetheonlabs.in` | `AetheonDemo2026!` | Customer Organization Admin (Aetheon Demo Industries Pvt Ltd) |
+| **ENERGY_MANAGER** | `vikram.demo@demo.aetheonlabs.in` | `AetheonDemo2026!` | Customer Energy Operations & Ingestion |
+| **OPERATOR** | `sunil.demo@demo.aetheonlabs.in` | `AetheonDemo2026!` | Customer Operational Monitoring & Incident Acknowledgment |
+| **FINANCE_SUSTAINABILITY_VIEWER** | `anita.demo@demo.aetheonlabs.in` | `AetheonDemo2026!` | Customer Executive Read-Only & Reporting |
+| **AETHEON_ANALYST** | `analyst.internal@demo.aetheonlabs.in` | `AetheonDemo2026!` | Internal Aetheon Support (Time-bounded 24h access) |
+| **AETHEON_REGULATORY_REVIEWER**| `regulatory.internal@demo.aetheonlabs.in` | `AetheonDemo2026!` | Internal Aetheon Regulatory & Tariff Modeler |
+
+> **Governance Notice on Platform Privileges**: An unrestricted `super_admin` bypass shortcut is explicitly omitted per `docs/PRODUCT_SPECIFICATION.md`. Internal administrative controls are strictly partitioned between `AETHEON_ANALYST` (time-bounded diagnostic investigation) and `AETHEON_REGULATORY_REVIEWER` (tariff/regulatory rule maintenance). All actions are immutably logged to `audit_events`.

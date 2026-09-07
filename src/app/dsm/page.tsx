@@ -70,7 +70,7 @@ export default function DSMPage() {
         maxDeviation: '+15.0%',
         excessEnergyKwh: 225.0,
         estimatedExposure: '₹3,150.00 (DEMO)',
-        cause: 'Chakan Press Shop unexpected parallel shift startup',
+        cause: 'Aetheon Demo Plant 1 press shop unexpected parallel shift startup',
       },
       {
         id: 'inc-02',

@@ -65,3 +65,6 @@ export const LOAD_CLASSES = [
   'Commercial IT Park / Data Center',
   'Cold Storage & Agro Processing',
 ] as const;
+
+export { CANONICAL_ROLES, ROLE_ALIASES, reconcileRole, isInternalAetheonRole, isCustomerRole } from '../auth/roles';
+

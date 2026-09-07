@@ -59,21 +59,21 @@ export default function CompliancePage() {
       obligation: 'Monthly Banking Energy Reconciliation with MSEDCL',
       type: 'DISCOM Filing',
       status: 'IN_PROGRESS',
-      owner: 'Vikram Desai (Energy Manager)',
+      owner: 'Vikram Desai (Demo Energy Manager)',
     },
     {
       deadline: '2026-09-25',
       obligation: 'Quarterly SLDC Open Access Scheduling Agreement Renewal',
       type: 'SLDC Statutory',
       status: 'NOT_STARTED',
-      owner: 'Rajesh Sharma (Admin)',
+      owner: 'Rajesh Sharma (Demo Admin)',
     },
     {
       deadline: '2026-10-05',
       obligation: 'Filing of RE Captive Shareholding Self-Certification',
       type: 'Regulatory Compliance',
       status: 'NOT_STARTED',
-      owner: 'Anita Roy (Finance)',
+      owner: 'Anita Roy (Demo Finance Viewer)',
     },
   ];
 

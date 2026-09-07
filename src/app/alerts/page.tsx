@@ -38,7 +38,7 @@ export default function AlertsPage() {
       module: 'DSM',
       severity: 'CRITICAL',
       title: 'DSM Drawal Deviation Exceeded (+15.0%)',
-      description: 'Chakan plant actual drawal exceeded SLDC schedule by 180 kW across 5 consecutive blocks.',
+      description: 'Aetheon Demo Plant 1 actual drawal exceeded SLDC schedule by 180 kW across 5 consecutive blocks.',
       triggeredAt: '45 minutes ago',
       status: 'ACTIVE',
       affectedWindow: '13:15 - 14:30 IST',

@@ -1,59 +1,65 @@
+import nextEnvPkg from '@next/env';
 import { createClient } from '@supabase/supabase-js';
+const { loadEnvConfig } = nextEnvPkg;
+
+// Load environment variables from .env.local without exposing secrets
+loadEnvConfig(process.cwd());
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:15431';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_SERVICE_KEY) {
+  throw new Error(
+    'SUPABASE_SERVICE_ROLE_KEY is required to seed auth users. Ensure it is set in .env.local or the environment.'
+  );
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+// Authoritative canonical demonstration users matching docs/PRODUCT_SPECIFICATION.md
 const seedUsers = [
   {
     id: 'c0000000-0000-0000-0000-000000000001',
-    email: 'rajesh.sharma@demo-aetheon.in',
+    email: 'rajesh.demo@demo.aetheonlabs.in',
     password: 'AetheonDemo2026!',
-    user_metadata: { full_name: 'Rajesh Sharma (Admin)', is_platform_admin: false },
+    user_metadata: { full_name: 'Rajesh Sharma (Aetheon Demo Admin)', is_platform_admin: false },
   },
   {
     id: 'c0000000-0000-0000-0000-000000000002',
-    email: 'vikram.desai@demo-aetheon.in',
+    email: 'vikram.demo@demo.aetheonlabs.in',
     password: 'AetheonDemo2026!',
-    user_metadata: { full_name: 'Vikram Desai (Energy Manager)', is_platform_admin: false },
+    user_metadata: { full_name: 'Vikram Desai (Aetheon Demo Energy Manager)', is_platform_admin: false },
   },
   {
     id: 'c0000000-0000-0000-0000-000000000003',
-    email: 'sunil.pawar@demo-aetheon.in',
+    email: 'sunil.demo@demo.aetheonlabs.in',
     password: 'AetheonDemo2026!',
-    user_metadata: { full_name: 'Sunil Pawar (Operator)', is_platform_admin: false },
+    user_metadata: { full_name: 'Sunil Pawar (Aetheon Demo Operator)', is_platform_admin: false },
   },
   {
     id: 'c0000000-0000-0000-0000-000000000004',
-    email: 'anita.roy@demo-aetheon.in',
+    email: 'anita.demo@demo.aetheonlabs.in',
     password: 'AetheonDemo2026!',
-    user_metadata: { full_name: 'Anita Roy (Finance Viewer)', is_platform_admin: false },
+    user_metadata: { full_name: 'Anita Roy (Aetheon Demo Finance Viewer)', is_platform_admin: false },
   },
   {
     id: 'c0000000-0000-0000-0000-000000000005',
-    email: 'analyst@aetheonlabs.in',
+    email: 'analyst.internal@demo.aetheonlabs.in',
     password: 'AetheonDemo2026!',
     user_metadata: { full_name: 'Aetheon Support Analyst', is_platform_admin: false },
   },
   {
     id: 'c0000000-0000-0000-0000-000000000006',
-    email: 'regulatory@aetheonlabs.in',
+    email: 'regulatory.internal@demo.aetheonlabs.in',
     password: 'AetheonDemo2026!',
     user_metadata: { full_name: 'Aetheon Regulatory Reviewer', is_platform_admin: false },
-  },
-  {
-    id: 'c0000000-0000-0000-0000-000000000099',
-    email: 'admin@aetheonlabs.in',
-    password: 'AetheonSuperAdmin2026!',
-    user_metadata: { full_name: 'Platform Superadmin', is_platform_admin: true },
   },
 ];
 
 async function seed() {
-  console.log('Seeding auth.users in local Supabase...');
+  console.log('Seeding canonical demonstration users in Supabase auth.users...');
   for (const user of seedUsers) {
     try {
       const { data, error } = await supabase.auth.admin.createUser({
@@ -63,21 +69,37 @@ async function seed() {
         email_confirm: true,
         user_metadata: user.user_metadata,
       });
-
       if (error) {
-        if (error.message.includes('already exists') || error.message.includes('unique')) {
-          console.log(`User ${user.email} already exists.`);
+        if (error.message.includes('already exists') || error.status === 422) {
+          // Update password and metadata if user already exists
+          const { error: updateError } = await supabase.auth.admin.updateUserById(user.id, {
+            email: user.email,
+            password: user.password,
+            email_confirm: true,
+            user_metadata: user.user_metadata,
+          });
+          if (updateError) {
+            console.warn(`User ${user.email} update warning:`, updateError.message);
+          } else {
+            console.log(`Updated user ${user.email}`);
+          }
         } else {
-          console.error(`Error creating user ${user.email}:`, error.message);
+          console.warn(`User ${user.email} creation note:`, error.message);
         }
       } else {
-        console.log(`Successfully created user: ${user.email} (${data.user.id})`);
+        console.log(`Created user ${user.email}`);
       }
     } catch (e) {
-      console.error(`Exception for ${user.email}:`, e);
+      console.warn(`Failed to seed ${user.email}:`, e.message);
     }
   }
-  console.log('Auth users seed complete.');
+
+  // Remove any obsolete demo users if present
+  try {
+    await supabase.auth.admin.deleteUser('c0000000-0000-0000-0000-000000000099');
+  } catch (_) {}
+
+  console.log('Auth user seeding complete.');
 }
 
 seed().catch(console.error);

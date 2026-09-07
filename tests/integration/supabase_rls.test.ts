@@ -1,18 +1,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createClient } from '@supabase/supabase-js';
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:15431';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
-  const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false, storageKey: 'test-admin' },
-  });
-
-  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false, storageKey: 'test-anon' },
-  });
+  let SUPABASE_URL: string;
+  let SUPABASE_ANON_KEY: string;
+  let SUPABASE_SERVICE_KEY: string;
+  let adminClient: SupabaseClient;
+  let anonClient: SupabaseClient;
 
   const orgAId = 'a0000000-0000-0000-0000-000000000001';
   let orgBId: string;
@@ -20,12 +14,29 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
   let userBToken: string;
 
   beforeAll(async () => {
+    SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:15431';
+    SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+    SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+    if (!SUPABASE_ANON_KEY || !SUPABASE_SERVICE_KEY) {
+      throw new Error(
+        'Supabase test keys missing. Please ensure NEXT_PUBLIC_SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY are defined in .env.local'
+      );
+    }
+
+    adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, storageKey: 'test-admin' },
+    });
+
+    anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, storageKey: 'test-anon' },
+    });
     // 1. Create Org B via admin client
     const { data: orgB, error: orgErr } = await adminClient
       .from('organisations')
       .insert({
-        name: 'Integration Test Org B',
-        legal_entity_name: 'Integration Test Org B Pvt Ltd',
+        name: 'Aetheon Demo Facility Beta Org',
+        legal_entity_name: 'Aetheon Demo Facility Beta Pvt Ltd',
         gstin: '29ABCDE1234F1Z5',
       })
       .select()
@@ -39,21 +50,21 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
       .from('sites')
       .insert({
         organisation_id: orgBId,
-        name: 'Org B Manufacturing Plant',
+        name: 'Aetheon Demo Facility Beta Plant',
         state: 'Karnataka',
         discom: 'BESCOM',
         voltage_category: '66kV',
         contract_demand_value: 3000,
         contract_demand_unit: 'kVA',
         metering_point: 'Feeder 2 Incomer',
-        load_class: 'Precision Engineering',
+        load_class: 'Continuous Process Industrial (Demo)',
         activation_status: 'CONFIGURED',
       });
 
     expect(siteErr).toBeNull();
 
     // 3. Create Auth User for Org B
-    const testEmail = `org-b-${Date.now()}@test-aetheon.in`;
+    const testEmail = `org-b-${Date.now()}@demo.aetheonlabs.in`;
     const testPassword = 'Password123!Secure';
 
     const { data: authUser, error: authErr } = await adminClient.auth.admin.createUser({

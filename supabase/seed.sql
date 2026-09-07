@@ -30,7 +30,7 @@ VALUES (
     'Aetheon Demo Industries Pvt Ltd',
     'Aetheon Demo Industries Private Limited',
     '27AABCA1234F1Z5',
-    '{"address_line": "Plot 42, Chakan MIDC Phase II", "city": "Pune", "state": "Maharashtra", "pincode": "410501"}'::jsonb,
+    '{"address_line": "Plot 42, Aetheon Demo Industrial Park, Phase II", "city": "Pune", "state": "Maharashtra", "pincode": "410501"}'::jsonb,
     true
 ) ON CONFLICT (id) DO NOTHING;
 
@@ -42,14 +42,14 @@ INSERT INTO sites (
 VALUES (
     'b0000000-0000-0000-0000-000000000001',
     'a0000000-0000-0000-0000-000000000001',
-    'Chakan Auto Components Plant 1',
+    'Aetheon Demo Manufacturing Facility 1',
     'Maharashtra',
     'MSEDCL',
     '33kV',
     2500.0,
     'kVA',
     'Main Substation Incomer Feeder 1',
-    'Automotive Manufacturing (Continuous Process)',
+    'Continuous Process Industrial (Demo)',
     'ACTIVE',
     'Calibrated on 30-day historical interval dataset (DEMO)',
     true
@@ -58,13 +58,15 @@ VALUES (
 -- 4. Demo Users & Memberships
 INSERT INTO user_profiles (id, full_name, email, phone, is_platform_admin, mfa_enabled)
 VALUES
-('c0000000-0000-0000-0000-000000000001', 'Rajesh Sharma (Admin)', 'rajesh.sharma@demo-aetheon.in', '+919820011223', false, true),
-('c0000000-0000-0000-0000-000000000002', 'Vikram Desai (Energy Manager)', 'vikram.desai@demo-aetheon.in', '+919820044556', false, false),
-('c0000000-0000-0000-0000-000000000003', 'Sunil Pawar (Operator)', 'sunil.pawar@demo-aetheon.in', '+919820077889', false, false),
-('c0000000-0000-0000-0000-000000000004', 'Anita Roy (Finance Viewer)', 'anita.roy@demo-aetheon.in', '+919820099001', false, false),
-('c0000000-0000-0000-0000-000000000005', 'Aetheon Support Analyst', 'analyst@aetheonlabs.in', '+919820000001', false, true),
-('c0000000-0000-0000-0000-000000000006', 'Aetheon Regulatory Reviewer', 'regulatory@aetheonlabs.in', '+919820000002', false, true)
-ON CONFLICT (id) DO NOTHING;
+('c0000000-0000-0000-0000-000000000001', 'Rajesh Sharma (Aetheon Demo Admin)', 'rajesh.demo@demo.aetheonlabs.in', '+919820011223', false, true),
+('c0000000-0000-0000-0000-000000000002', 'Vikram Desai (Aetheon Demo Energy Manager)', 'vikram.demo@demo.aetheonlabs.in', '+919820044556', false, false),
+('c0000000-0000-0000-0000-000000000003', 'Sunil Pawar (Aetheon Demo Operator)', 'sunil.demo@demo.aetheonlabs.in', '+919820077889', false, false),
+('c0000000-0000-0000-0000-000000000004', 'Anita Roy (Aetheon Demo Finance Viewer)', 'anita.demo@demo.aetheonlabs.in', '+919820099001', false, false),
+('c0000000-0000-0000-0000-000000000005', 'Aetheon Support Analyst', 'analyst.internal@demo.aetheonlabs.in', '+919820000001', false, true),
+('c0000000-0000-0000-0000-000000000006', 'Aetheon Regulatory Reviewer', 'regulatory.internal@demo.aetheonlabs.in', '+919820000002', false, true)
+ON CONFLICT (id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  email = EXCLUDED.email;
 
 INSERT INTO memberships (organisation_id, user_id, role, is_active, expires_at)
 VALUES
