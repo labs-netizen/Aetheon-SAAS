@@ -92,3 +92,51 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_audit_org_created ON audit_logs(organisation_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id);
+
+-- 6. Granular Site-Level Access
+CREATE TABLE IF NOT EXISTS site_access (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    granted_by UUID REFERENCES user_profiles(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(site_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_site_access_user ON site_access(user_id);
+CREATE INDEX IF NOT EXISTS idx_site_access_site ON site_access(site_id);
+
+-- 7. Site Activation History (5-stage lifecycle audit)
+CREATE TABLE IF NOT EXISTS site_activation_history (
+    id BIGSERIAL PRIMARY KEY,
+    site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    previous_status VARCHAR(50),
+    new_status VARCHAR(50) NOT NULL CHECK (new_status IN ('CONFIGURED', 'AWAITING_DATA', 'CALIBRATING', 'ACTIVE', 'DEGRADED')),
+    reason TEXT,
+    changed_by UUID REFERENCES user_profiles(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activation_history_site ON site_activation_history(site_id, created_at DESC);
+
+-- 8. Auth User Bootstrap Trigger
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+  INSERT INTO public.user_profiles (id, full_name, email, phone, is_platform_admin)
+  VALUES (
+    new.id,
+    COALESCE(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)),
+    new.email,
+    new.raw_user_meta_data->>'phone',
+    COALESCE((new.raw_user_meta_data->>'is_platform_admin')::boolean, false)
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    full_name = EXCLUDED.full_name,
+    email = EXCLUDED.email;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();

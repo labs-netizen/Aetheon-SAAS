@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS regulatory_sources (
     status VARCHAR(50) NOT NULL DEFAULT 'CAPTURED' CHECK (status IN (
         'CAPTURED',
         'EXTRACTED',
+        'CHANGE_DETECTED',
         'REVIEW_PENDING',
         'APPROVED',
         'PUBLISHED',

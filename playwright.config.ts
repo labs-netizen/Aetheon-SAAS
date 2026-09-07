@@ -14,6 +14,9 @@ export default defineConfig({
     baseURL: 'http://localhost:3000',
     trace: 'off',
     headless: true,
+    extraHTTPHeaders: {
+      'x-demo-mode': 'true',
+    },
   },
   projects: [
     {

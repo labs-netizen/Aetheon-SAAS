@@ -107,3 +107,47 @@ def test_renewable_reconciliation():
     res = solve_renewable_reconciliation(req)
     assert res.total_measured_generation_kwh == sum(measured)
     assert res.avoided_emissions_tco2e > 0
+
+
+def test_service_token_authentication():
+    # Calling calculation endpoint without token must return 401
+    payload = {
+        "site_id": "site-demo-001",
+        "operating_date": "2026-09-08",
+        "contract_demand_kw": 2000.0
+    }
+    unauthorized_res = client.post("/v1/grid/forecast", json=payload)
+    assert unauthorized_res.status_code == 401
+
+    # Calling with invalid token must return 401
+    invalid_res = client.post(
+        "/v1/grid/forecast",
+        json=payload,
+        headers={"Authorization": "Bearer wrong-token"}
+    )
+    assert invalid_res.status_code == 401
+
+    # Calling with correct token must succeed
+    authorized_res = client.post(
+        "/v1/grid/forecast",
+        json=payload,
+        headers={"Authorization": "Bearer internal-dev-secret-token"}
+    )
+    assert authorized_res.status_code == 200
+
+
+def test_bess_validation_invalid_soc():
+    # min_soc >= max_soc must fail validation
+    with pytest.raises(Exception):
+        BESSSolverRequest(
+            battery_id="bess-001",
+            site_id="site-001",
+            operating_date="2026-09-08",
+            usable_capacity_kwh=1000.0,
+            power_rating_kw=500.0,
+            initial_soc_pct=50.0,
+            min_soc_pct=90.0,  # invalid
+            max_soc_pct=10.0,  # invalid
+            prices_inr_per_mwh=[3000.0] * 96
+        )
+

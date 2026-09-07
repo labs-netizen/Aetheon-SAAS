@@ -1,15 +1,18 @@
 'use client';
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { Organisation, Site, PlatformRole } from '@/types';
+import { createClient } from '@/lib/supabase/client';
 
 export interface SiteContextValue {
   currentOrg: Organisation;
   currentSite: Site;
   activeRole: PlatformRole;
   sites: Site[];
+  isLoading: boolean;
   switchSite: (siteId: string) => void;
   switchRole: (role: PlatformRole) => void;
+  refreshSites: () => Promise<void>;
 }
 
 const DEMO_ORG: Organisation = {
@@ -61,12 +64,82 @@ const DEMO_SITES: Site[] = [
 const SiteContext = createContext<SiteContextValue | undefined>(undefined);
 
 export function SiteProvider({ children }: { children: React.ReactNode }) {
-  const [currentOrg] = useState<Organisation>(DEMO_ORG);
-  const [sites] = useState<Site[]>(DEMO_SITES);
+  const [currentOrg, setCurrentOrg] = useState<Organisation>(DEMO_ORG);
+  const [sites, setSites] = useState<Site[]>(DEMO_SITES);
   const [currentSiteId, setCurrentSiteId] = useState<string>(DEMO_SITES[0].id);
   const [activeRole, setActiveRole] = useState<PlatformRole>('ORGANISATION_ADMIN');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const currentSite = sites.find((s) => s.id === currentSiteId) || sites[0];
+  const supabase = createClient();
+
+  const loadUserData = React.useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+      if (isDemo) {
+        setIsLoading(false);
+        return;
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      // Query user memberships and organization
+      const { data: membershipData } = await supabase
+        .from('memberships')
+        .select(`
+          role,
+          organisation_id,
+          organisations:organisation_id (
+            id,
+            name,
+            legal_entity_name,
+            gstin,
+            is_active,
+            created_at
+          )
+        `)
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (membershipData && membershipData.organisations) {
+        const org = Array.isArray(membershipData.organisations)
+          ? membershipData.organisations[0]
+          : membershipData.organisations;
+
+        setCurrentOrg(org as unknown as Organisation);
+        if (membershipData.role) {
+          setActiveRole(membershipData.role as PlatformRole);
+        }
+
+        // Query sites for this organisation
+        const { data: sitesData } = await supabase
+          .from('sites')
+          .select('*')
+          .eq('organisation_id', org.id);
+
+        if (sitesData && sitesData.length > 0) {
+          setSites(sitesData as Site[]);
+          setCurrentSiteId(sitesData[0].id);
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching live tenancy context, keeping fallback:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    loadUserData();
+  }, [loadUserData]);
+
+  const currentSite = sites.find((s) => s.id === currentSiteId) || sites[0] || DEMO_SITES[0];
 
   const switchSite = (siteId: string) => {
     setCurrentSiteId(siteId);
@@ -83,8 +156,10 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
         currentSite,
         activeRole,
         sites,
+        isLoading,
         switchSite,
         switchRole,
+        refreshSites: loadUserData,
       }}
     >
       {children}

@@ -74,3 +74,35 @@ CREATE TABLE IF NOT EXISTS invoices (
     pdf_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 6. Processed Webhook Events (Idempotency & Replay Protection)
+CREATE TABLE IF NOT EXISTS processed_webhook_events (
+    id VARCHAR(255) PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 7. Billing Customers Mapping
+CREATE TABLE IF NOT EXISTS billing_customers (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL DEFAULT 'RAZORPAY',
+    provider_customer_id VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(organisation_id, provider)
+);
+
+-- 8. Billing Events Audit
+CREATE TABLE IF NOT EXISTS billing_events (
+    id BIGSERIAL PRIMARY KEY,
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+    event_type VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'RAZORPAY',
+    provider_event_id VARCHAR(255),
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_events_org ON billing_events(organisation_id, created_at DESC);

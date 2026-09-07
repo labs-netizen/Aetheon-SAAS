@@ -5,7 +5,7 @@
 -- 1. Products Catalogue
 INSERT INTO products (id, name, description, base_price_paise, billing_interval, availability_status)
 VALUES
-('GRID_INTELLIGENCE', 'Grid Intelligence Monitor', '96-block price/demand forecast, Daily Grid Brief, and peak cost avoidance.', 1990000, 'MONTHLY', 'AVAILABLE'),
+('GRID_INTELLIGENCE', 'Grid Intelligence Monitor', '96-block price/demand forecast, Daily Grid Brief, and peak cost avoidance.', 1990000, 'MONTHLY', 'INTERNAL_VALIDATION'),
 ('OA_COMPLIANCE', 'Open Access Compliance Sentinel', 'Statutory compliance tracking, DISCOM charge calculation (CSS/AS), and SLDC calendar.', 1490000, 'MONTHLY', 'DEMO'),
 ('DSM_RISK', 'DSM Risk Monitor', 'Continuous 15-minute deviation tracking and regulatory exposure calculation under CERC rules.', 2990000, 'MONTHLY', 'DEMO'),
 ('BESS_ARBITRAGE', 'BESS Arbitrage Signals', 'Advisory charge/discharge opportunity window recommendations for C&I batteries.', 4990000, 'MONTHLY', 'DEMO'),

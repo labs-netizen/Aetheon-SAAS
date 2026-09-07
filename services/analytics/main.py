@@ -26,9 +26,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -36,11 +36,13 @@ SERVICE_TOKEN = os.getenv("ANALYTICS_SERVICE_TOKEN", "internal-dev-secret-token"
 
 
 def verify_service_token(authorization: str = Header(default="")):
-    """Internal service authentication."""
+    """Internal service authentication. Rejects missing or mismatched tokens."""
     token = authorization.replace("Bearer ", "").strip()
-    # In development mode, allow empty token or match expected token
-    if SERVICE_TOKEN and token and token != SERVICE_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid service authorization token")
+    if not token or token != SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing service authorization token"
+        )
     return True
 
 

@@ -24,6 +24,15 @@ A comprehensive 10-point automated security test suite has been implemented in `
 9. **Payment Webhook HMAC & Replay Protection**: Verifies that tampered HMAC signatures and replayed `x-razorpay-event-id` headers are rejected with 401/409 responses.
 10. **Private Storage Bucket Partitioning**: Verifies that tenant document storage paths (`tenants/{orgId}/`) enforce strict path validation and reject cross-tenant path traversal.
 
+### 2.1 Live PostgreSQL Engine RLS Verification
+
+In addition to application-layer unit tests, the PostgreSQL engine Row-Level Security policies were validated directly against real local Supabase PostgreSQL 17.6 in `tests/integration/supabase_rls.test.ts` (5/5 passing):
+- **Adversarial Tenant Select Isolation**: Verified that an authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
+- **Cross-Tenant Mutation Blocking**: Verified that User B attempting to insert or update telemetry under Organisation A's ID is rejected by PostgreSQL RLS policy `sites_isolation_insert` with an engine-level error.
+- **Profile Boundary Isolation**: Verified that User B can only view profiles within their own organization or their own user record, preventing corporate espionage across tenants.
+- **GoTrue Auth Trigger Bootstrap**: Verified that `on_auth_user_created` trigger automatically provisions `user_profiles` with `SECURITY DEFINER SET search_path = public`.
+- **Public Reference Tables**: Verified that reference tables (`products`, `discom_tariffs`) remain queryable by all authenticated users without leaking tenant data.
+
 ---
 
 ## 3. Implemented Protections
