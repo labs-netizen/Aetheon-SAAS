@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Settings,
   Upload,
@@ -22,14 +22,38 @@ import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants';
 
 export default function SettingsPage() {
-  const { currentSite } = useSite();
+  const { currentSite, refreshSites } = useSite();
   const [activeSubTab, setActiveSubTab] = useState<'upload' | 'site' | 'readiness'>('upload');
 
   // CSV Upload State
   const [fileContent, setFileContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
+
+  // Commit State
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [commitFeedback, setCommitFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Site Parameters Form State
+  const [siteName, setSiteName] = useState(currentSite.name);
+  const [siteState, setSiteState] = useState(currentSite.state);
+  const [siteDiscom, setSiteDiscom] = useState(currentSite.discom);
+  const [siteVoltage, setSiteVoltage] = useState(currentSite.voltage_category);
+  const [siteContractDemand, setSiteContractDemand] = useState(String(currentSite.contract_demand_value));
+  const [siteMeteringPoint, setSiteMeteringPoint] = useState(currentSite.metering_point);
+  const [siteLoadClass, setSiteLoadClass] = useState(currentSite.load_class);
+  const [isSavingSite, setIsSavingSite] = useState(false);
+  const [siteFeedback, setSiteFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    setSiteName(currentSite.name);
+    setSiteState(currentSite.state);
+    setSiteDiscom(currentSite.discom);
+    setSiteVoltage(currentSite.voltage_category);
+    setSiteContractDemand(String(currentSite.contract_demand_value));
+    setSiteMeteringPoint(currentSite.metering_point);
+    setSiteLoadClass(currentSite.load_class);
+  }, [currentSite]);
 
   // Readiness evaluation
   const readiness = evaluateGridReadiness({
@@ -49,6 +73,7 @@ export default function SettingsPage() {
     if (!file) return;
 
     setFileName(file.name);
+    setCommitFeedback(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
@@ -69,6 +94,83 @@ export default function SettingsPage() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleCommitToDatabase = async () => {
+    if (!parseResult || !parseResult.parsedData.length) return;
+    setIsCommitting(true);
+    setCommitFeedback(null);
+
+    try {
+      const res = await fetch('/api/ingestion/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          siteId: currentSite.id,
+          filename: fileName,
+          checksum: parseResult.checksum,
+          parsedData: parseResult.parsedData,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to commit data');
+      }
+
+      setCommitFeedback({
+        type: 'success',
+        message: `Successfully committed ${data.totalBlocks || parseResult.acceptedRows} interval blocks to site database (Run ID: ${data.ingestionRunId}).`,
+      });
+      await refreshSites();
+    } catch (err) {
+      setCommitFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to commit data to database.',
+      });
+    } finally {
+      setIsCommitting(false);
+    }
+  };
+
+  const handleSaveSiteParameters = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSite(true);
+    setSiteFeedback(null);
+
+    try {
+      const res = await fetch(`/api/sites/${currentSite.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: siteName,
+          state: siteState,
+          discom: siteDiscom,
+          voltage_category: siteVoltage,
+          contract_demand_value: Number(siteContractDemand),
+          metering_point: siteMeteringPoint,
+          load_class: siteLoadClass,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to update site configuration');
+      }
+
+      setSiteFeedback({
+        type: 'success',
+        message: 'Site configuration persisted successfully to PostgreSQL database.',
+      });
+      await refreshSites();
+    } catch (err) {
+      setSiteFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to persist site configuration.',
+      });
+    } finally {
+      setIsSavingSite(false);
+    }
   };
 
   return (
@@ -114,7 +216,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Subtab 1: CSV / XLSX Ingestion Gateway */}
+      {/* Subtab 1: CSV Ingestion Gateway */}
       {activeSubTab === 'upload' && (
         <div className="space-y-6">
           <Card variant="industrial">
@@ -202,6 +304,23 @@ export default function SettingsPage() {
                       </div>
                     )}
 
+                    {commitFeedback && (
+                      <div
+                        className={`p-3 rounded-md text-xs flex items-center gap-2 ${
+                          commitFeedback.type === 'success'
+                            ? 'bg-emerald-950/50 border border-emerald-800 text-emerald-200'
+                            : 'bg-rose-950/50 border border-rose-800 text-rose-200'
+                        }`}
+                      >
+                        {commitFeedback.type === 'success' ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                        )}
+                        <span>{commitFeedback.message}</span>
+                      </div>
+                    )}
+
                     {parseResult.acceptedRows === 96 && (
                       <div className="p-3 rounded-md bg-emerald-950/40 border border-emerald-800 text-xs text-emerald-200 flex items-center justify-between">
                         <span className="flex items-center gap-2">
@@ -209,12 +328,20 @@ export default function SettingsPage() {
                           96/96 blocks validated successfully. Contiguity verified.
                         </span>
                         <Button
-                          onClick={() => alert(`Successfully committed 96 interval blocks to site ${currentSite.name}!`)}
+                          onClick={handleCommitToDatabase}
                           variant="primary"
                           size="sm"
-                          className="text-xs"
+                          disabled={isCommitting}
+                          className="text-xs gap-1.5"
                         >
-                          Commit to Database
+                          {isCommitting ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              Committing...
+                            </>
+                          ) : (
+                            'Commit to Database'
+                          )}
                         </Button>
                       </div>
                     )}
@@ -238,38 +365,75 @@ export default function SettingsPage() {
             </div>
           </CardHeader>
 
-          <form onSubmit={(e) => { e.preventDefault(); alert('Site configuration updated successfully!'); }} className="space-y-4">
+          {siteFeedback && (
+            <div
+              className={`p-3 mx-6 rounded-md text-xs flex items-center gap-2 ${
+                siteFeedback.type === 'success'
+                  ? 'bg-emerald-950/50 border border-emerald-800 text-emerald-200'
+                  : 'bg-rose-950/50 border border-rose-800 text-rose-200'
+              }`}
+            >
+              {siteFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span>{siteFeedback.message}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveSiteParameters} className="space-y-4 p-6 pt-2">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Input label="Site Name" defaultValue={currentSite.name} />
+              <Input
+                label="Site Name"
+                value={siteName}
+                onChange={(e) => setSiteName(e.target.value)}
+              />
               <Select
                 label="State Jurisdiction"
                 options={INDIAN_STATES.map((s) => ({ value: s.name, label: s.name }))}
-                defaultValue={currentSite.state}
+                value={siteState}
+                onChange={(e) => setSiteState(e.target.value)}
               />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Input label="Operating DISCOM" defaultValue={currentSite.discom} />
+              <Input
+                label="Operating DISCOM"
+                value={siteDiscom}
+                onChange={(e) => setSiteDiscom(e.target.value)}
+              />
               <Select
                 label="Voltage Category"
                 options={VOLTAGE_CATEGORIES.map((v) => ({ value: v, label: v }))}
-                defaultValue={currentSite.voltage_category}
+                value={siteVoltage}
+                onChange={(e) => setSiteVoltage(e.target.value)}
               />
-              <Input label="Sanctioned Contract Demand (kVA)" type="number" defaultValue={currentSite.contract_demand_value} />
+              <Input
+                label="Sanctioned Contract Demand (kVA)"
+                type="number"
+                value={siteContractDemand}
+                onChange={(e) => setSiteContractDemand(e.target.value)}
+              />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Input label="Metering Point Reference" defaultValue={currentSite.metering_point} />
+              <Input
+                label="Metering Point Reference"
+                value={siteMeteringPoint}
+                onChange={(e) => setSiteMeteringPoint(e.target.value)}
+              />
               <Select
                 label="Load Class"
                 options={LOAD_CLASSES.map((c) => ({ value: c, label: c }))}
-                defaultValue={currentSite.load_class}
+                value={siteLoadClass}
+                onChange={(e) => setSiteLoadClass(e.target.value)}
               />
             </div>
 
             <div className="pt-2 flex justify-end">
-              <Button type="submit" variant="primary" size="sm">
-                Save Site Parameters
+              <Button type="submit" variant="primary" size="sm" disabled={isSavingSite}>
+                {isSavingSite ? 'Saving...' : 'Save Site Parameters'}
               </Button>
             </div>
           </form>
@@ -291,7 +455,7 @@ export default function SettingsPage() {
             </Badge>
           </CardHeader>
 
-          <div className="space-y-3">
+          <div className="space-y-3 p-6 pt-0">
             {readiness.items.map((item) => (
               <div
                 key={item.key}

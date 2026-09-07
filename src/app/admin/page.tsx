@@ -24,23 +24,24 @@ export default function AdminPage() {
   const hasAccess = isInternalAdmin;
 
   const launchChecklist = [
-    { title: 'Supported State Jurisdiction & DISCOMs', status: 'READY', desc: 'MSEDCL, UGVCL, PVVNL profiles active with verified voltage brackets.' },
-    { title: '15-Minute 96-Block Contiguity Validation', status: 'READY', desc: 'SHA-256 duplicate detection and row-level rejection parser active.' },
-    { title: 'Central Publication Quality Gate', status: 'READY', desc: 'Hard suppression on stale (>24h) telemetry and incomplete profiles active.' },
-    { title: 'Calculation Provenance Snapshots', status: 'READY', desc: 'Model version, generation time, and tariff source attached to all outputs.' },
-    { title: 'Billing Provider & Cancellation Flow', status: 'READY', desc: 'Razorpay adapter with HMAC-SHA256 signature verification & mock dev mode.' },
-    { title: 'Subscription vs Monitoring Decoupling', status: 'READY', desc: 'Payment grants commercial entitlement; monitoring follows activation state machine.' },
-    { title: 'Self-Service Customer Data Export', status: 'READY', desc: 'CSV & print layouts implemented across all operational modules.' },
-    { title: 'Self-Service Ingestion Remediation', status: 'READY', desc: 'Row-level error explanations provided on rejected imports.' },
-    { title: 'Immutable Audit Logging Subsystem', status: 'READY', desc: 'Append-only audit table recording all tenant, site, role, and ingestion events.' },
-    { title: 'Admin MFA & Time-Bounded Analyst Access', status: 'AUDIT_PENDING', desc: 'Analyst sessions enforce 24h expiration; external pentest pending.' },
+    { title: 'Supported State Jurisdiction & DISCOMs', status: 'VERIFIED_LOCAL', desc: 'MSEDCL, UGVCL, PVVNL profiles active with verified voltage brackets.' },
+    { title: '15-Minute 96-Block Contiguity Validation', status: 'VERIFIED_LOCAL', desc: 'SHA-256 duplicate detection and strict 96-block contiguous parser active.' },
+    { title: 'Multi-Tenant & Site-Level RLS Boundaries', status: 'VERIFIED_LOCAL', desc: 'PostgreSQL has_site_access, privilege-escalation prevention, and 11 adversarial tests passed.' },
+    { title: 'Central Publication Quality Gate', status: 'VERIFIED_LOCAL', desc: 'Hard suppression on stale (>24h) telemetry and incomplete profiles active.' },
+    { title: 'Calculation Provenance Snapshots', status: 'VERIFIED_LOCAL', desc: 'Model version, generation time, and tariff source attached to all outputs.' },
+    { title: 'Billing Provider & Cancellation Flow', status: 'PRODUCTION_CONFIG_REQUIRED', desc: 'MOCK_DEVELOPMENT mode active locally; live Razorpay keys required for prod.' },
+    { title: 'Subscription vs Monitoring Decoupling', status: 'VERIFIED_LOCAL', desc: 'Payment grants commercial entitlement; monitoring follows activation state machine.' },
+    { title: 'Self-Service Customer Data Export', status: 'VERIFIED_LOCAL', desc: 'CSV & print layouts implemented across all operational modules.' },
+    { title: 'Self-Service Ingestion Remediation', status: 'VERIFIED_LOCAL', desc: 'Row-level error explanations provided on rejected imports.' },
+    { title: 'Tamper-Evident SHA-256 Audit Logging', status: 'VERIFIED_LOCAL', desc: 'Hash-chained audit log with immutable database trigger.' },
+    { title: 'Admin MFA & Specialist Security Audit', status: 'EXTERNAL_REVIEW_REQUIRED', desc: 'Analyst sessions enforce 24h expiration; external specialist Astra pentest pending.' },
   ];
 
   const models = [
-    { name: 'Grid Day-Ahead Forecast Heuristic', version: 'v1.0-baseline', module: 'GRID', status: 'ACTIVE_DEMO' },
-    { name: 'CERC DSM Deviation Settlement Engine', version: 'v2.1-heuristic', module: 'DSM', status: 'ACTIVE_DEMO' },
-    { name: 'BESS Degradation-Aware Advisory Solver', version: 'v1.0-milp-ref', module: 'BESS', status: 'ACTIVE_DEMO' },
-    { name: 'CEA Grid Carbon Avoidance Ledger', version: 'v19-baseline', module: 'RENEWABLES', status: 'ACTIVE_DEMO' },
+    { name: 'Grid Day-Ahead Forecast Heuristic', version: 'v1.0-baseline', module: 'GRID', status: 'INTERNAL_VALIDATION' },
+    { name: 'CERC DSM Deviation Settlement Engine', version: 'v2.1-heuristic', module: 'DSM', status: 'INTERNAL_VALIDATION' },
+    { name: 'BESS Degradation-Aware Advisory Solver', version: 'v1.0-milp-ref', module: 'BESS', status: 'INTERNAL_VALIDATION' },
+    { name: 'CEA Grid Carbon Avoidance Ledger', version: 'v19-baseline', module: 'RENEWABLES', status: 'VERIFIED_LOCAL' },
   ];
 
   const auditEvents = [
@@ -115,7 +116,7 @@ export default function AdminPage() {
                 Verification status against core architectural and regulatory governance gates.
               </CardDescription>
             </div>
-            <Badge variant="warning">9/10 Verification Ready (Pentest Pending)</Badge>
+            <Badge variant="info">8 Local Verified • 1 Config Required • 2 Audit/Review Required</Badge>
           </CardHeader>
 
           <div className="space-y-3">
@@ -132,7 +133,7 @@ export default function AdminPage() {
                   <p className="text-[11px] text-slate-400">{item.desc}</p>
                 </div>
 
-                <Badge variant={item.status === 'READY' ? 'success' : 'warning'}>
+                <Badge variant={item.status === 'VERIFIED_LOCAL' ? 'success' : item.status === 'READY' ? 'success' : 'warning'}>
                   {item.status}
                 </Badge>
               </div>

@@ -11,74 +11,84 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive 10-point automated security test suite has been implemented in `tests/integration/security_isolation.test.ts` (10/10 passing in Vitest):
+A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, and Pytest solvers (69/69 passing):
 
-1. **Organisation Data Isolation**: Verifies that user sessions tied to Organisation A cannot read or access records belonging to Organisation B.
-2. **Organisation Mutation Isolation**: Verifies that mutations initiated under Organisation A context cannot create, update, or delete records in Organisation B.
-3. **Site Boundary Isolation**: Verifies that users assigned to a specific site cannot retrieve telemetry or assets from other sites.
-4. **Role Escalation Prevention**: Verifies that low-privilege roles (e.g. `FINANCE_SUSTAINABILITY_VIEWER` or `OPERATOR`) cannot perform administrative actions (inviting users, updating billing, modifying tariff rules).
-5. **Administrative Access Boundary**: Verifies that customer roles (including customer `ORGANISATION_ADMIN`) cannot access internal Aetheon administration endpoints or routes (`/admin`).
-6. **Entitlement Protection & Bypass Prevention**: Verifies that accounts without an active subscription for a specific module (e.g. `OA_COMPLIANCE`) are strictly blocked at the entitlement check layer.
-7. **Regulatory Review & Publication Boundary**: Verifies that regulatory rules in `CHANGE_DETECTED/REVIEW_PENDING` status cannot be retrieved by customer sessions until officially reviewed and moved to `APPROVED/PUBLISHED`.
-8. **Ingestion SHA-256 Deduplication**: Verifies that duplicate or replayed CSV telemetry uploads with matching content hashes are rejected with an idempotency collision error.
-9. **Payment Webhook HMAC & Replay Protection**: Verifies that tampered HMAC signatures and replayed `x-razorpay-event-id` headers are rejected with 401/409 responses.
-10. **Private Storage Bucket Partitioning**: Verifies that tenant document storage paths (`tenants/{orgId}/`) enforce strict path validation and reject cross-tenant path traversal.
+### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
+1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
+2. **Cross-Tenant Mutation Blocking**: User B attempting to insert or update telemetry under Organisation A's ID is rejected by PostgreSQL RLS policy `sites_isolation_insert` with an engine-level error.
+3. **Profile Boundary Isolation**: User B can only view profiles within their own organization or their own user record, preventing corporate espionage across tenants.
+4. **GoTrue Auth Trigger Bootstrap**: `handle_new_user()` trigger automatically provisions `user_profiles` with `SECURITY DEFINER SET search_path = public` without granting administrative privileges.
+5. **Public Reference Tables**: Reference tables (`products`, `discom_tariffs`) remain queryable by all authenticated users without leaking tenant data.
+6. **Privilege-Escalation Attack Rejection**: Trigger `trg_protect_user_profile_escalation` blocks any user-driven update that attempts to set `is_platform_admin = true`.
+7. **Role Boundary Enforcement**: Trigger `trg_enforce_membership_role_boundary` prevents customer `ORGANISATION_ADMIN`s from assigning internal Aetheon roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`).
+8. **Site-Level Access Isolation**: Function `has_site_access()` verifies that a user assigned to Site 1 receives zero rows when querying Site 2 telemetry, even if both sites belong to the same organisation.
+9. **Regulatory Visibility Gate**: Unapproved regulatory rules (`REVIEW_PENDING`, `CHANGE_DETECTED`, `EXTRACTED`, `CAPTURED`) are strictly hidden from customer sessions; only `APPROVED` and `PUBLISHED` rules are visible.
+10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `bess_optimisation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
+11. **Tamper-Evident Audit Log Chaining**: `audit_logs` table enforces cryptographic SHA-256 hash chaining `H(previous_hash + payload)` and an immutability trigger blocks any UPDATE or DELETE operations.
 
-### 2.1 Live PostgreSQL Engine RLS Verification
-
-In addition to application-layer unit tests, the PostgreSQL engine Row-Level Security policies were validated directly against real local Supabase PostgreSQL 17.6 in `tests/integration/supabase_rls.test.ts` (5/5 passing):
-- **Adversarial Tenant Select Isolation**: Verified that an authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
-- **Cross-Tenant Mutation Blocking**: Verified that User B attempting to insert or update telemetry under Organisation A's ID is rejected by PostgreSQL RLS policy `sites_isolation_insert` with an engine-level error.
-- **Profile Boundary Isolation**: Verified that User B can only view profiles within their own organization or their own user record, preventing corporate espionage across tenants.
-- **GoTrue Auth Trigger Bootstrap**: Verified that `on_auth_user_created` trigger automatically provisions `user_profiles` with `SECURITY DEFINER SET search_path = public`.
-- **Public Reference Tables**: Verified that reference tables (`products`, `discom_tariffs`) remain queryable by all authenticated users without leaking tenant data.
+### 2.2 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 10/10 Passing)
+1. **Unauthenticated Request Rejection**: Unauthenticated requests to `/api/forecast` return 401 Unauthorized.
+2. **Cross-Tenant Site Isolation**: Attempting to query an operational endpoint for a site belonging to a foreign organisation returns 403 Forbidden.
+3. **Site Boundary Isolation**: A user without an active `site_access` grant for a specific site is rejected with 403 Forbidden.
+4. **Subscription Entitlement Enforcement**: Requesting module endpoints without an active subscription entitlement returns 403 Forbidden.
+5. **Expired Entitlement Handling**: Accounts with an expired subscription end-date are blocked from accessing operational endpoints.
+6. **Role Boundary on Billing**: Non-admin roles (`OPERATOR`, `FINANCE_SUSTAINABILITY_VIEWER`) attempting billing cancellation or checkout return 403 Forbidden.
+7. **Privilege Escalation on Member Invitation**: Customer admins attempting to invite internal Aetheon roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`) return 403 Forbidden.
+8. **BESS Hardware Safety Interlocks**: BESS optimisation API rejects requests with 422 Unprocessable Entity when battery SOC is out of bounds (<10% or >90%), telemetry is stale, or maintenance locks are active.
+9. **Duplicate Ingestion Rejection**: Ingestion commit endpoint rejects duplicate CSV uploads matching an existing file SHA-256 checksum with 409 Conflict.
+10. **Webhook Replay Deduplication**: Replayed Razorpay webhook events with identical `x-razorpay-event-id` are rejected with 409 Conflict via atomic database pre-insertion.
 
 ---
 
 ## 3. Implemented Protections
 
-### 3.1 Multi-Tenant Isolation
+### 3.1 Multi-Tenant & Site-Level Isolation
 - **Row Level Security (RLS)**: Enforced directly at the PostgreSQL layer. All tenant tables (`sites`, `interval_data_96`, `subscriptions`, `alerts`, `audit_logs`) contain an `organisation_id` foreign key.
+- **Site-Level Access Helper**: `has_site_access(p_user_id, p_site_id)` checks both explicit entries in `site_access` and organisation administration privileges, completely closing site-bleed vulnerabilities.
 - **Session Scoping**: Authenticated queries resolve tenant membership via the `memberships` table. Direct cross-tenant querying is prevented at the database kernel level.
-- **Private Storage**: All Supabase Storage buckets for CSV uploads and report PDFs are configured as private with signed URLs for authorized users only.
+- **Private Storage**: Supabase Storage buckets for CSV uploads and report PDFs are configured as private with signed URLs for authorized users only.
 
 ### 3.2 Role-Based Access Control (RBAC)
-- 6 distinct roles enforced across both UI routing and API endpoints:
-  - `ORGANISATION_ADMIN`: Organization, billing, user, and site administration.
-  - `ENERGY_MANAGER`: Operational dashboards, data upload, asset configuration.
-  - `OPERATOR`: Alerts view and incident acknowledgment. Zero billing access.
-  - `FINANCE_SUSTAINABILITY_VIEWER`: Read-only financial and sustainability reports.
+- 6 distinct canonical roles enforced across both UI routing, API guard, and database triggers:
+  - `ORGANISATION_ADMIN`: Organization, billing, user, and site administration. Cannot assign internal Aetheon roles.
+  - `ENERGY_MANAGER`: Operational dashboards, data upload, asset configuration. Zero billing management.
+  - `OPERATOR`: Alerts view and incident acknowledgment. Zero billing management and zero user management.
+  - `FINANCE_SUSTAINABILITY_VIEWER`: Read-only financial and sustainability reports. Zero operational ingestion.
   - `AETHEON_ANALYST`: Internal support role with mandatory time-expiry (`expires_at`) and mandatory audit logging of every query.
   - `AETHEON_REGULATORY_REVIEWER`: Internal regulatory publishing role. Completely isolated from customer billing permissions.
-- **Client Role Switcher Isolation**: Gated behind `NEXT_PUBLIC_DEMO_MODE !== 'false'`. In production mode, role switching in client UI is disabled and role identity is strictly derived from verified Supabase session claims.
+- **Client Role Switcher Isolation**: Gated behind `NEXT_PUBLIC_DEMO_MODE === 'true'`. In production mode, role switching in client UI is disabled and role identity is strictly derived from verified Supabase session claims.
 
 ### 3.3 Secret Management & Frontend Boundary
 - Frontend code utilizes only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 - Supabase `SERVICE_ROLE_KEY`, Razorpay webhook secrets, and analytics service tokens are restricted strictly to server-side Next.js route handlers.
+- Safe CSV parsing in V1: Spreadsheet parsing vulnerabilities eliminated by uninstalling legacy unmaintained libraries and strictly supporting CSV formats.
 
 ### 3.4 Idempotency & Webhook Verification
+- Segregated billing provider modes: `MOCK_DEVELOPMENT`, `RAZORPAY_TEST`, and `RAZORPAY_LIVE`. Fails closed if mock mode is attempted in production.
 - Razorpay webhooks require cryptographic HMAC-SHA256 signature verification before updating subscription state.
 - Ingestion runs compute SHA-256 file hashes to prevent double-counting of interval loads.
+- Webhook deduplication enforces atomic pre-insertion in `processed_webhook_events`.
 
 ---
 
 ## 4. Governance, Auditability & Incident Response
 
-### 4.1 Audit Logging
-- Every tenant creation, user invitation, role modification, subscription state change, file ingestion, regulatory approval, and alert acknowledgment writes an immutable row to `audit_logs`.
-- Audit records store actor ID, role, action, entity, timestamp, IP address, and JSON diffs.
-- Retention target: 7 years for compliance and statutory auditability.
+### 4.1 Audit Logging & Cryptographic Chaining
+- Every tenant creation, user invitation, role modification, subscription state change, file ingestion, regulatory approval, and alert acknowledgment writes a row to `audit_logs`.
+- PostgreSQL trigger `trg_chain_audit_log_hash` computes:
+  `current_hash = encode(sha256((coalesce(previous_hash, 'GENESIS') || coalesce(actor_id::text, '') || coalesce(action, '') || coalesce(entity_type, '') || coalesce(created_at::text, ''))::bytea), 'hex')`
+- PostgreSQL trigger `trg_protect_audit_logs` rejects any UPDATE or DELETE operations on audit records.
 
 ### 4.2 Regulatory Publication Quality Gate
-- Untrusted web-scraped or AI-extracted regulatory parameters are locked in `REVIEW_PENDING`.
-- No user-facing calculation may consume rules from `REVIEW_PENDING` without an `AETHEON_REGULATORY_REVIEWER` electronic sign-off.
+- Untrusted web-scraped or AI-extracted regulatory parameters are locked in `CAPTURED`, `EXTRACTED`, `CHANGE_DETECTED`, or `REVIEW_PENDING`.
+- No user-facing calculation or customer query may retrieve rules until an `AETHEON_REGULATORY_REVIEWER` moves them to `APPROVED` or `PUBLISHED`.
 - Synthetic demo parameters are explicitly stamped `DEMO / UNVERIFIED`.
 
 ### 4.3 Aetheon Admin Security Requirements
 - Multi-Factor Authentication (MFA) is strictly required for internal Aetheon platform administrators.
 - Analyst access sessions expire automatically after a maximum of 24 hours.
 
-### 4.4 Operational Failure & Data Retention
-- Incident Response: Telemetry failure triggers an automatic transition of site monitoring to `DEGRADED`.
-- Advisory Suppression: When data freshness is lost, recommendations are hard-suppressed to prevent erroneous operational actions.
-- Data export: Full self-service CSV/JSON data export is provided to all customers for data portability.
+### 4.4 Operational Failure & Fail-Safe Persistence
+- Operational API routes (`/api/forecast`, `/api/dsm`, `/api/bess`, `/api/renewables`) fail safely: if model run persistence fails, the route returns an error rather than publishing an unpersisted result.
+- Telemetry failure triggers an automatic transition of site monitoring to `DEGRADED`.
+- Advisory Suppression: When data freshness is lost (>24h) or completeness drops below 95%, recommendations are hard-suppressed to prevent erroneous operational actions.

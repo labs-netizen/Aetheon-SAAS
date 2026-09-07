@@ -124,7 +124,7 @@ export default function LoginPage() {
               <ArrowRight className="w-4 h-4" />
             </Button>
 
-            {process.env.NEXT_PUBLIC_DEMO_MODE !== 'false' && (
+            {process.env.NEXT_PUBLIC_DEMO_MODE === 'true' && (
               <Button
                 type="button"
                 variant="outline"

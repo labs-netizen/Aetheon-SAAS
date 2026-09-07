@@ -29,33 +29,49 @@ export async function POST(req: NextRequest) {
 
   const effectiveEventId = eventId || eventPayload.id || eventPayload?.payload?.payment?.entity?.id;
 
-  // 2. Replay & Memory Check
+  // 2. Replay & In-Memory Check
   if (effectiveEventId && isWebhookReplay(effectiveEventId, eventPayload.created_at)) {
     return NextResponse.json(
-      { status: 'ignored', reason: 'Replay or duplicated event' },
+      { status: 'already_processed', reason: 'Replay or duplicated event' },
       { status: 200 }
     );
   }
 
   const supabase = createAdminClient();
+  const eventType: string = eventPayload.event || 'unknown';
 
-  // 3. Database Idempotency Check
+  // 3. Atomic Database Idempotency Lock
+  // Insert marker into processed_webhook_events FIRST before applying any mutations.
+  // If concurrent workers receive the same event, Postgres UNIQUE constraint guarantees exactly one proceeds.
   if (effectiveEventId) {
-    const { data: existing } = await supabase
+    const { error: lockError } = await supabase
       .from('processed_webhook_events')
-      .select('id')
-      .eq('id', effectiveEventId)
-      .maybeSingle();
+      .insert({
+        id: effectiveEventId,
+        provider: 'RAZORPAY',
+        event_type: eventType,
+        payload: eventPayload,
+      });
 
-    if (existing) {
+    if (lockError) {
+      if (
+        lockError.code === '23505' ||
+        lockError.message.includes('duplicate key') ||
+        lockError.message.includes('unique constraint')
+      ) {
+        return NextResponse.json(
+          { status: 'already_processed', message: 'Event was already processed by a concurrent request.' },
+          { status: 200 }
+        );
+      }
       return NextResponse.json(
-        { status: 'already_processed' },
-        { status: 200 }
+        { error: 'Failed to record webhook idempotency marker', details: lockError.message },
+        { status: 500 }
       );
     }
-  }
 
-  const eventType: string = eventPayload.event || 'unknown';
+    recordProcessedWebhook(effectiveEventId);
+  }
 
   try {
     // 4. Event Processing Dispatcher
@@ -66,52 +82,82 @@ export async function POST(req: NextRequest) {
       const siteId = notes.site_id;
       const productId = notes.product_id;
       const amountPaise = paymentEntity.amount || 0;
+      const providerRef = paymentEntity.order_id || paymentEntity.id;
 
       if (orgId && productId) {
-        // Record or update subscription
         const now = new Date();
         const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-        const { data: sub } = await supabase
-          .from('subscriptions')
-          .insert({
-            organisation_id: orgId,
-            status: 'ACTIVE',
-            current_period_start: now.toISOString(),
-            current_period_end: periodEnd.toISOString(),
-            billing_provider: 'RAZORPAY',
-            billing_provider_ref: paymentEntity.order_id || paymentEntity.id,
-          })
-          .select()
-          .single();
+        // Check if subscription with this provider reference already exists
+        let subId: string | null = null;
+        if (providerRef) {
+          const { data: existingSub } = await supabase
+            .from('subscriptions')
+            .select('id')
+            .eq('billing_provider_ref', providerRef)
+            .maybeSingle();
 
-        // Grant Entitlement
+          if (existingSub) {
+            subId = existingSub.id;
+          }
+        }
+
+        if (!subId) {
+          const { data: sub } = await supabase
+            .from('subscriptions')
+            .insert({
+              organisation_id: orgId,
+              status: 'ACTIVE',
+              current_period_start: now.toISOString(),
+              current_period_end: periodEnd.toISOString(),
+              billing_provider: 'RAZORPAY',
+              billing_provider_ref: providerRef,
+            })
+            .select()
+            .single();
+
+          subId = sub?.id || null;
+        }
+
+        // Grant or refresh Entitlement
         await supabase
           .from('entitlements')
-          .upsert({
-            organisation_id: orgId,
-            product_id: productId,
-            site_id: siteId || null,
-            is_active: true,
-            valid_from: now.toISOString(),
-            valid_until: periodEnd.toISOString(),
-            granted_by: 'RAZORPAY_WEBHOOK',
-          });
+          .upsert(
+            {
+              organisation_id: orgId,
+              product_id: productId,
+              site_id: siteId || null,
+              is_active: true,
+              valid_from: now.toISOString(),
+              valid_until: periodEnd.toISOString(),
+              granted_by: 'RAZORPAY_WEBHOOK',
+            },
+            { onConflict: 'organisation_id,product_id,site_id' }
+          );
 
-        // Insert Invoice
-        await supabase
+        // Insert Invoice if not already recorded
+        const invoiceNum = `INV-${providerRef ? providerRef.slice(-6) : Date.now().toString().slice(-6)}`;
+        const { data: existingInv } = await supabase
           .from('invoices')
-          .insert({
-            organisation_id: orgId,
-            subscription_id: sub?.id || null,
-            invoice_number: `INV-${Date.now().toString().slice(-6)}`,
-            amount_paise: amountPaise,
-            total_paise: amountPaise,
-            status: 'PAID',
-            paid_at: now.toISOString(),
-          });
+          .select('id')
+          .eq('invoice_number', invoiceNum)
+          .maybeSingle();
 
-        // Insert Notification Log
+        if (!existingInv) {
+          await supabase
+            .from('invoices')
+            .insert({
+              organisation_id: orgId,
+              subscription_id: subId,
+              invoice_number: invoiceNum,
+              amount_paise: amountPaise,
+              total_paise: amountPaise,
+              status: 'PAID',
+              paid_at: now.toISOString(),
+            });
+        }
+
+        // Notification Log
         await supabase
           .from('notification_logs')
           .insert({
@@ -158,25 +204,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 5. Mark as processed
-    if (effectiveEventId) {
-      await supabase
-        .from('processed_webhook_events')
-        .insert({
-          id: effectiveEventId,
-          provider: 'RAZORPAY',
-          event_type: eventType,
-          payload: eventPayload,
-        });
-
-      recordProcessedWebhook(effectiveEventId);
-    }
-
     return NextResponse.json({ received: true, status: 'processed' }, { status: 200 });
   } catch (err) {
     console.error('Webhook processing error:', err);
     return NextResponse.json(
-      { error: 'Internal error processing webhook' },
+      { error: 'Internal error processing webhook', details: err instanceof Error ? err.message : String(err) },
       { status: 500 }
     );
   }

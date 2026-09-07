@@ -41,3 +41,7 @@ __pycache__/
 env/
 venv/
 .pytest_cache/
+
+# Review bundles
+/codex review/
+/codex review.zip

@@ -38,7 +38,7 @@ export default function CompliancePage() {
       state: 'Maharashtra',
       effectiveDate: '2024-10-01',
       version: 'MERC_GEOA_DRAFT_2024',
-      status: 'CHANGE_DETECTED/REVIEW_PENDING',
+      status: 'REVIEW_PENDING',
       isDemo: true,
     },
     {

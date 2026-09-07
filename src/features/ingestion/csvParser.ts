@@ -1,5 +1,5 @@
 /**
- * Ingestion Gateway - CSV / XLSX Parser & Validator
+ * Ingestion Gateway - CSV Parser & 96-Block Validator (CSV-only for V1)
  * Implements 96-block validation, duplicate detection via SHA-256, and row-level error reporting.
  */
 

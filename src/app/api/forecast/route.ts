@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchGridForecast } from '@/lib/analytics/client';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +15,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Call FastAPI analytics microservice
+    // 1. Authorize: User Authentication, Org Membership, Site Access, Product Entitlement
+    const authResult = await authorizeApiRequest(req, {
+      siteId,
+      productId: 'GRID_INTELLIGENCE',
+    });
+
+    if (!authResult.authorized) {
+      return authResult.response;
+    }
+
+    // 2. Call FastAPI analytics microservice
     let forecastResult: any;
     try {
       forecastResult = await fetchGridForecast({
@@ -25,17 +36,19 @@ export async function POST(req: NextRequest) {
         seed,
       });
     } catch (apiErr) {
-      console.warn('Analytics microservice unavailable, returning fallback demo structure:', apiErr);
       return NextResponse.json(
-        { error: 'Analytics service error', details: apiErr instanceof Error ? apiErr.message : String(apiErr) },
+        {
+          error: 'ANALYTICS_SERVICE_UNAVAILABLE',
+          details: apiErr instanceof Error ? apiErr.message : String(apiErr),
+        },
         { status: 502 }
       );
     }
 
-    // 2. Persist to PostgreSQL if authenticated / configured
-    const supabase = createServerSupabaseClient();
+    // 3. Persist run and blocks safely via trusted service client
+    const adminClient = createAdminClient();
     try {
-      const { data: run, error: runError } = await supabase
+      const { data: run, error: runError } = await adminClient
         .from('grid_forecast_runs')
         .upsert(
           {
@@ -54,7 +67,11 @@ export async function POST(req: NextRequest) {
         .select()
         .single();
 
-      if (run && forecastResult.blocks && Array.isArray(forecastResult.blocks)) {
+      if (runError || !run) {
+        throw new Error(runError?.message || 'Failed to upsert grid_forecast_runs');
+      }
+
+      if (forecastResult.blocks && Array.isArray(forecastResult.blocks)) {
         const blockRows = forecastResult.blocks.map((b: any) => ({
           run_id: run.id,
           block_index: b.block_index,
@@ -67,12 +84,31 @@ export async function POST(req: NextRequest) {
           is_high_cost_window: b.is_high_cost_window,
         }));
 
-        await supabase.from('grid_forecast_blocks').upsert(blockRows, {
-          onConflict: 'run_id,block_index',
-        });
+        const { error: blockError } = await adminClient
+          .from('grid_forecast_blocks')
+          .upsert(blockRows, {
+            onConflict: 'run_id,block_index',
+          });
+
+        if (blockError) {
+          throw new Error(blockError.message);
+        }
       }
+
+      // Attach persisted run id to response for verification
+      forecastResult.run_id = run.id;
+      forecastResult.persisted = true;
     } catch (dbErr) {
-      console.warn('Failed to persist forecast to database:', dbErr);
+      console.error('CRITICAL: Forecast persistence failure:', dbErr);
+      // Section 28: Fail safely if required persistence/provenance failed
+      return NextResponse.json(
+        {
+          error: 'PERSISTENCE_FAILED',
+          message: 'Forecast computation succeeded but persistence failed; output cannot be published.',
+          details: dbErr instanceof Error ? dbErr.message : String(dbErr),
+        },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json(forecastResult);

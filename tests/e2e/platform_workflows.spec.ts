@@ -88,7 +88,7 @@ test.describe('Aetheon Platform E2E Critical Workflows', () => {
     await expect(page.getByRole('heading', { name: /Open Access Compliance Sentinel/i })).toBeVisible();
     await expect(page.getByText(/Decision Support & Compliance Notice/i)).toBeVisible();
     await expect(page.getByText(/Regulatory Source Register & Review Workflow/i)).toBeVisible();
-    await expect(page.getByText('CHANGE_DETECTED/REVIEW_PENDING')).toBeVisible();
+    await expect(page.getByText('REVIEW_PENDING')).toBeVisible();
     await expect(page.getByText(/Blocked from Customer View/i)).toBeVisible();
   });
 

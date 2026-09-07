@@ -35,8 +35,8 @@ export async function checkServerEntitlement(
     return { entitled: false, reason: 'MISSING_CONTEXT: organisationId and productId are required.' };
   }
 
-  // Demo mode fallback: if DEMO_MODE is explicitly enabled and the org is the demo org
-  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE !== 'false';
+  // Demo mode fallback: ONLY when NEXT_PUBLIC_DEMO_MODE is explicitly 'true' and the org is the demo org
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   const isDemoOrg = organisationId === 'a0000000-0000-0000-0000-000000000001' || organisationId === 'org-demo-001';
 
   if (isDemoMode && isDemoOrg) {

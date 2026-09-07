@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchBESSAdvisory } from '@/lib/analytics/client';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,6 +19,9 @@ export async function POST(req: NextRequest) {
       dischargeEfficiency,
       degradationCostPerCycleInr,
       pricesInrPerMwh,
+      maintenanceLockActive,
+      telemetryStale,
+      interconnectionRestricted,
     } = body;
 
     if (!batteryId || !siteId || !operatingDate || !usableCapacityKwh || !powerRatingKw || !pricesInrPerMwh) {
@@ -27,6 +31,75 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 1. Authorize: User Authentication, Org Membership, Site Access, Product Entitlement
+    const authResult = await authorizeApiRequest(req, {
+      siteId,
+      productId: 'BESS_ARBITRAGE',
+    });
+
+    if (!authResult.authorized) {
+      return authResult.response;
+    }
+
+    // 2. Section 12: Backend Safety Interlock & Suppression Enforcement
+    // Hard-disable recommendation if SOC unknown/invalid, maintenance lock active, telemetry stale, or interconnection conflict
+    if (initialSocPct === null || initialSocPct === undefined || initialSocPct < 0 || initialSocPct > 100) {
+      return NextResponse.json({
+        battery_id: batteryId,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: 'SAFETY_INTERLOCK: State of Charge (SOC) unknown or invalid. Advisory signals hard-inhibited.',
+        gross_arbitrage_inr: 0,
+        degradation_cost_inr: 0,
+        net_opportunity_inr: 0,
+        equivalent_cycles: 0,
+        schedule_blocks: [],
+      });
+    }
+
+    if (maintenanceLockActive === true) {
+      return NextResponse.json({
+        battery_id: batteryId,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: 'SAFETY_INTERLOCK: Asset maintenance lock active. Battery dispatch prohibited.',
+        gross_arbitrage_inr: 0,
+        degradation_cost_inr: 0,
+        net_opportunity_inr: 0,
+        equivalent_cycles: 0,
+        schedule_blocks: [],
+      });
+    }
+
+    if (telemetryStale === true) {
+      return NextResponse.json({
+        battery_id: batteryId,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: 'SAFETY_INTERLOCK: Telemetry stale (> 15 minutes). Signals suppressed.',
+        gross_arbitrage_inr: 0,
+        degradation_cost_inr: 0,
+        net_opportunity_inr: 0,
+        equivalent_cycles: 0,
+        schedule_blocks: [],
+      });
+    }
+
+    if (interconnectionRestricted === true) {
+      return NextResponse.json({
+        battery_id: batteryId,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: 'SAFETY_INTERLOCK: Interconnection or SLDC export restriction active.',
+        gross_arbitrage_inr: 0,
+        degradation_cost_inr: 0,
+        net_opportunity_inr: 0,
+        equivalent_cycles: 0,
+        schedule_blocks: [],
+      });
+    }
+
+    // 3. Call FastAPI analytics microservice
     let advisoryResult: any;
     try {
       advisoryResult = await fetchBESSAdvisory({
@@ -45,15 +118,18 @@ export async function POST(req: NextRequest) {
       });
     } catch (apiErr) {
       return NextResponse.json(
-        { error: 'Analytics service error', details: apiErr instanceof Error ? apiErr.message : String(apiErr) },
+        {
+          error: 'ANALYTICS_SERVICE_UNAVAILABLE',
+          details: apiErr instanceof Error ? apiErr.message : String(apiErr),
+        },
         { status: 502 }
       );
     }
 
-    // Persist to bess_signal_runs
-    const supabase = createServerSupabaseClient();
+    // 4. Persist to bess_signal_runs safely via service client
+    const adminClient = createAdminClient();
     try {
-      await supabase
+      const { error: persistError } = await adminClient
         .from('bess_signal_runs')
         .upsert(
           {
@@ -69,8 +145,22 @@ export async function POST(req: NextRequest) {
           },
           { onConflict: 'battery_id,operating_date' }
         );
+
+      if (persistError) {
+        throw new Error(persistError.message);
+      }
+
+      advisoryResult.persisted = true;
     } catch (dbErr) {
-      console.warn('Failed to persist BESS signal run:', dbErr);
+      console.error('CRITICAL: BESS persistence failure:', dbErr);
+      return NextResponse.json(
+        {
+          error: 'PERSISTENCE_FAILED',
+          message: 'BESS optimization computed but persistence failed; output cannot be published.',
+          details: dbErr instanceof Error ? dbErr.message : String(dbErr),
+        },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json(advisoryResult);

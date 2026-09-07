@@ -121,7 +121,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Right: Role Indicator / Demo Role Switcher & User Profile */}
         <div className="flex items-center gap-3">
-          {process.env.NEXT_PUBLIC_DEMO_MODE !== 'false' ? (
+          {process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ? (
             <div className="hidden xl:flex items-center gap-1 bg-slate-950/80 px-2 py-1 rounded border border-slate-800 text-xs">
               <UserCheck className="w-3.5 h-3.5 text-slate-400" />
               <span className="text-slate-500">Demo Role:</span>

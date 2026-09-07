@@ -100,7 +100,7 @@ describe('Security, Multi-Tenant Isolation & Webhook Idempotency', () => {
   it('6. Regulatory Approval Bypass: Items in REVIEW_PENDING or CAPTURED cannot become customer-facing', () => {
     const mockRegulatoryDb = [
       { id: '1', title: 'Approved CERC Tariff 2026', status: 'APPROVED' },
-      { id: '2', title: 'MERC Draft TOD Surcharge', status: 'CHANGE_DETECTED/REVIEW_PENDING' },
+      { id: '2', title: 'MERC Draft TOD Surcharge', status: 'REVIEW_PENDING' },
       { id: '3', title: 'Raw Ingested Scraping Order', status: 'CAPTURED' },
       { id: '4', title: 'Extracted Tariff Structure', status: 'EXTRACTED' },
     ];

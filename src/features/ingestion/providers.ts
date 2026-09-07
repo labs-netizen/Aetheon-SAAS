@@ -38,17 +38,17 @@ export interface DataSourceProvider<TConfig = Record<string, unknown>> {
   ingest(config: TConfig, secretRef?: SecretReference, payload?: unknown): Promise<IngestionResult>;
 }
 
-// 1. CSV / XLSX Ingestion Provider (Concrete Implementation)
-export interface CsvXlsxConfig {
-  allowedExtensions: ('.csv' | '.xlsx')[];
+// 1. CSV Ingestion Provider (Concrete Implementation - CSV-only for V1)
+export interface CsvConfig {
+  allowedExtensions: ('.csv')[];
   maxFileSizeBytes: number;
   dateFormat: string;
   enforce96Blocks: boolean;
 }
 
-export class CsvXlsxProvider implements DataSourceProvider<CsvXlsxConfig> {
+export class CsvProvider implements DataSourceProvider<CsvConfig> {
   readonly type: DataSourceType = 'CSV_UPLOAD';
-  readonly name = 'Structured CSV / XLSX Ingestion Gateway';
+  readonly name = 'Structured CSV Ingestion Gateway (CSV-only V1)';
 
   validateConfig(config: unknown): { valid: boolean; errors?: string[] } {
     if (!config || typeof config !== 'object') {
@@ -62,7 +62,7 @@ export class CsvXlsxProvider implements DataSourceProvider<CsvXlsxConfig> {
   }
 
   async ingest(
-    _config: CsvXlsxConfig,
+    _config: CsvConfig,
     _secretRef?: SecretReference,
     payload?: { fileContent: string; siteId: string; filename: string }
   ): Promise<IngestionResult> {
@@ -216,7 +216,7 @@ export class BillUploadProvider implements DataSourceProvider<BillUploadConfig> 
 
 // Registry map of available providers
 export const DATA_SOURCE_PROVIDERS: Record<DataSourceType, DataSourceProvider<any>> = {
-  CSV_UPLOAD: new CsvXlsxProvider(),
+  CSV_UPLOAD: new CsvProvider(),
   API: new ApiProvider(),
   SFTP: new SftpProvider(),
   MAILBOX: new MailboxProvider(),

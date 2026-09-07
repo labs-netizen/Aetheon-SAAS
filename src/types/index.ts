@@ -66,7 +66,8 @@ export type PublicationGateStatus =
 export type RegulatoryWorkflowStatus =
   | 'CAPTURED'
   | 'EXTRACTED'
-  | 'CHANGE_DETECTED/REVIEW_PENDING'
+  | 'CHANGE_DETECTED'
+  | 'REVIEW_PENDING'
   | 'APPROVED'
   | 'PUBLISHED'
   | 'SUPERSEDED';

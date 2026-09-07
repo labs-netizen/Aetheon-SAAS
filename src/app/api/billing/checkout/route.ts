@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerSupabaseClient } from '@/lib/supabase/server';
+import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { billingProvider } from '@/features/billing/razorpayAdapter';
 
 const PRODUCT_PRICES_PAISE: Record<string, number> = {
   GRID_INTELLIGENCE: 1990000,
@@ -16,23 +17,40 @@ export async function POST(req: NextRequest) {
 
     if (!organisationId || !productId) {
       return NextResponse.json(
-        { error: 'Missing organisationId or productId' },
+        { error: 'organisationId and productId are required' },
         { status: 400 }
       );
     }
 
-    const amountPaise = PRODUCT_PRICES_PAISE[productId] || 1990000;
-    const razorpayKeyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_mock_key';
+    // 1. Authorize: Only Organisation Admin can initiate checkout / subscribe
+    const authResult = await authorizeApiRequest(req, {
+      organisationId,
+      requiredRoles: ['ORGANISATION_ADMIN'],
+    });
 
-    // Mock/offline or test mode order generation
-    const orderId = `order_aeth_${Date.now().toString().slice(-8)}`;
+    if (!authResult.authorized) {
+      return authResult.response;
+    }
+
+    const amountPaise = PRODUCT_PRICES_PAISE[productId] || 1990000;
+
+    // 2. Delegate to billing provider
+    const session = await billingProvider.createCheckout({
+      organisationId,
+      siteId,
+      productId,
+      amountPaise,
+      customerEmail: authResult.user.email || 'billing@aetheon.in',
+      customerName: 'Aetheon Customer',
+    });
 
     return NextResponse.json({
       success: true,
-      orderId,
-      amountPaise,
-      currency: 'INR',
-      keyId: razorpayKeyId,
+      orderId: session.orderId,
+      amountPaise: session.amountPaise,
+      currency: session.currency,
+      keyId: session.keyId,
+      billingMode: session.billingMode,
       notes: {
         org_id: organisationId,
         site_id: siteId || null,
@@ -41,7 +59,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     return NextResponse.json(
-      { error: 'Failed to initiate checkout' },
+      { error: 'Failed to initiate checkout', details: err instanceof Error ? err.message : String(err) },
       { status: 500 }
     );
   }

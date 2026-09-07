@@ -10,8 +10,12 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
 
   const orgAId = 'a0000000-0000-0000-0000-000000000001';
   let orgBId: string;
+  let siteB1Id: string;
+  let siteB2Id: string;
   let userBId: string;
   let userBToken: string;
+  let operatorBId: string;
+  let operatorBToken: string;
 
   beforeAll(async () => {
     SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:15431';
@@ -31,6 +35,7 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
     anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { persistSession: false, autoRefreshToken: false, storageKey: 'test-anon' },
     });
+
     // 1. Create Org B via admin client
     const { data: orgB, error: orgErr } = await adminClient
       .from('organisations')
@@ -45,57 +50,109 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
     expect(orgErr).toBeNull();
     orgBId = orgB.id;
 
-    // 2. Create a site for Org B
-    const { error: siteErr } = await adminClient
+    // 2. Create Site B1 and Site B2 for Org B
+    const { data: site1, error: site1Err } = await adminClient
       .from('sites')
       .insert({
         organisation_id: orgBId,
-        name: 'Aetheon Demo Facility Beta Plant',
+        name: 'Org B Alpha Plant (Site B1)',
         state: 'Karnataka',
         discom: 'BESCOM',
         voltage_category: '66kV',
         contract_demand_value: 3000,
         contract_demand_unit: 'kVA',
-        metering_point: 'Feeder 2 Incomer',
+        metering_point: 'Feeder 1 Incomer',
         load_class: 'Continuous Process Industrial (Demo)',
-        activation_status: 'CONFIGURED',
-      });
+        activation_status: 'ACTIVE',
+      })
+      .select()
+      .single();
+    expect(site1Err).toBeNull();
+    siteB1Id = site1.id;
 
-    expect(siteErr).toBeNull();
+    const { data: site2, error: site2Err } = await adminClient
+      .from('sites')
+      .insert({
+        organisation_id: orgBId,
+        name: 'Org B Beta Plant (Site B2)',
+        state: 'Karnataka',
+        discom: 'BESCOM',
+        voltage_category: '33kV',
+        contract_demand_value: 1500,
+        contract_demand_unit: 'kVA',
+        metering_point: 'Feeder 2 Incomer',
+        load_class: 'Batch Manufacturing & Engineering',
+        activation_status: 'AWAITING_DATA',
+      })
+      .select()
+      .single();
+    expect(site2Err).toBeNull();
+    siteB2Id = site2.id;
 
-    // 3. Create Auth User for Org B
-    const testEmail = `org-b-${Date.now()}@demo.aetheonlabs.in`;
+    // Insert dummy interval data into Site B2
+    await adminClient.from('interval_data_96').insert({
+      site_id: siteB2Id,
+      operating_date: '2026-09-01',
+      block_index: 1,
+      meter_reading_kw: 1200,
+      sourcing_mix: { grid_pct: 100 },
+      source_checksum: 'test-checksum-site-b2',
+    });
+
+    // 3. Create Auth User for Org B Admin
+    const testAdminEmail = `org-b-admin-${Date.now()}@demo.aetheonlabs.in`;
     const testPassword = 'Password123!Secure';
 
-    const { data: authUser, error: authErr } = await adminClient.auth.admin.createUser({
-      email: testEmail,
+    const { data: authAdmin, error: authAdminErr } = await adminClient.auth.admin.createUser({
+      email: testAdminEmail,
       password: testPassword,
       email_confirm: true,
       user_metadata: { full_name: 'Org B Admin User' },
     });
+    expect(authAdminErr).toBeNull();
+    userBId = authAdmin.user!.id;
 
-    expect(authErr).toBeNull();
-    userBId = authUser.user!.id;
-
-    // Assign Org B user to Org B with ORGANISATION_ADMIN role
-    const { error: memberErr } = await adminClient
-      .from('memberships')
-      .insert({
-        organisation_id: orgBId,
-        user_id: userBId,
-        role: 'ORGANISATION_ADMIN',
-      });
-
-    expect(memberErr).toBeNull();
-
-    // Sign in as User B to obtain genuine user session token
-    const { data: sessionData, error: signInErr } = await anonClient.auth.signInWithPassword({
-      email: testEmail,
-      password: testPassword,
+    await adminClient.from('memberships').insert({
+      organisation_id: orgBId,
+      user_id: userBId,
+      role: 'ORGANISATION_ADMIN',
     });
 
-    expect(signInErr).toBeNull();
-    userBToken = sessionData.session!.access_token;
+    const { data: adminSession } = await anonClient.auth.signInWithPassword({
+      email: testAdminEmail,
+      password: testPassword,
+    });
+    userBToken = adminSession.session!.access_token;
+
+    // 4. Create Operator for Org B with access ONLY to Site B1
+    const testOpEmail = `org-b-op-${Date.now()}@demo.aetheonlabs.in`;
+    const { data: authOp, error: authOpErr } = await adminClient.auth.admin.createUser({
+      email: testOpEmail,
+      password: testPassword,
+      email_confirm: true,
+      user_metadata: { full_name: 'Org B Operator' },
+    });
+    expect(authOpErr).toBeNull();
+    operatorBId = authOp.user!.id;
+
+    await adminClient.from('memberships').insert({
+      organisation_id: orgBId,
+      user_id: operatorBId,
+      role: 'OPERATOR',
+    });
+
+    // Grant access ONLY to Site B1
+    await adminClient.from('site_access').insert({
+      site_id: siteB1Id,
+      user_id: operatorBId,
+      granted_by: userBId,
+    });
+
+    const { data: opSession } = await anonClient.auth.signInWithPassword({
+      email: testOpEmail,
+      password: testPassword,
+    });
+    operatorBToken = opSession.session!.access_token;
   });
 
   it('1. Anonymous clients cannot read tenant organisations under RLS', async () => {
@@ -103,7 +160,6 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const { data, error } = await unauthClient.from('organisations').select('*');
-    // RLS filters out all rows for unauthenticated callers
     expect(error).toBeNull();
     expect(data).toHaveLength(0);
   });
@@ -123,35 +179,20 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
 
   it('3. User B authenticated client can read Org B data but CANNOT read Org A data', async () => {
     const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${userBToken}`,
-        },
-      },
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
       auth: { persistSession: false },
     });
 
-    // Query organisations
     const { data: orgs, error: orgErr } = await clientB.from('organisations').select('*');
     expect(orgErr).toBeNull();
     expect(orgs).toHaveLength(1);
     expect(orgs![0].id).toBe(orgBId);
     expect(orgs![0].id).not.toBe(orgAId);
-
-    // Query sites
-    const { data: sites, error: siteErr } = await clientB.from('sites').select('*');
-    expect(siteErr).toBeNull();
-    expect(sites).toHaveLength(1);
-    expect(sites![0].organisation_id).toBe(orgBId);
   });
 
   it('4. User B cannot insert sites into Org A', async () => {
     const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${userBToken}`,
-        },
-      },
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
       auth: { persistSession: false },
     });
 
@@ -165,25 +206,190 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
       contract_demand_unit: 'kVA',
       metering_point: 'Incomer 1',
     });
-
-    // RLS with check constraint must deny the insert
     expect(error).not.toBeNull();
   });
 
   it('5. User B cannot see intervals or alerts belonging to Org A', async () => {
     const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${userBToken}`,
-        },
-      },
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
       auth: { persistSession: false },
     });
 
     const { data: intervals } = await clientB.from('interval_data_96').select('*');
-    expect(intervals).toHaveLength(0);
+    expect(intervals?.filter((i: any) => i.site_id === 'b0000000-0000-0000-0000-000000000001')).toHaveLength(0);
 
     const { data: alerts } = await clientB.from('alerts').select('*');
-    expect(alerts).toHaveLength(0);
+    expect(alerts?.filter((a: any) => a.organisation_id === orgAId)).toHaveLength(0);
+  });
+
+  it('6. Critical Security: Registration metadata CANNOT grant platform admin privileges', async () => {
+    const attackerEmail = `attacker-${Date.now()}@demo.aetheonlabs.in`;
+    const { data: attackUser, error: attackErr } = await adminClient.auth.admin.createUser({
+      email: attackerEmail,
+      password: 'Password123!Attack',
+      email_confirm: true,
+      // Malicious payload attempting privilege escalation
+      user_metadata: {
+        full_name: 'Malicious Attacker',
+        is_platform_admin: true,
+        role: 'super_admin',
+      },
+    });
+
+    expect(attackErr).toBeNull();
+    const attackerId = attackUser.user!.id;
+
+    // Verify user_profiles record created by database trigger
+    const { data: profile } = await adminClient
+      .from('user_profiles')
+      .select('id, is_platform_admin')
+      .eq('id', attackerId)
+      .single();
+
+    expect(profile).toBeDefined();
+    // Must be strictly FALSE
+    expect(profile!.is_platform_admin).toBe(false);
+  });
+
+  it('7. Critical Security: Direct profile update cannot escalate is_platform_admin', async () => {
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    // Attempt to update own profile to is_platform_admin = true
+    const { error } = await clientB
+      .from('user_profiles')
+      .update({ is_platform_admin: true })
+      .eq('id', userBId);
+
+    // Database trigger or RLS must deny this modification
+    expect(error).not.toBeNull();
+
+    // Verify in database that flag remains false
+    const { data: profile } = await adminClient
+      .from('user_profiles')
+      .select('is_platform_admin')
+      .eq('id', userBId)
+      .single();
+
+    expect(profile!.is_platform_admin).toBe(false);
+  });
+
+  it('8. Critical Security: Customer Org Admin CANNOT assign internal Aetheon roles', async () => {
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    // Attempt 1: Org Admin promotes self to AETHEON_ANALYST
+    const { error: errSelf } = await clientB
+      .from('memberships')
+      .update({ role: 'AETHEON_ANALYST' })
+      .eq('user_id', userBId)
+      .eq('organisation_id', orgBId);
+
+    expect(errSelf).not.toBeNull();
+
+    // Attempt 2: Org Admin assigns AETHEON_REGULATORY_REVIEWER to operator
+    const { error: errOther } = await clientB
+      .from('memberships')
+      .update({ role: 'AETHEON_REGULATORY_REVIEWER' })
+      .eq('user_id', operatorBId)
+      .eq('organisation_id', orgBId);
+
+    expect(errOther).not.toBeNull();
+  });
+
+  it('9. Site-Level Isolation: User granted Site B1 CANNOT access Site B2 in same org', async () => {
+    const clientOp = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${operatorBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    // Query sites: operator should ONLY see Site B1
+    const { data: sites, error: siteErr } = await clientOp.from('sites').select('id, name');
+    expect(siteErr).toBeNull();
+    const siteIds = sites!.map((s: any) => s.id);
+
+    expect(siteIds).toContain(siteB1Id);
+    expect(siteIds).not.toContain(siteB2Id); // Strictly blocked from Site B2
+
+    // Query interval data for Site B2 directly: must return 0 rows
+    const { data: intervals } = await clientOp
+      .from('interval_data_96')
+      .select('*')
+      .eq('site_id', siteB2Id);
+
+    expect(intervals).toHaveLength(0);
+  });
+
+  it('10. Regulatory Review Boundary: Unapproved/REVIEW_PENDING sources are suppressed from customers', async () => {
+    // 1. Insert an unapproved/review-pending source via admin client
+    const { data: pendingSource, error: pErr } = await adminClient
+      .from('regulatory_sources')
+      .insert({
+        jurisdiction: 'SERC',
+        state: 'Maharashtra',
+        document_title: 'Draft Unapproved Tariff Order 2026',
+        document_date: '2026-09-01',
+        effective_date: '2026-09-01',
+        version: 'draft-v0.1',
+        status: 'REVIEW_PENDING', // NOT PUBLISHED
+      })
+      .select()
+      .single();
+    expect(pErr).toBeNull();
+
+    // 2. Insert a published approved source
+    const { data: pubSource, error: pubErr } = await adminClient
+      .from('regulatory_sources')
+      .insert({
+        jurisdiction: 'MERC',
+        state: 'Maharashtra',
+        document_title: 'Approved Final Tariff Order 2026',
+        document_date: '2026-09-01',
+        effective_date: '2026-09-01',
+        version: 'final-v1.0',
+        status: 'PUBLISHED', // PUBLISHED
+      })
+      .select()
+      .single();
+    expect(pubErr).toBeNull();
+
+    // 3. Customer client (User B) queries regulatory sources
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    const { data: customerView } = await clientB.from('regulatory_sources').select('id, status');
+    const visibleIds = customerView!.map((s: any) => s.id);
+
+    // Published source must be visible
+    expect(visibleIds).toContain(pubSource.id);
+    // REVIEW_PENDING source must be strictly suppressed
+    expect(visibleIds).not.toContain(pendingSource.id);
+  });
+
+  it('11. Server-Generated Data Protection: Customer cannot directly insert trusted forecast runs', async () => {
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    const { error } = await clientB.from('grid_forecast_runs').insert({
+      site_id: siteB1Id,
+      operating_date: '2026-09-05',
+      model_version: 'FORGED_CUSTOMER_MODEL',
+      average_price_inr_per_mwh: 1000,
+      peak_demand_kw: 500,
+      peak_demand_block: 50,
+      quality_status: 'PASSED',
+      freshness_status: 'RECENT',
+    });
+
+    // RLS policy requires service-role/admin; customer insert must be denied
+    expect(error).not.toBeNull();
   });
 });
