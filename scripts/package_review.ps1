@@ -100,10 +100,19 @@ if ($foundEnv) {
 }
 
 # Check for live secret patterns in files (e.g., live razorpay keys, production service role keys)
-$secretPatterns = @(
-    "rzp_live_[0-9a-zA-Z]{14}",
-    "sk_live_[0-9a-zA-Z]{24}"
-)
+  $secretPatterns = @(
+      "rzp_live_[0-9a-zA-Z]{14}",
+      "sk_live_[0-9a-zA-Z]{24}",
+      # JWT-shaped values (eyJ...)
+      "eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+      # Service role JWT literals
+      "service_role.*eyJ",
+      "SUPABASE_SERVICE_ROLE_KEY\s*[=:]\s*[\"']?eyJ",
+      # Razorpay test/live secrets
+      "rzp_test_[0-9a-zA-Z]{14}",
+      # Analytics shared-secret literals (if not explicitly permitted test fixtures)
+      "internal-dev-secret-token"
+  )
 
 foreach ($pattern in $secretPatterns) {
     $matches = Get-ChildItem -Path $target -Recurse -File | Select-String -Pattern $pattern

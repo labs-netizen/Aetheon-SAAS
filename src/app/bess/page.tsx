@@ -15,9 +15,10 @@ import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Ca
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { useSite } from '@/components/layout/SiteContext';
-import { ProvenanceFooter } from '@/components/shared/ProvenanceFooter';
 import { ModuleGate } from '@/components/shared/ModuleGate';
 import { formatPower, formatEnergy, formatSoc } from '@/lib/units/energy';
+import { PRODUCTS } from '@/lib/constants';
+import { ProvenanceFooter } from '@/components/shared/ProvenanceFooter';
 
 export default function BESSPage() {
   const { currentSite, isEntitled } = useSite();
@@ -201,7 +202,7 @@ export default function BESSPage() {
       productId="BESS_ARBITRAGE"
       productName="BESS Arbitrage Signals"
       description="Degradation-aware advisory opportunity windows for commercial and industrial energy storage assets."
-      basePricePaise={6500000}
+      basePricePaise={PRODUCTS.BESS_ARBITRAGE.basePricePaise}
       isEntitled={isEntitled('BESS_ARBITRAGE')}
     >
       <div className="space-y-6">
@@ -213,7 +214,7 @@ export default function BESSPage() {
                 <BatteryCharging className="w-5 h-5 text-purple-400" />
                 BESS Arbitrage Signals (Battery Energy Storage)
               </h1>
-              <Badge variant="warning">SPECIALIST_REVIEW_REQUIRED</Badge>
+              <Badge variant="warning">INTERNAL_VALIDATION</Badge>
               {bessData?.persisted && (
                 <Badge variant="success">DB PERSISTED RUN</Badge>
               )}
@@ -383,13 +384,13 @@ export default function BESSPage() {
         </Card>
 
         <ProvenanceFooter
-          sourceTimestamp="2026-09-07T00:00:00Z"
+          sourceTimestamp={bessData?.created_at || new Date().toISOString()}
           sourceType="FastAPI Pyomo / Heuristic BESS Solver (PostgreSQL Persisted)"
-          freshnessStatus="RECENT"
-          validationStatus="PASSED"
-          completenessPct={100}
-          modelVersion="BESS_ADVISORY_SOLVER_v1.0"
-          tariffVersion="MSEDCL_HT1_TOD_2024"
+          freshnessStatus={bessData?.freshness_status || (bessData?.persisted ? 'RECENT' : 'UNKNOWN')}
+          validationStatus={bessData?.is_suppressed ? 'SUPPRESSED' : (bessData?.persisted ? 'PASSED' : 'UNKNOWN')}
+          completenessPct={bessData?.schedule_blocks?.length === 96 ? 100 : 0}
+          modelVersion={bessData?.solver_version || 'BESS_ADVISORY_SOLVER_v1.0'}
+          tariffVersion={bessData?.tariff_version || 'UNKNOWN'}
         />
       </div>
     </ModuleGate>

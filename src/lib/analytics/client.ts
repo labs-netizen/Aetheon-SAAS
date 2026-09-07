@@ -6,7 +6,17 @@
 
 const isProduction = process.env.NODE_ENV === 'production';
 const ANALYTICS_BASE_URL = process.env.ANALYTICS_SERVICE_URL || 'http://127.0.0.1:8000';
-const ANALYTICS_SERVICE_TOKEN = process.env.ANALYTICS_SERVICE_TOKEN || (isProduction ? '' : 'internal-dev-secret-token');
+const ANALYTICS_SERVICE_TOKEN = process.env.ANALYTICS_SERVICE_TOKEN;
+
+if (!ANALYTICS_SERVICE_TOKEN) {
+  if (isProduction) {
+    throw new Error('CRITICAL: ANALYTICS_SERVICE_TOKEN must be set in production environment');
+  }
+  // Development fallback - explicitly named to avoid confusion with production secrets
+  console.warn('[ANALYTICS] WARNING: Using development fallback token. Set ANALYTICS_SERVICE_TOKEN for production.');
+}
+const DEV_TOKEN = 'internal-dev-secret-token';
+const effectiveToken = ANALYTICS_SERVICE_TOKEN || (isProduction ? '' : DEV_TOKEN);
 
 export interface GridForecastParams {
   siteId: string;
@@ -51,7 +61,7 @@ export interface RenewableReconciliationParams {
 }
 
 async function callAnalyticsEndpoint<TResponse>(endpoint: string, payload: unknown): Promise<TResponse> {
-  if (!ANALYTICS_SERVICE_TOKEN) {
+  if (!effectiveToken) {
     throw new Error('CRITICAL: ANALYTICS_SERVICE_TOKEN is not configured (analytics client fails closed in production)');
   }
   const url = `${ANALYTICS_BASE_URL}${endpoint}`;
@@ -60,7 +70,7 @@ async function callAnalyticsEndpoint<TResponse>(endpoint: string, payload: unkno
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${ANALYTICS_SERVICE_TOKEN}`,
+        Authorization: `Bearer ${effectiveToken}`,
       },
       body: JSON.stringify(payload),
       cache: 'no-store',

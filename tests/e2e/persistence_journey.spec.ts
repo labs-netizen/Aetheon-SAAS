@@ -2,12 +2,15 @@ import { test, expect } from '@playwright/test';
 
 test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes)', () => {
   test('Complete Customer Persistence Journey: Real Login -> Site Config -> CSV Ingestion -> Server Checksum -> Grid API -> Persisted Run -> Report Generation -> Download -> Alert Ack -> Relogin', async ({ page, request }) => {
-    // 1. Real Login
+    // 1. Real Login - requires real credentials from seeded test user
+    const testEmail = process.env.E2E_TEST_USER_EMAIL || 'rajesh.demo@demo.aetheonlabs.in';
+    const testPassword = process.env.E2E_TEST_USER_PASSWORD || 'AetheonDemo2026!';
+    
     await page.goto('/auth/login');
     await expect(page.getByRole('heading', { name: /Aetheon Energy Intelligence|Sign in to your account/i }).first()).toBeVisible();
 
-    await page.locator('input[type="email"]').fill('rajesh.demo@demo.aetheonlabs.in');
-    await page.locator('input[type="password"]').fill('AetheonDemo2026!');
+    await page.locator('input[type="email"]').fill(testEmail);
+    await page.locator('input[type="password"]').fill(testPassword);
     await page.getByRole('button', { name: 'Sign In' }).click();
 
     // 2. Authorised Organisation & Site Displayed
@@ -21,7 +24,7 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
     await expect(page.getByText('Site Electrical Configuration')).toBeVisible();
 
     const testDemand = '2800';
-    const demandInput = page.locator('input[label="Sanctioned Contract Demand (kVA)"], input[type="number"]').first();
+    const demandInput = page.locator('input[label="Sanctioned Contract Demand (kVA)"], input[type="number"]').first());
     await demandInput.fill(testDemand);
     await page.getByRole('button', { name: 'Save Site Parameters' }).click();
 
@@ -36,10 +39,11 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
     await page.getByRole('button', { name: /Data Ingestion/i }).click();
     await expect(page.getByText('15-Minute AMR Interval Data Ingestion Gateway')).toBeVisible();
 
+    const todayDate = new Date().toISOString().substring(0, 10);
     const runSalt = (Date.now() % 10000) / 10;
     const csvRows = ['operating_date,block_index,load_kw,solar_generation_kw,actual_drawal_kw,scheduled_drawal_kw'];
     for (let b = 1; b <= 96; b++) {
-      csvRows.push(`2026-09-08,${b},${(2100 + runSalt + Math.sin(b) * 150).toFixed(1)},120.0,2120.0,2100.0`);
+      csvRows.push(`${todayDate},${b},${(2100 + runSalt + Math.sin(b) * 150).toFixed(1)},120.0,2120.0,2100.0`);
     }
     const csvContent = csvRows.join('\n');
 
@@ -66,7 +70,7 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
     const unauthRes = await request.post('/api/forecast', {
       data: {
         siteId: nonDemoSiteId,
-        operatingDate: '2026-09-08',
+        operatingDate: todayDate,
         contractDemandKw: 2800,
       },
     });
@@ -76,7 +80,7 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
     const gridRes = await page.request.post('/api/forecast', {
       data: {
         siteId,
-        operatingDate: '2026-09-08',
+        operatingDate: todayDate,
         contractDemandKw: 2800,
       },
     });
@@ -98,8 +102,8 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
       data: {
         siteId,
         reportType: 'GRID_DAILY_BRIEF',
-        periodStart: '2026-09-08',
-        periodEnd: '2026-09-08',
+        periodStart: todayDate,
+        periodEnd: todayDate,
       },
     });
     expect(reportRes.status()).toBe(200);
@@ -128,12 +132,15 @@ test.describe('End-to-End Real Persistence Journey (Defect #38 & Pre-Astra Fixes
     }
 
     // 11. Logout and Re-Login: State Remains Persisted
+    await page.goto('/auth/logout');
     await page.goto('/auth/login');
     await expect(page.getByRole('heading', { name: /Aetheon Energy Intelligence|Sign in to your account/i }).first()).toBeVisible();
 
-    await page.locator('input[type="email"]').fill('rajesh.demo@demo.aetheonlabs.in');
-    await page.locator('input[type="password"]').fill('AetheonDemo2026!');
+    await page.locator('input[type="email"]').fill(testEmail);
+    await page.locator('input[type="password"]').fill(testPassword);
     await page.getByRole('button', { name: 'Sign In' }).click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText('AETHEON', { exact: true })).toBeVisible();
 
     // Verify persisted site configuration persists after logout/login
     await page.goto('/settings');

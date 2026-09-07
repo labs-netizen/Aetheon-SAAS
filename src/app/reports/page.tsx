@@ -123,7 +123,8 @@ export default function ReportsPage() {
             <option value="GRID_MONTHLY_REPORT">Grid Monthly Report</option>
             <option value="DSM_MONTHLY_REVIEW">DSM Monthly Review</option>
             <option value="BESS_PERFORMANCE_REPORT">BESS Advisory Performance</option>
-            <option value="RENEWABLE_PORTFOLIO_REPORT">Renewable ESG Statement</option>
+            <option value="RENEWABLES_RECONCILIATION">Renewables Reconciliation</option>
+            <option value="COMPLIANCE_AUDIT">Open Access Compliance Audit</option>
           </select>
           <Button
             onClick={handleGenerateReport}

@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { type ReportType, type ProductId } from '@/types';
+
+const REPORT_PRODUCT_REQUIREMENTS: Record<ReportType, ProductId> = {
+  GRID_DAILY_BRIEF: 'GRID_INTELLIGENCE',
+  GRID_MONTHLY_REPORT: 'GRID_INTELLIGENCE',
+  DSM_MONTHLY_REVIEW: 'DSM_RISK',
+  BESS_PERFORMANCE_REPORT: 'BESS_ARBITRAGE',
+  RENEWABLES_RECONCILIATION: 'RENEWABLE_PORTFOLIO',
+  COMPLIANCE_AUDIT: 'OA_COMPLIANCE',
+};
 
 export async function GET(req: NextRequest) {
   try {
@@ -20,6 +30,23 @@ export async function GET(req: NextRequest) {
     }
 
     const adminClient = createAdminClient();
+
+    // 2. Query user organisation's active product entitlements to enforce module-level visibility
+    const { data: entitlements } = await adminClient
+      .from('entitlements')
+      .select('product_id, site_id, is_active')
+      .eq('organisation_id', authResult.organisationId)
+      .eq('is_active', true);
+
+    const activeProductIds = new Set<string>();
+    entitlements?.forEach((e) => {
+      if (!e.site_id || e.site_id === siteId) {
+        activeProductIds.add(e.product_id);
+      }
+    });
+
+    const isPrivileged = Boolean(authResult.user.is_platform_admin || authResult.role === 'AETHEON_ANALYST');
+
     const { data: reports, error: reportsErr } = await adminClient
       .from('report_records')
       .select('id, module, report_type, period_start, period_end, title, summary, quality_status, model_version, tariff_version, rule_version, generation_time, created_at, download_url')
@@ -33,9 +60,22 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Filter reports so that customer only sees reports for modules they are entitled to
+    const filteredReports = isPrivileged
+      ? (reports || [])
+      : (reports || []).filter((r) => {
+          const reqProduct = REPORT_PRODUCT_REQUIREMENTS[r.report_type as ReportType] ||
+            (r.module === 'GRID' ? 'GRID_INTELLIGENCE' :
+             r.module === 'DSM' ? 'DSM_RISK' :
+             r.module === 'BESS' ? 'BESS_ARBITRAGE' :
+             r.module === 'COMPLIANCE' ? 'OA_COMPLIANCE' :
+             r.module === 'RENEWABLE' ? 'RENEWABLE_PORTFOLIO' : null);
+          return reqProduct ? activeProductIds.has(reqProduct) : false;
+        });
+
     return NextResponse.json({
       siteId,
-      reports: reports || [],
+      reports: filteredReports,
     });
   } catch (err) {
     return NextResponse.json(

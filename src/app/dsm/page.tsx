@@ -18,6 +18,7 @@ import { useSite } from '@/components/layout/SiteContext';
 import { ProvenanceFooter } from '@/components/shared/ProvenanceFooter';
 import { ModuleGate } from '@/components/shared/ModuleGate';
 import { getBlockTimes } from '@/lib/dates/blocks96';
+import { PRODUCTS } from '@/types';
 
 export default function DSMPage() {
   const { currentSite, isEntitled } = useSite();
@@ -92,21 +93,34 @@ export default function DSMPage() {
 
   // Use backend incidents if available, or fallback ONLY in demo mode
   const incidents = useMemo(() => {
+    const isDemo = Boolean(currentSite?.is_demo);
     if (dsmData?.incidents && Array.isArray(dsmData.incidents) && dsmData.incidents.length > 0) {
-      return dsmData.incidents.map((inc: any, i: number) => ({
-        id: inc.id || `inc-${i + 1}`,
-        timeWindow: `${getBlockTimes(inc.start_block).startTime} - ${getBlockTimes(inc.end_block).endTime} IST`,
-        blocks: `Blocks ${inc.start_block} to ${inc.end_block} (${inc.block_count || (inc.end_block - inc.start_block + 1)} blocks)`,
-        severity: inc.severity || 'CRITICAL',
-        maxDeviation: `+${(inc.max_deviation_pct || 15).toFixed(1)}%`,
-        excessEnergyKwh: inc.total_excess_energy_kwh || inc.excess_energy_kwh || 225.0,
-        estimatedExposure: `₹${Math.round(inc.estimated_exposure_inr || 3150).toLocaleString('en-IN')}`,
-        cause: inc.root_cause_tag || inc.cause || 'Industrial ramp-up deviation beyond CERC allowable band',
-        acknowledged: Boolean(inc.acknowledged),
-      }));
+      return dsmData.incidents.map((inc: any, i: number) => {
+        const maxDev = inc.max_deviation_pct !== undefined && inc.max_deviation_pct !== null
+          ? `+${Number(inc.max_deviation_pct).toFixed(1)}%`
+          : (isDemo ? '+15.0%' : 'DATA GAP');
+        const excessEnergy = inc.total_excess_energy_kwh !== undefined && inc.total_excess_energy_kwh !== null
+          ? inc.total_excess_energy_kwh
+          : (inc.excess_energy_kwh !== undefined ? inc.excess_energy_kwh : (isDemo ? 225.0 : null));
+        const exposure = inc.estimated_exposure_inr !== undefined && inc.estimated_exposure_inr !== null
+          ? `₹${Math.round(inc.estimated_exposure_inr).toLocaleString('en-IN')}`
+          : (isDemo ? '₹3,150' : 'DATA GAP');
+
+        return {
+          id: inc.id || `inc-${i + 1}`,
+          timeWindow: `${getBlockTimes(inc.start_block).startTime} - ${getBlockTimes(inc.end_block).endTime} IST`,
+          blocks: `Blocks ${inc.start_block} to ${inc.end_block} (${inc.block_count || (inc.end_block - inc.start_block + 1)} blocks)`,
+          severity: inc.severity || 'CRITICAL',
+          maxDeviation: maxDev,
+          excessEnergyKwh: excessEnergy,
+          estimatedExposure: exposure,
+          cause: inc.root_cause_tag || inc.cause || (isDemo ? 'Industrial ramp-up deviation beyond CERC allowable band' : 'UNSPECIFIED_DEVIATION'),
+          acknowledged: Boolean(inc.acknowledged),
+        };
+      });
     }
 
-    if (currentSite?.is_demo) {
+    if (isDemo) {
       return [
         {
           id: 'inc-01',
@@ -138,13 +152,14 @@ export default function DSMPage() {
 
   // Deviation blocks
   const deviationBlocks = useMemo(() => {
+    const isDemo = Boolean(currentSite?.is_demo);
     if (dsmData?.blocks && Array.isArray(dsmData.blocks) && dsmData.blocks.length > 0) {
       return dsmData.blocks.map((b: any) => {
         const timing = getBlockTimes(b.block_index);
-        const scheduled = b.scheduled_drawal_kw || 1200.0;
-        const actual = b.actual_drawal_kw || 1200.0;
-        const devKw = actual - scheduled;
-        const pct = Math.abs(b.deviation_pct ?? (devKw / scheduled) * 100.0);
+        const scheduled = b.scheduled_drawal_kw !== undefined && b.scheduled_drawal_kw !== null ? b.scheduled_drawal_kw : (isDemo ? 1200.0 : null);
+        const actual = b.actual_drawal_kw !== undefined && b.actual_drawal_kw !== null ? b.actual_drawal_kw : (isDemo ? 1200.0 : null);
+        const devKw = (scheduled !== null && actual !== null) ? actual - scheduled : null;
+        const pct = (scheduled && devKw !== null) ? Math.abs(b.deviation_pct ?? (devKw / scheduled) * 100.0) : (b.deviation_pct ?? null);
         return {
           block_index: b.block_index,
           startTime: timing.startTime,
@@ -153,12 +168,12 @@ export default function DSMPage() {
           actualKw: actual,
           devKw,
           devPct: pct,
-          risk: b.risk_level || (pct >= 12.0 ? 'CRITICAL' : pct >= 8.0 ? 'HIGH' : pct >= 4.0 ? 'WATCH' : 'NORMAL'),
+          risk: b.risk_level || (pct && pct >= 12.0 ? 'CRITICAL' : pct && pct >= 8.0 ? 'HIGH' : pct && pct >= 4.0 ? 'WATCH' : 'NORMAL'),
         };
       });
     }
 
-    if (!currentSite?.is_demo) return [];
+    if (!isDemo) return [];
 
     const blocks = [];
     for (let b = 1; b <= 96; b++) {
@@ -215,7 +230,7 @@ export default function DSMPage() {
       productId="DSM_RISK"
       productName="DSM Risk Monitor"
       description="Deviation Settlement Mechanism exposure tracking, 96-block scheduling variance, and regulatory breach prevention."
-      basePricePaise={2990000}
+      basePricePaise={PRODUCTS.DSM_RISK.basePricePaise}
       isEntitled={isEntitled('DSM_RISK')}
     >
       <div className="space-y-6">

@@ -11,7 +11,7 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (96/96 passing):
+A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (106/106 passing):
 
 ### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
 1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
@@ -26,14 +26,14 @@ A comprehensive automated security test suite has been implemented across Vitest
 10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `grid_forecast_blocks`, `bess_optimisation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
 11. **Server-Generated Data Protection**: Customer accounts cannot forge or directly insert forecast runs.
 
-### 2.2 Live Tamper-Evident Audit Chaining (`tests/integration/audit_chaining.test.ts` - 4/4 Passing)
+### 2.2 Live Tamper-Evident Audit Chaining (`tests/integration/audit_chaining.test.ts` - 5/5 Passing)
 1. **Deterministic Genesis Hash**: Event A receives a 64-character SHA-256 genesis hash computed deterministically.
 2. **Cryptographic Chaining**: Event B's `previous_hash` strictly matches Event A's `current_hash`.
 3. **UPDATE Immutability**: Database trigger rejects any UPDATE operation on `audit_logs`.
 4. **DELETE Immutability**: Database trigger rejects any DELETE operation on `audit_logs`.
 5. **Concurrency Safety**: Migration 11 enforces `pg_advisory_xact_lock(hashtext('audit_logs_hash_chain'))` to guarantee zero chain forks under concurrent inserts.
 
-### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 20/20 Passing)
+### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 29/29 Passing)
 1. **Unauthenticated Request Rejection**: Unauthenticated requests to `/api/forecast` return 401 Unauthorized.
 2. **Cross-Tenant Site Isolation**: Attempting to query an operational endpoint for a site belonging to a foreign organisation returns 403 Forbidden.
 3. **Site Boundary Isolation**: A user without an active `site_access` grant for a specific site is rejected with 403 Forbidden.
@@ -54,6 +54,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 18. **Fail-Closed Live Grid Ingestion**: Live grid calculations fail closed with `DATA GAP` if 96-block meter inputs are absent.
 19. **Fail-Closed Live Renewables**: Live renewables calculations reject scalar synthesis and demand 96-block measured intervals.
 20. **Fail-Safe Alert Acknowledgment**: Alert status mutations fail closed if database update fails.
+21–29. **Extended Security Isolation Scenarios**: Additional webhook idempotency, subscription uniqueness enforcement, DSM incident deduplication, and billing_checkout_sessions role-boundary tests (covered in full in `tests/integration/adversarial_api.test.ts` and `tests/integration/security_isolation.test.ts`).
 
 ---
 
@@ -94,7 +95,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 ### 4.1 Audit Logging & Cryptographic Chaining
 - Every tenant creation, user invitation, role modification, subscription state change, file ingestion, regulatory approval, and alert acknowledgment writes a row to `audit_logs`.
 - PostgreSQL trigger `trg_chain_audit_log_hash` computes:
-  `current_hash = encode(sha256((coalesce(previous_hash, 'GENESIS') || coalesce(actor_id::text, '') || coalesce(action, '') || coalesce(entity_type, '') || coalesce(created_at::text, ''))::bytea), 'hex')`
+  `current_hash = encode(sha256((coalesce(previous_hash,'GENESIS') || coalesce(actor_id::text,'') || coalesce(action,'') || coalesce(entity_type,'') || coalesce(created_at::text,''))::bytea), 'hex')`
 - PostgreSQL trigger `trg_protect_audit_logs` rejects any UPDATE or DELETE operations on audit records.
 - Concurrency protected via `pg_advisory_xact_lock`.
 
@@ -111,3 +112,22 @@ A comprehensive automated security test suite has been implemented across Vitest
 - Operational API routes (`/api/forecast`, `/api/dsm`, `/api/bess`, `/api/renewables`) fail safely: if model run persistence fails, the route returns an error rather than publishing an unpersisted result.
 - Telemetry failure triggers an automatic transition of site monitoring to `DEGRADED`.
 - Live mode never synthesizes fake operational curves or synthetic fallback numbers when telemetry or tariffs are unavailable.
+
+---
+## 5. Alert System Status (Honest Disclosure)
+
+**Current Implementation Status:**
+- **Alert Persistence & Acknowledgement**: `VERIFIED_LOCAL` - Alerts are persisted to PostgreSQL with tamper-evident audit chaining. Acknowledgement is atomic (alert update + audit log in single transaction via `acknowledge_alert_atomic` RPC).
+- **Automated Alert Generation**: `NOT_IMPLEMENTED / INTERNAL_VALIDATION` - No condition-evaluation engine exists. Alert definitions table exists but no scheduled worker evaluates conditions against live telemetry.
+- **Email Delivery Provider**: `PRODUCTION_CONFIG_REQUIRED` - `notification_logs` and `notification_templates` tables exist, but no outbound email adapter (Mailpit/SMTP/Razorpay Email) is wired. Email delivery is not yet functional.
+
+**Do Not Claim:**
+- Templates ≠ delivery engine
+- Alert definitions table ≠ condition evaluator
+- `notification_logs` existence ≠ operational delivery pipeline
+
+**Required for Production:**
+1. Condition evaluator service (cron/worker) that reads telemetry → evaluates `alert_definitions` → inserts `alerts` → logs to `notification_logs`
+2. Outbound email adapter with provider credentials (Mailpit for dev, production SMTP for live)
+3. Deduplication/cooldown logic using `alerts.fingerprint` and `triggered_at`
+4. Delivery retry with exponential backoff

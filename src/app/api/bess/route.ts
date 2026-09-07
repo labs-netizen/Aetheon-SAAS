@@ -79,9 +79,9 @@ export async function POST(req: NextRequest) {
       interconnectionRestricted,
     } = body;
 
-    if (!siteId || !operatingDate || !pricesInrPerMwh) {
+    if (!siteId || !operatingDate) {
       return NextResponse.json(
-        { error: 'Missing required BESS optimization parameters (siteId, operatingDate, pricesInrPerMwh)' },
+        { error: 'Missing required BESS optimization parameters (siteId, operatingDate)' },
         { status: 400 }
       );
     }
@@ -98,27 +98,72 @@ export async function POST(req: NextRequest) {
 
     const adminClient = createAdminClient();
 
-    // Resolve real asset UUID if not passed or passed placeholder
-    let effectiveBatteryId = batteryId;
-    let actualAsset: any = null;
+    // Authoritative asset resolution - load all safety-critical params from DB for live mode
     const { data: asset } = await adminClient
       .from('bess_assets')
       .select('*')
       .eq('site_id', siteId)
+      .eq('is_active', true)
       .maybeSingle();
+
+    let effectiveBatteryId = batteryId;
+    let actualAsset: any = null;
 
     if (asset) {
       effectiveBatteryId = asset.id;
       actualAsset = asset;
     }
 
-    const capKwh = usableCapacityKwh || actualAsset?.usable_capacity_kwh || 1000.0;
-    const pRating = powerRatingKw || actualAsset?.power_rating_kw || 500.0;
-    const soc = initialSocPct !== undefined && initialSocPct !== null ? initialSocPct : actualAsset?.current_soc_pct ?? null;
-    const isMaintenance = maintenanceLockActive !== undefined ? maintenanceLockActive : Boolean(actualAsset?.maintenance_lock);
+    // For live mode, ALL safety-critical parameters come from trusted server-side data
+    // Browser-supplied values are ONLY used in demo/test mode
+    const isLiveMode = !isDemoMode;
+    
+    // Server-authoritative safety parameters
+    const capKwh = isLiveMode ? (actualAsset?.usable_capacity_kwh ?? 1000.0) : (usableCapacityKwh || actualAsset?.usable_capacity_kwh || 1000.0);
+    const pRating = isLiveMode ? (actualAsset?.power_rating_kw ?? 500.0) : (powerRatingKw || actualAsset?.power_rating_kw || 500.0);
+    const minSoc = isLiveMode ? (actualAsset?.min_soc_pct ?? 10.0) : (minSocPct || actualAsset?.min_soc_pct || 10.0);
+    const maxSoc = isLiveMode ? (actualAsset?.max_soc_pct ?? 90.0) : (maxSocPct || actualAsset?.max_soc_pct || 90.0);
+    const cEff = isLiveMode ? (actualAsset?.charge_efficiency ?? 0.92) : (chargeEfficiency || actualAsset?.charge_efficiency || 0.92);
+    const dEff = isLiveMode ? (actualAsset?.discharge_efficiency ?? 0.92) : (dischargeEfficiency || actualAsset?.discharge_efficiency || 0.92);
+    const degCost = isLiveMode ? (actualAsset?.degradation_cost_per_cycle_inr ?? 1500.0) : (degradationCostPerCycleInr || actualAsset?.degradation_cost_per_cycle_inr || 1500.0);
+
+    // Server-authoritative safety state - NEVER trust browser for live mode
+    let soc: number | null = null;
+    let isMaintenance = false;
+    let isTelemetryStale = false;
+    let isInterconnectionRestricted = false;
+
+    if (isLiveMode && actualAsset) {
+      // Current SOC from telemetry
+      soc = actualAsset.current_soc_pct ?? null;
+      
+      // Maintenance lock from asset
+      isMaintenance = Boolean(actualAsset.maintenance_lock);
+      
+      // Telemetry freshness check
+      if (actualAsset.last_telemetry_at) {
+        const telemetryAgeMs = Date.now() - new Date(actualAsset.last_telemetry_at).getTime();
+        isTelemetryStale = telemetryAgeMs > 30 * 60 * 1000; // > 30 minutes
+      } else {
+        isTelemetryStale = true; // No telemetry = stale
+      }
+      
+      // Interconnection restriction - would come from asset config or external system
+      // For now, check if asset has interconnection constraint flag
+      isInterconnectionRestricted = Boolean(actualAsset.interconnection_restricted);
+    } else {
+      // Demo mode: use browser values (with validation)
+      soc = initialSocPct !== undefined && initialSocPct !== null ? initialSocPct : actualAsset?.current_soc_pct ?? null;
+      isMaintenance = maintenanceLockActive !== undefined ? maintenanceLockActive : Boolean(actualAsset?.maintenance_lock);
+      isTelemetryStale = telemetryStale ?? false;
+      isInterconnectionRestricted = interconnectionRestricted ?? false;
+    }
 
     // 2. Section 12: Backend Safety Interlock & Suppression Enforcement (Evaluated First)
-    if (soc === null || soc === undefined || soc < 0 || soc > 100) {
+    if (
+      soc === null || soc === undefined || soc < 0 || soc > 100 ||
+      (initialSocPct !== undefined && initialSocPct !== null && (initialSocPct < 0 || initialSocPct > 100))
+    ) {
       return NextResponse.json({
         battery_id: effectiveBatteryId,
         operating_date: operatingDate,
@@ -146,7 +191,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (telemetryStale === true) {
+    if (isTelemetryStale === true) {
       return NextResponse.json({
         battery_id: effectiveBatteryId,
         operating_date: operatingDate,
@@ -160,7 +205,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (interconnectionRestricted === true) {
+    if (isInterconnectionRestricted === true) {
       return NextResponse.json({
         battery_id: effectiveBatteryId,
         operating_date: operatingDate,
@@ -174,27 +219,37 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Resolve prices: if pricesInrPerMwh not supplied, attempt to load from latest grid_forecast_blocks or site tariff
-    let effectivePrices: number[] = Array.isArray(pricesInrPerMwh) && pricesInrPerMwh.length === 96 ? pricesInrPerMwh : [];
-    if (effectivePrices.length !== 96) {
-      // Query latest forecast run
+    // Resolve prices: Load 96-block price curve from grid_forecast_blocks for the requested operatingDate
+    let effectivePrices: number[] = [];
+    
+    // For live mode, server MUST resolve authoritative price series from persisted grid forecast
+    // For demo mode only, client may provide pricesInrPerMwh
+    const isDemoMode = authResult.isDemo || (await adminClient.from('sites').select('is_demo').eq('id', siteId).maybeSingle()).data?.is_demo === true;
+    
+    if (isDemoMode && Array.isArray(pricesInrPerMwh) && pricesInrPerMwh.length === 96) {
+      effectivePrices = pricesInrPerMwh;
+    } else {
+      // Load the grid forecast run for the SPECIFIC operatingDate
       const { data: run } = await adminClient
         .from('grid_forecast_runs')
         .select('id')
         .eq('site_id', siteId)
-        .order('created_at', { ascending: false })
-        .limit(1)
+        .eq('operating_date', operatingDate)
         .maybeSingle();
 
       if (run) {
         const { data: blocks } = await adminClient
           .from('grid_forecast_blocks')
-          .select('clearing_price_inr_mwh')
+          .select('block_index, forecast_price_inr_per_mwh')
           .eq('run_id', run.id)
           .order('block_index', { ascending: true });
 
         if (blocks && blocks.length === 96) {
-          effectivePrices = blocks.map((b) => Number(b.clearing_price_inr_mwh || 4500));
+          const rawPrices = blocks.map((b) => b.forecast_price_inr_per_mwh);
+          const allValid = rawPrices.every((p) => p !== null && p !== undefined && Number.isFinite(Number(p)));
+          if (allValid) {
+            effectivePrices = rawPrices.map(Number);
+          }
         }
       }
     }
@@ -204,7 +259,7 @@ export async function POST(req: NextRequest) {
         battery_id: effectiveBatteryId,
         operating_date: operatingDate,
         is_suppressed: true,
-        suppression_reason: 'DATA_GAP: Authoritative 96-block price curve unavailable for site operating date. Advisory suppressed.',
+        suppression_reason: 'DATA_GAP: Authoritative 96-block price curve unavailable or incomplete for site operating date. Advisory suppressed.',
         gross_arbitrage_inr: 0,
         degradation_cost_inr: 0,
         net_opportunity_inr: 0,
@@ -213,7 +268,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. Call FastAPI analytics microservice
+    // 3. Call FastAPI analytics microservice with verified effectivePrices and server-authoritative safety params
     let advisoryResult: any;
     try {
       advisoryResult = await fetchBESSAdvisory({
@@ -223,15 +278,15 @@ export async function POST(req: NextRequest) {
         usableCapacityKwh: capKwh,
         powerRatingKw: pRating,
         initialSocPct: soc,
-        minSocPct: minSocPct || actualAsset?.min_soc_pct || 10.0,
-        maxSocPct: maxSocPct || actualAsset?.max_soc_pct || 90.0,
-        chargeEfficiency: chargeEfficiency || actualAsset?.charge_efficiency || 0.92,
-        dischargeEfficiency: dischargeEfficiency || actualAsset?.discharge_efficiency || 0.92,
-        degradationCostPerCycleInr: degradationCostPerCycleInr || actualAsset?.degradation_cost_per_cycle_inr || 1500.0,
-        pricesInrPerMwh,
+        minSocPct: minSoc,
+        maxSocPct: maxSoc,
+        chargeEfficiency: cEff,
+        dischargeEfficiency: dEff,
+        degradationCostPerCycleInr: degCost,
+        pricesInrPerMwh: effectivePrices,
         maintenanceLockActive: isMaintenance,
-        telemetryStale: telemetryStale || false,
-        interconnectionRestricted: interconnectionRestricted || false,
+        telemetryStale: isTelemetryStale,
+        interconnectionRestricted: isInterconnectionRestricted,
       });
     } catch (apiErr) {
       return NextResponse.json(

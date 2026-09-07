@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { type ReportType, type ProductId } from '@/types';
+
+const REPORT_PRODUCT_REQUIREMENTS: Record<ReportType, ProductId> = {
+  GRID_DAILY_BRIEF: 'GRID_INTELLIGENCE',
+  GRID_MONTHLY_REPORT: 'GRID_INTELLIGENCE',
+  DSM_MONTHLY_REVIEW: 'DSM_RISK',
+  BESS_PERFORMANCE_REPORT: 'BESS_ARBITRAGE',
+  RENEWABLES_RECONCILIATION: 'RENEWABLE_PORTFOLIO',
+  COMPLIANCE_AUDIT: 'OA_COMPLIANCE',
+};
 
 export async function GET(
   req: NextRequest,
@@ -23,10 +33,19 @@ export async function GET(
     );
   }
 
-  // 2. Authorize requester against the report's site
+  // Map report_type or module to required product
+  const requiredProduct = REPORT_PRODUCT_REQUIREMENTS[report.report_type as ReportType] ||
+    (report.module === 'GRID' ? 'GRID_INTELLIGENCE' :
+     report.module === 'DSM' ? 'DSM_RISK' :
+     report.module === 'BESS' ? 'BESS_ARBITRAGE' :
+     report.module === 'COMPLIANCE' ? 'OA_COMPLIANCE' :
+     report.module === 'RENEWABLE' ? 'RENEWABLE_PORTFOLIO' : null);
+
+  // 2. Authorize requester against the report's site AND module entitlement
   const authResult = await authorizeApiRequest(req, {
     siteId: report.site_id,
     organisationId: report.organisation_id,
+    productId: requiredProduct || undefined,
   });
 
   if (!authResult.authorized) {

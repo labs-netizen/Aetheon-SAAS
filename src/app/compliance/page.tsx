@@ -150,7 +150,7 @@ export default function CompliancePage() {
                 <ShieldCheck className="w-5 h-5 text-sky-400" />
                 Open Access Compliance Sentinel
               </h1>
-              <Badge variant="warning">SPECIALIST_REVIEW_REQUIRED</Badge>
+              <Badge variant="warning">INTERNAL_VALIDATION</Badge>
               {complianceData?.hasApprovedData && (
                 <Badge variant="success">APPROVED RECORDS LOADED</Badge>
               )}

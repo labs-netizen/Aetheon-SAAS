@@ -204,12 +204,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       message: `Transactionally committed ${formattedRows.length} interval blocks into persistent database.`,
-      ingestionRunId: rpcResult?.ingestion_run_id,
+      run_id: rpcResult?.run_id,
       siteId,
       totalBlocks: formattedRows.length,
       serverChecksum,
       freshnessStatus,
-      publicationGateStatus: rpcResult?.publication_gate_status || 'PUBLISHABLE',
+      publicationGateStatus: rpcResult?.publication_gate_status || 'BLOCKED_INCOMPLETE',
     });
   } catch (err) {
     console.error('Ingestion commit error:', err);

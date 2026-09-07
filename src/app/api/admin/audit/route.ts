@@ -74,6 +74,14 @@ export async function GET(request: Request) {
       );
     }
 
+    // Regulatory Reviewers are restricted to regulatory queue and cannot view global audit/tenant health
+    if (role === 'AETHEON_REGULATORY_REVIEWER' && !isPlatformAdmin) {
+      return NextResponse.json(
+        { error: 'Forbidden: Regulatory Reviewers do not have scope for tenant health or global audit trails; restricted to regulatory queue.' },
+        { status: 403 }
+      );
+    }
+
     // Enforce analyst expiry
     if (role === 'AETHEON_ANALYST') {
       if (!membership?.expires_at || new Date(membership.expires_at) <= new Date()) {
@@ -86,8 +94,7 @@ export async function GET(request: Request) {
 
     const isAuthorizedInternal =
       isPlatformAdmin ||
-      (role === 'AETHEON_ANALYST' && Boolean(membership?.expires_at && new Date(membership.expires_at) > new Date())) ||
-      role === 'AETHEON_REGULATORY_REVIEWER';
+      (role === 'AETHEON_ANALYST' && Boolean(membership?.expires_at && new Date(membership.expires_at) > new Date()));
 
     if (!isAuthorizedInternal) {
       return NextResponse.json({ error: 'Forbidden: Internal access required' }, { status: 403 });

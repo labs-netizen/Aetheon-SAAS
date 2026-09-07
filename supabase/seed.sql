@@ -53,6 +53,21 @@ VALUES (
     'ACTIVE',
     'Calibrated on 30-day historical interval dataset (DEMO)',
     true
+),
+(
+    'b0000000-0000-0000-0000-000000000002',
+    'a0000000-0000-0000-0000-000000000001',
+    'Aetheon Demo Engineering Unit 2',
+    'Gujarat',
+    'UGVCL',
+    '66kV',
+    4000.0,
+    'kVA',
+    'HT Substation 2',
+    'Heavy Engineering (Demo)',
+    'AWAITING_DATA',
+    'Awaiting initial 15-minute AMR load upload',
+    true
 ) ON CONFLICT (id) DO NOTHING;
 
 -- 4. Demo Users & Memberships

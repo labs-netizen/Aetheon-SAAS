@@ -49,13 +49,13 @@ export function evaluateQualityGate(meta: QualityMetadata): QualityGateEvaluatio
     };
   }
 
-  // 2. Critical Rule: Missing Input Blocks (< 90% completeness)
-  if (meta.completenessPct < 90.0) {
+  // 2. Critical Rule: Missing Input Blocks (< 95% completeness)
+  if (meta.completenessPct < 95.0) {
     return {
       gateStatus: 'BLOCKED_MISSING_INPUT',
       isPublishable: false,
       isSuppressed: true,
-      suppressionReason: `Data completeness is ${meta.completenessPct.toFixed(1)}% (minimum 90.0% required).`,
+      suppressionReason: `Data completeness is ${meta.completenessPct.toFixed(1)}% (minimum 95.0% required).`,
       remediationAdvice: `Upload complete 96-block interval dataset. Current file has ${meta.totalBlocksReceived}/96 blocks.`,
       qualityMetadata: meta,
     };

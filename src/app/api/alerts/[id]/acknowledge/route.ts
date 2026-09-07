@@ -10,7 +10,7 @@ export async function POST(
     const alertId = params.id;
     const adminClient = createAdminClient();
 
-    // 1. Fetch alert to obtain siteId
+    // 1. Fetch alert to obtain siteId and organisationId
     const { data: alert, error: fetchErr } = await adminClient
       .from('alerts')
       .select('*')
@@ -35,41 +35,31 @@ export async function POST(
       return authResult.response;
     }
 
-    // 3. Persist acknowledgement to database
-    const now = new Date().toISOString();
-    const { data: updatedAlert, error: updateErr } = await adminClient
+    // 3. Use atomic RPC for acknowledgement + audit (all-or-nothing)
+    const { data: result, error: rpcError } = await adminClient.rpc('acknowledge_alert_atomic', {
+      p_alert_id: alertId,
+      p_user_id: authResult.user.id,
+      p_user_role: authResult.role,
+      p_org_id: alert.organisation_id,
+    });
+
+    if (rpcError) {
+      return NextResponse.json({ error: 'RPC_FAILED', message: rpcError.message }, { status: 500 });
+    }
+
+    // 4. Fetch updated alert for response
+    const { data: updatedAlert, error: updateFetchErr } = await adminClient
       .from('alerts')
-      .update({
-        status: 'ACKNOWLEDGED',
-        acknowledged_by: authResult.user.id,
-        acknowledged_at: now,
-      })
+      .select('*')
       .eq('id', alertId)
-      .select()
       .single();
 
-    if (updateErr) {
+    if (updateFetchErr) {
       return NextResponse.json(
-        { error: 'DATABASE_ERROR', message: updateErr.message },
+        { error: 'DATABASE_ERROR', message: updateFetchErr.message },
         { status: 500 }
       );
     }
-
-    // 4. Record audit event
-    await adminClient.from('audit_logs').insert({
-      organisation_id: alert.organisation_id,
-      site_id: alert.site_id,
-      actor_id: authResult.user.id,
-      actor_role: authResult.role,
-      action: 'ALERT_ACKNOWLEDGED',
-      entity_type: 'ALERT',
-      entity_id: alertId,
-      details: {
-        alert_title: alert.title,
-        severity: alert.severity,
-        module: alert.module,
-      },
-    });
 
     return NextResponse.json({
       success: true,

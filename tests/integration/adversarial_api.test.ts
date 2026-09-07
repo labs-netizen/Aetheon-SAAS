@@ -19,6 +19,8 @@ import { GET as adminAuditGet } from '@/app/api/admin/audit/route';
 import { GET as complianceGet } from '@/app/api/compliance/route';
 import { POST as reportsGeneratePost } from '@/app/api/reports/generate/route';
 import { GET as reportsDownloadGet } from '@/app/api/reports/[id]/download/route';
+import { POST as checkoutPost } from '@/app/api/billing/checkout/route';
+import { GET as forecastGet } from '@/app/api/forecast/route';
 import { createClient } from '@supabase/supabase-js';
 import CryptoJS from 'crypto-js';
 
@@ -881,4 +883,290 @@ describe('Adversarial API & Server Rejection Suite', () => {
     const dataLines = csvContent.split('\n').filter(line => line.startsWith(testDate));
     expect(dataLines.length).toBe(96);
   });
+
+  // 26. Database Ingestion RPC Consistency: pg_proc has exactly ONE commit_ingestion_transaction
+  it('26. Database Ingestion RPC Consistency: pg_proc has exactly ONE commit_ingestion_transaction with 8 args', async () => {
+    const { data: signatures, error } = await adminClient.rpc('get_commit_ingestion_transaction_signatures');
+    expect(error).toBeNull();
+    expect(signatures).toBeDefined();
+    expect(signatures.length).toBe(1);
+    expect(signatures[0].proname).toBe('commit_ingestion_transaction');
+    expect(signatures[0].pronargs).toBe(8);
+  });
+
+  // 27. Ingestion service_role call: first valid fresh day -> CALIBRATING (not ACTIVE)
+  it('27. Ingestion State Machine: First valid day transitions site to CALIBRATING, not ACTIVE', async () => {
+    const { data: newSite, error: siteErr } = await adminClient
+      .from('sites')
+      .insert({
+        organisation_id: orgAId,
+        name: `Calibration Test Site ${Date.now()}`,
+        state: 'Maharashtra',
+        discom: 'MSEDCL',
+        voltage_category: '33kV',
+        contract_demand_value: 1000,
+        metering_point: 'Main Incomer Feeder',
+        activation_status: 'CONFIGURED',
+      })
+      .select()
+      .single();
+
+    expect(siteErr).toBeNull();
+
+    const opDate = '2026-09-01';
+    const testRows = Array.from({ length: 96 }, (_, i) => ({
+      block_index: i + 1,
+      operating_date: opDate,
+      actual_drawal_kw: 500 + (i % 10) * 10,
+      scheduled_drawal_kw: 500,
+      frequency_hz: 50.0,
+      voltage_v: 33000,
+      power_factor: 0.98,
+      source_amr_status: 'VALID',
+    }));
+
+    const { data: commitRes, error: commitErr } = await adminClient.rpc('commit_ingestion_transaction', {
+      p_site_id: newSite.id,
+      p_filename: 'calibration_day1.csv',
+      p_checksum_sha256: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+      p_uploaded_by: 'c0000000-0000-0000-0000-000000000001',
+      p_rows: testRows,
+      p_freshness_status: 'RECENT',
+      p_actor_role: 'SYSTEM',
+      p_org_id: orgAId,
+    });
+
+    expect(commitErr).toBeNull();
+    expect(commitRes.success).toBe(true);
+    expect(commitRes.activation_status).toBe('CALIBRATING');
+
+    const { data: updatedSite } = await adminClient
+      .from('sites')
+      .select('activation_status')
+      .eq('id', newSite.id)
+      .single();
+
+    expect(updatedSite.activation_status).toBe('CALIBRATING');
+  });
+
+  // 28. Billing payment.failed transaction succeeds and inserts invoice with status FAILED without constraint error
+  it('28. Billing payment.failed: Webhook transaction safely records FAILED status without CHECK violation', async () => {
+    const eventId = `evt_fail_${Date.now()}`;
+    const orderId = `order_fail_${Date.now()}`;
+
+    await adminClient.from('billing_checkout_sessions').insert({
+      provider_reference: orderId,
+      organisation_id: orgAId,
+      product_id: 'GRID_INTELLIGENCE',
+      amount_paise: 1990000,
+      provider_mode: 'RAZORPAY_TEST',
+      status: 'CREATED',
+    });
+
+    const { data: webhookRes, error: webhookErr } = await adminClient.rpc('process_razorpay_webhook_atomic', {
+      p_event_id: eventId,
+      p_event_type: 'payment.failed',
+      p_payload: { order_id: orderId, reason: 'card_declined' },
+      p_org_id: orgAId,
+      p_site_id: null,
+      p_product_id: 'GRID_INTELLIGENCE',
+      p_provider_ref: orderId,
+      p_amount_paise: 1990000,
+    });
+
+    expect(webhookErr).toBeNull();
+    expect(webhookRes.success).toBe(true);
+
+    const { data: invoice } = await adminClient
+      .from('invoices')
+      .select('status, amount_paise')
+      .eq('organisation_id', orgAId)
+      .eq('status', 'FAILED')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    expect(invoice).toBeDefined();
+    expect(invoice.status).toBe('FAILED');
+    expect(invoice.amount_paise).toBe(1990000);
+  });
+
+  // 29. DSM Null/Missing data: POST /api/dsm with null values returns MISSING_DATA and suppresses exposure
+  it('29. DSM Missing Data Safety: Rejects null scheduled/actual values and suppresses exposure (MISSING_DATA)', async () => {
+    const scheduledWithNull = Array.from({ length: 96 }, (_, i) => (i === 10 ? null : 1000));
+    const actualValid = Array.from({ length: 96 }, () => 1050);
+
+    const req = new NextRequest('http://localhost:3000/api/dsm', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        siteId: siteAId,
+        operatingDate: '2026-09-02',
+        scheduledDrawalKw: scheduledWithNull,
+        actualDrawalKw: actualValid,
+        contractDemandKw: 1000,
+      }),
+    });
+
+    const res = await dsmPost(req);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.is_suppressed).toBe(true);
+    expect(json.suppression_reason).toContain('MISSING_DATA');
+    expect(json.summary.estimated_penalty_inr).toBe(0);
+  });
+
+  // 30. DSM Idempotency: POSTing same DSM calculation twice produces no duplicate incidents
+  it('30. DSM Idempotency: Re-evaluating identical DSM parameters produces no duplicate incidents in dsm_incidents', async () => {
+    const dsmDate = `2026-09-${(Date.now() % 28 + 1).toString().padStart(2, '0')}`;
+    const scheduled = Array.from({ length: 96 }, () => 1000);
+    const actual = Array.from({ length: 96 }, (_, i) => (i >= 50 && i <= 55 ? 1300 : 1000));
+
+    const makeReq = () => new NextRequest('http://localhost:3000/api/dsm', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        siteId: siteAId,
+        operatingDate: dsmDate,
+        scheduledDrawalKw: scheduled,
+        actualDrawalKw: actual,
+        contractDemandKw: 1000,
+      }),
+    });
+
+    const res1 = await dsmPost(makeReq());
+    expect(res1.status).toBe(200);
+    const json1 = await res1.json();
+    expect(json1.incidents).toBeDefined();
+
+    const initialIncidentCount = json1.incidents.length;
+
+    const res2 = await dsmPost(makeReq());
+    expect(res2.status).toBe(200);
+
+    const { data: dbIncidents } = await adminClient
+      .from('dsm_incidents')
+      .select('id, start_block, end_block')
+      .eq('site_id', siteAId)
+      .eq('operating_date', dsmDate);
+
+    expect(dbIncidents.length).toBe(initialIncidentCount);
+  });
+
+  // 31. Reports: Unknown report type -> 400 INVALID_REPORT_TYPE
+  it('31. Report Contract Safety: Rejects unknown reportType with HTTP 400 INVALID_REPORT_TYPE', async () => {
+    const req = new NextRequest('http://localhost:3000/api/reports/generate', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        siteId: siteAId,
+        reportType: 'TOTALLY_UNKNOWN_REPORT_TYPE',
+        periodStart: '2026-09-01',
+        periodEnd: '2026-09-01',
+      }),
+    });
+
+    const res = await reportsGeneratePost(req);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe('INVALID_REPORT_TYPE');
+  });
+
+  // 32. Reports: Entitlement check on download (unentitled user/module rejected with 403)
+  it('32. Report Download Entitlement: Download route rejects access if organisation lacks module entitlement (403)', async () => {
+    const { data: rep } = await adminClient
+      .from('report_records')
+      .insert({
+        organisation_id: orgBId,
+        site_id: siteBId,
+        module: 'BESS',
+        report_type: 'BESS_PERFORMANCE_REPORT',
+        period_start: '2026-09-01',
+        period_end: '2026-09-01',
+        title: 'Unauthorized BESS Report',
+        summary: { sample: 1 },
+        quality_status: 'PASSED',
+        model_version: 'v1.0',
+        tariff_version: 'v1.0',
+        rule_version: 'v1.0',
+        download_url: '/api/reports/placeholder/download',
+      })
+      .select()
+      .single();
+
+    const req = new NextRequest(`http://localhost:3000/api/reports/${rep.id}/download`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+      },
+    });
+
+    const res = await reportsDownloadGet(req, { params: { id: rep.id } });
+    expect(res.status).toBe(403);
+  });
+
+  // 33. Compliance: Approved source resolver requires exact voltage category (no fallback to wrong voltage)
+  it('33. Compliance Regulatory Gate: Resolver requires exact voltage match and returns DATA GAP when no matching tariff exists', async () => {
+    const req = new NextRequest(`http://localhost:3000/api/compliance?siteId=${siteAId}&state=Goa&discom=UNKNOWN_DISCOM&voltageCategory=400kV`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+      },
+    });
+
+    const res = await complianceGet(req);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.charges).toBeNull();
+    expect(json.is_data_gap).toBe(true);
+  });
+
+  // 34. Server-Authoritative Quality Gate: Live site in CALIBRATING status suppresses operational forecast
+  it('34. Quality Gate Server Authority: Live site without active calibrated baseline is suppressed by server', async () => {
+    const { data: uncalibratedSite } = await adminClient
+      .from('sites')
+      .insert({
+        organisation_id: orgAId,
+        name: `Uncalibrated Live Site ${Date.now()}`,
+        state: 'Maharashtra',
+        discom: 'MSEDCL',
+        voltage_category: '33kV',
+        contract_demand_value: 1000,
+        metering_point: 'Main Incomer',
+        activation_status: 'CALIBRATING',
+        is_demo: false,
+      })
+      .select()
+      .single();
+
+    await adminClient.from('site_access').insert({
+      site_id: uncalibratedSite.id,
+      user_id: 'c0000000-0000-0000-0000-000000000001',
+    });
+
+    const req = new NextRequest(`http://localhost:3000/api/forecast?siteId=${uncalibratedSite.id}&operatingDate=2026-09-05`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+      },
+    });
+
+    const res = await forecastGet(req);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.is_suppressed).toBe(true);
+    expect(json.suppression_reason).toContain('CALIBRATING');
+    expect(json.blocks).toHaveLength(0);
+    expect(json.persisted).toBe(false);
+  });
 });
+

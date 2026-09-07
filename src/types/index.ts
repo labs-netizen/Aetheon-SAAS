@@ -85,6 +85,24 @@ export type ValueClassification =
   | 'MODELLED'
   | 'ESTIMATED';
 
+// 11. Invoice Statuses
+export type InvoiceStatus =
+  | 'DRAFT'
+  | 'OPEN'
+  | 'PAID'
+  | 'UNCOLLECTIBLE'
+  | 'VOID'
+  | 'FAILED';
+
+// 12. Canonical Report Types
+export type ReportType =
+  | 'GRID_DAILY_BRIEF'
+  | 'GRID_MONTHLY_REPORT'
+  | 'DSM_MONTHLY_REVIEW'
+  | 'BESS_PERFORMANCE_REPORT'
+  | 'RENEWABLES_RECONCILIATION'
+  | 'COMPLIANCE_AUDIT';
+
 // Core Entities
 export interface Organisation {
   id: string;
@@ -131,6 +149,63 @@ export interface Membership {
   is_active: boolean;
   expires_at?: string | null;
 }
+
+export type ProductId =
+  | 'GRID_INTELLIGENCE'
+  | 'OA_COMPLIANCE'
+  | 'DSM_RISK'
+  | 'BESS_ARBITRAGE'
+  | 'RENEWABLE_PORTFOLIO';
+
+export const PRODUCTS: Record<ProductId, {
+  id: ProductId;
+  name: string;
+  description: string;
+  basePricePaise: number;
+  billingInterval: 'MONTHLY';
+  availabilityStatus: ProductAvailabilityStatus;
+}> = {
+  GRID_INTELLIGENCE: {
+    id: 'GRID_INTELLIGENCE',
+    name: 'Grid Intelligence Monitor',
+    description: 'Day-ahead 96-block demand forecasting and IEX DAM/RTM price signals.',
+    basePricePaise: 1990000,
+    billingInterval: 'MONTHLY',
+    availabilityStatus: 'INTERNAL_VALIDATION',
+  },
+  OA_COMPLIANCE: {
+    id: 'OA_COMPLIANCE',
+    name: 'Open Access Regulatory & Tariff Compliance',
+    description: 'Real-time landed cost tracking, DISCOM cross-subsidy and banking rules.',
+    basePricePaise: 1490000,
+    billingInterval: 'MONTHLY',
+    availabilityStatus: 'INTERNAL_VALIDATION',
+  },
+  DSM_RISK: {
+    id: 'DSM_RISK',
+    name: 'Deviation Settlement Mechanism (DSM) Risk Engine',
+    description: 'CERC 2024 band monitoring, real-time frequency-linked penalty tracking.',
+    basePricePaise: 2990000,
+    billingInterval: 'MONTHLY',
+    availabilityStatus: 'INTERNAL_VALIDATION',
+  },
+  BESS_ARBITRAGE: {
+    id: 'BESS_ARBITRAGE',
+    name: 'BESS Techno-Commercial Dispatch Optimizer',
+    description: 'Dynamic arbitrage dispatch solver with battery degradation constraints.',
+    basePricePaise: 4990000,
+    billingInterval: 'MONTHLY',
+    availabilityStatus: 'INTERNAL_VALIDATION',
+  },
+  RENEWABLE_PORTFOLIO: {
+    id: 'RENEWABLE_PORTFOLIO',
+    name: 'Renewable Portfolio & Generation Reconciliation',
+    description: 'Solar/wind telemetry reconciliation and verified avoided emission calculations.',
+    basePricePaise: 2490000,
+    billingInterval: 'MONTHLY',
+    availabilityStatus: 'DEMO',
+  },
+};
 
 export interface Product {
   id: string;

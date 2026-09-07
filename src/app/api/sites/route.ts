@@ -22,11 +22,9 @@ export async function POST(req: NextRequest) {
       load_class,
     } = body;
 
-    const effectiveVoltage = voltageCategory || voltage_category || '33kV';
-    const effectiveDemand = Number(contractDemandValue || contract_demand_value || 1000);
-    const effectiveUnit = contractDemandUnit || contract_demand_unit || 'kVA';
-    const effectiveMetering = meteringPoint || metering_point || 'Main 33kV Incomer Feeder';
-    const effectiveLoadClass = loadClass || load_class || 'Industrial C&I';
+    const rawVoltage = voltageCategory || voltage_category;
+    const rawDemand = contractDemandValue !== undefined ? contractDemandValue : contract_demand_value;
+    const rawMetering = meteringPoint || metering_point;
 
     if (!organisationId || !name || !state || !discom) {
       return NextResponse.json(
@@ -37,6 +35,22 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    if (!rawVoltage || rawDemand === undefined || rawDemand === null || !rawMetering) {
+      return NextResponse.json(
+        {
+          error: 'MISSING_ELECTRICAL_FIELDS',
+          message: 'voltage category, contract demand, and metering point are mandatory electrical configuration fields.',
+        },
+        { status: 400 }
+      );
+    }
+
+    const effectiveVoltage = String(rawVoltage).trim();
+    const effectiveDemand = Number(rawDemand);
+    const effectiveUnit = contractDemandUnit || contract_demand_unit || 'kVA';
+    const effectiveMetering = String(rawMetering).trim();
+    const effectiveLoadClass = (loadClass || load_class || 'Industrial C&I').trim();
 
     if (isNaN(effectiveDemand) || effectiveDemand <= 0) {
       return NextResponse.json(
@@ -71,8 +85,8 @@ export async function POST(req: NextRequest) {
         voltage_category: effectiveVoltage,
         contract_demand_value: effectiveDemand,
         contract_demand_unit: effectiveUnit,
-        metering_point: effectiveMetering.trim(),
-        load_class: effectiveLoadClass.trim(),
+        metering_point: effectiveMetering,
+        load_class: effectiveLoadClass,
         timezone: 'Asia/Kolkata',
         activation_status: 'CONFIGURED',
         activation_reason: 'Initial site electrical profile configured',
@@ -89,23 +103,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Grant site access to the creating user
+    // 3. Grant site access to the creating user (fail-closed)
     const { error: accessError } = await adminClient
       .from('site_access')
       .insert({
         site_id: site.id,
         user_id: authResult.user.id,
         granted_by: authResult.user.id,
-      })
-      .select()
-      .maybeSingle();
+      });
 
     if (accessError) {
-      console.warn('Site access grant notice:', accessError.message);
+      await adminClient.from('sites').delete().eq('id', site.id);
+      return NextResponse.json(
+        { error: 'SITE_ACCESS_FAILED', message: `Failed to create site access grant: ${accessError.message}` },
+        { status: 500 }
+      );
     }
 
-    // 4. Initial Site Activation History Record
-    await adminClient
+    // 4. Initial Site Activation History Record (fail-closed)
+    const { error: historyError } = await adminClient
       .from('site_activation_history')
       .insert({
         site_id: site.id,
@@ -114,6 +130,32 @@ export async function POST(req: NextRequest) {
         reason: 'Site electrical parameters initialized via onboarding wizard',
         changed_by: authResult.user.id,
       });
+
+    if (historyError) {
+      await adminClient.from('sites').delete().eq('id', site.id);
+      return NextResponse.json(
+        { error: 'ACTIVATION_HISTORY_FAILED', message: `Failed to persist activation history: ${historyError.message}` },
+        { status: 500 }
+      );
+    }
+
+    // 5. Audit log
+    await adminClient.from('audit_logs').insert({
+      organisation_id: organisationId,
+      site_id: site.id,
+      actor_id: authResult.user.id,
+      actor_role: authResult.role,
+      action: 'SITE_CREATED',
+      entity_type: 'SITE',
+      entity_id: site.id,
+      details: {
+        name: site.name,
+        state: site.state,
+        discom: site.discom,
+        voltage_category: site.voltage_category,
+        contract_demand_value: site.contract_demand_value,
+      },
+    });
 
     return NextResponse.json(
       {

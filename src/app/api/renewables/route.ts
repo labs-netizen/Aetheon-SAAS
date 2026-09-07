@@ -59,9 +59,7 @@ export async function POST(req: NextRequest) {
       operatingDate,
       installedCapacityKw: inputCapacity,
       measuredGenerationKwh: inputMeasured,
-      gridEmissionFactorTco2ePerMwh,
       tariffVersion,
-      emissionFactorVersion,
     } = body;
 
     if (!siteId || !operatingDate) {
@@ -83,14 +81,28 @@ export async function POST(req: NextRequest) {
 
     const adminClient = createAdminClient();
 
-    // Resolve installedCapacityKw from renewable_assets if not passed
+    // 2. Fetch authoritative site configuration
+    const { data: siteRecord, error: siteErr } = await adminClient
+      .from('sites')
+      .select('id, is_demo')
+      .eq('id', siteId)
+      .single();
+
+    if (siteErr || !siteRecord) {
+      return NextResponse.json({ error: 'SITE_NOT_FOUND', message: 'Site not found.' }, { status: 404 });
+    }
+
+    const isDemo = Boolean(siteRecord.is_demo);
+
+    // 3. Resolve installedCapacityKw
     let effectiveCapacity = inputCapacity;
-    if (!effectiveCapacity) {
+    if (!effectiveCapacity || !isDemo) {
       const { data: asset } = await adminClient
         .from('renewable_assets')
         .select('installed_capacity_kw')
         .eq('site_id', siteId)
         .maybeSingle();
+
       if (asset?.installed_capacity_kw) {
         effectiveCapacity = Number(asset.installed_capacity_kw);
       }
@@ -103,59 +115,92 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Resolve 96-block measured generation
+    // 4. Resolve 96-block measured generation
     let blocks96: number[] = [];
-    if (Array.isArray(inputMeasured) && inputMeasured.length === 96) {
-      blocks96 = inputMeasured.map(Number);
-    } else {
-      // Query interval_data_96 for measured solar generation
-      const { data: intervals } = await adminClient
+    if (!isDemo) {
+      // In live customer mode, ignore browser-provided measured arrays; load from interval_data_96
+      const { data: intervals, error: intErr } = await adminClient
         .from('interval_data_96')
         .select('block_index, generation_solar_kw')
         .eq('site_id', siteId)
         .eq('operating_date', operatingDate)
         .order('block_index', { ascending: true });
 
-      if (intervals && intervals.length === 96) {
-        blocks96 = intervals.map((i) => Number(i.generation_solar_kw || 0));
-      } else if (typeof inputMeasured === 'number') {
-        // Only permit scalar curve synthesis if site is explicitly demo
-        const { data: siteRecord } = await adminClient
-          .from('sites')
-          .select('is_demo')
-          .eq('id', siteId)
-          .maybeSingle();
+      if (intErr || !intervals || intervals.length !== 96) {
+        return NextResponse.json(
+          {
+            error: 'DATA_GAP',
+            message: 'Live mode requires exactly 96 persisted generation intervals in interval_data_96. Telemetry missing or incomplete.',
+          },
+          { status: 422 }
+        );
+      }
 
-        if (siteRecord?.is_demo) {
-          const peakKw = (inputMeasured / 5.0); // 5 effective solar hours
-          blocks96 = Array.from({ length: 96 }, (_, b) => {
-            if (b >= 24 && b <= 72) {
-              const t = (b - 24) / 48.0;
-              return Math.max(0, Number((peakKw * Math.sin(t * Math.PI) * 0.25).toFixed(2)));
-            }
-            return 0;
-          });
-        } else {
-          return NextResponse.json(
-            {
-              error: 'DATA_GAP',
-              message: 'Live mode requires 96-block measured solar interval data. Synthetic scalar curve expansion is prohibited for customer assets.',
-            },
-            { status: 422 }
-          );
-        }
+      const hasNullGen = intervals.some(
+        (i) => i.generation_solar_kw === null || i.generation_solar_kw === undefined || !Number.isFinite(Number(i.generation_solar_kw))
+      );
+
+      if (hasNullGen) {
+        return NextResponse.json(
+          {
+            error: 'DATA_GAP',
+            message: 'Persisted generation intervals contain null or invalid values. Complete 96-block series required.',
+          },
+          { status: 422 }
+        );
+      }
+
+      blocks96 = intervals.map((i) => Number(i.generation_solar_kw));
+    } else {
+      // Demo mode: accept client array or synthesize
+      if (Array.isArray(inputMeasured) && inputMeasured.length === 96) {
+        blocks96 = inputMeasured.map(Number);
+      } else if (typeof inputMeasured === 'number') {
+        const peakKw = inputMeasured / 5.0;
+        blocks96 = Array.from({ length: 96 }, (_, b) => {
+          if (b >= 24 && b <= 72) {
+            const t = (b - 24) / 48.0;
+            return Math.max(0, Number((peakKw * Math.sin(t * Math.PI) * 0.25).toFixed(2)));
+          }
+          return 0;
+        });
       } else {
         return NextResponse.json(
           {
             error: 'MISSING_DATA',
-            message: '96-block measured solar generation data is required. Ingest AMR intervals or supply 96-element measuredGenerationKwh array.',
+            message: '96-block measured solar generation data is required.',
           },
           { status: 422 }
         );
       }
     }
 
-    // 2. Call FastAPI analytics microservice
+    // 5. Resolve verified emission factor from database
+    const operatingYear = parseInt(operatingDate.substring(0, 4), 10) || 2026;
+    const { data: efRecord } = await adminClient
+      .from('emission_factors')
+      .select('*')
+      .eq('is_verified', true)
+      .lte('effective_year', operatingYear)
+      .order('effective_year', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!isDemo && !efRecord) {
+      return NextResponse.json(
+        {
+          error: 'DATA_GAP',
+          message: 'DATA GAP: No verified emission factor record found in database for operating period.',
+        },
+        { status: 422 }
+      );
+    }
+
+    const gridEmissionFactor = efRecord ? Number(efRecord.factor_value_tco2e_per_mwh) : (isDemo ? 0.716 : 0.716);
+    const efSource = efRecord?.source_name || (isDemo ? 'Central Electricity Authority (CEA) CO2 Baseline Database' : 'UNVERIFIED_SOURCE');
+    const efVersion = efRecord?.source_version || (isDemo ? 'v19.0' : 'UNVERIFIED');
+
+    // 6. Call FastAPI analytics microservice
     let reconciliationResult: any;
     try {
       reconciliationResult = await fetchRenewableReconciliation({
@@ -163,7 +208,7 @@ export async function POST(req: NextRequest) {
         operatingDate,
         installedCapacityKw: effectiveCapacity,
         measuredGenerationKwh: blocks96,
-        gridEmissionFactorTco2ePerMwh: gridEmissionFactorTco2ePerMwh || 0.716,
+        gridEmissionFactorTco2ePerMwh: gridEmissionFactor,
       });
     } catch (apiErr) {
       return NextResponse.json(
@@ -175,16 +220,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Section 13: Ensure data classification metadata is explicitly attached
+    // 7. Attach authoritative classification metadata
     reconciliationResult.classification = {
       generation: 'MEASURED',
       modelled_expected: 'MODELLED',
       avoided_emissions: 'ESTIMATED',
       tariff_version: tariffVersion || 'MERC_GEOA_2024_DEMO',
-      emission_factor_version: emissionFactorVersion || 'CEA_CO2_BASELINE_v19',
+      emission_factor_source: efSource,
+      emission_factor_version: efVersion,
+      emission_factor_value: gridEmissionFactor,
+      operating_period: operatingDate,
     };
 
-    // 4. Persist reconciliation to renewable_generation_ledger and record quality gate evaluation via admin client
+    // 8. Persist reconciliation to renewable_generation_ledger safely fail-closed
     try {
       const { error: ledgerError } = await adminClient
         .from('renewable_generation_ledger')
@@ -196,7 +244,7 @@ export async function POST(req: NextRequest) {
             total_modelled_generation_kwh: reconciliationResult.total_modelled_generation_kwh,
             performance_ratio_pct: reconciliationResult.performance_ratio_pct,
             avoided_emissions_tco2e: reconciliationResult.avoided_emissions_tco2e,
-            emission_factor_source: reconciliationResult.emission_factor_source || 'CEA_CO2_BASELINE_DB_v19_DEMO',
+            emission_factor_source: `${efSource} (${efVersion})`,
             reconciliation_status: reconciliationResult.reconciliation_status || 'RECONCILED',
           },
           { onConflict: 'site_id,operating_date' }

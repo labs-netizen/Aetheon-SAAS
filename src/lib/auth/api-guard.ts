@@ -80,7 +80,7 @@ export async function authorizeApiRequest(
       user = {
         id: authData.user.id,
         email: authData.user.email,
-        is_platform_admin: Boolean(authData.user.user_metadata?.is_platform_admin),
+        is_platform_admin: false,
       };
     }
   }
@@ -93,7 +93,7 @@ export async function authorizeApiRequest(
         user = {
           id: authData.user.id,
           email: authData.user.email,
-          is_platform_admin: Boolean(authData.user.user_metadata?.is_platform_admin),
+          is_platform_admin: false,
         };
       }
     } catch {
@@ -101,11 +101,20 @@ export async function authorizeApiRequest(
     }
   }
 
+  if (user) {
+    const { data: profile } = await adminClient
+      .from('user_profiles')
+      .select('is_platform_admin')
+      .eq('id', user.id)
+      .maybeSingle();
+    user.is_platform_admin = Boolean(profile?.is_platform_admin);
+  }
+
   // 2. Handle Unauthenticated Requests
   if (!user) {
     // If demo mode is active and the requested site/org is a demo site/org
     const isTargetingDemo =
-      (options.siteId && DEMO_SITE_IDS.includes(options.siteId)) ||
+      (options.siteId && siteIsDemo) ||
       (options.organisationId && DEMO_ORG_IDS.includes(options.organisationId));
 
     if (isDemoModeEnabled && isTargetingDemo) {
@@ -153,10 +162,11 @@ export async function authorizeApiRequest(
 
   // 3. Resolve Organisation and Site Scope
   let resolvedOrgId = options.organisationId;
+  let siteIsDemo = false;
   if (options.siteId) {
     const { data: siteData, error: siteError } = await adminClient
       .from('sites')
-      .select('id, organisation_id, name, state, discom')
+      .select('id, organisation_id, name, state, discom, is_demo')
       .eq('id', options.siteId)
       .maybeSingle();
 
@@ -171,6 +181,7 @@ export async function authorizeApiRequest(
     }
 
     resolvedOrgId = siteData.organisation_id;
+    siteIsDemo = Boolean(siteData.is_demo);
   }
 
   if (!resolvedOrgId) {
@@ -291,6 +302,6 @@ export async function authorizeApiRequest(
     organisationId: resolvedOrgId,
     siteId: options.siteId,
     role: userRole,
-    isDemo: false,
+    isDemo: siteIsDemo,
   };
 }

@@ -2,14 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { billingProvider } from '@/features/billing/razorpayAdapter';
-
-const PRODUCT_PRICES_PAISE: Record<string, number> = {
-  GRID_INTELLIGENCE: 1990000,
-  OA_COMPLIANCE: 1490000,
-  DSM_RISK: 2990000,
-  BESS_ARBITRAGE: 4990000,
-  RENEWABLE_PORTFOLIO: 2490000,
-};
+import { PRODUCTS, type ProductId } from '@/types';
 
 export async function POST(req: NextRequest) {
   try {
@@ -33,21 +26,74 @@ export async function POST(req: NextRequest) {
       return authResult.response;
     }
 
-    const amountPaise = PRODUCT_PRICES_PAISE[productId] || 1990000;
+    // 2. Validate product against canonical catalogue (reject unknown product IDs, never default to Grid)
+    const productConfig = PRODUCTS[productId as ProductId];
+    if (!productConfig) {
+      return NextResponse.json(
+        {
+          error: 'INVALID_PRODUCT_ID',
+          message: `Unknown product ID '${productId}'. Must be one of: ${Object.keys(PRODUCTS).join(', ')}`,
+        },
+        { status: 400 }
+      );
+    }
 
-    // 2. Delegate to billing provider
-    const session = await billingProvider.createCheckout({
-      organisationId,
-      siteId,
-      productId,
-      amountPaise,
-      customerEmail: authResult.user.email || 'billing@aetheon.in',
-      customerName: 'Aetheon Customer',
-    });
-
-    // 3. Persist authoritative local provider reference mapping
+    const amountPaise = productConfig.basePricePaise;
     const adminClient = createAdminClient();
-    await adminClient
+
+    // 3. If siteId supplied, prove site belongs to organisationId
+    if (siteId) {
+      const { data: siteRecord, error: siteErr } = await adminClient
+        .from('sites')
+        .select('id, organisation_id')
+        .eq('id', siteId)
+        .maybeSingle();
+
+      if (siteErr || !siteRecord || siteRecord.organisation_id !== organisationId) {
+        return NextResponse.json(
+          {
+            error: 'INVALID_SITE',
+            message: `Site '${siteId}' does not exist or does not belong to organisation '${organisationId}'.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 4. Delegate to billing provider
+    let session: any;
+    try {
+      session = await billingProvider.createCheckout({
+        organisationId,
+        siteId,
+        productId,
+        amountPaise,
+        customerEmail: authResult.user.email || 'billing@aetheon.in',
+        customerName: 'Aetheon Customer',
+      });
+    } catch (providerErr) {
+      return NextResponse.json(
+        {
+          error: 'CHECKOUT_PROVIDER_ERROR',
+          message: 'Failed to create checkout order with payment provider',
+          details: providerErr instanceof Error ? providerErr.message : String(providerErr),
+        },
+        { status: 502 }
+      );
+    }
+
+    if (!session || !session.orderId) {
+      return NextResponse.json(
+        {
+          error: 'CHECKOUT_PROVIDER_ERROR',
+          message: 'Payment provider did not return a valid order session',
+        },
+        { status: 502 }
+      );
+    }
+
+    // 5. Persist authoritative local provider reference mapping fail-closed
+    const { error: insertErr } = await adminClient
       .from('billing_checkout_sessions')
       .insert({
         provider_reference: session.orderId,
@@ -58,6 +104,18 @@ export async function POST(req: NextRequest) {
         provider_mode: session.billingMode,
         status: 'CREATED',
       });
+
+    if (insertErr) {
+      console.error('Failed to persist checkout session:', insertErr);
+      return NextResponse.json(
+        {
+          error: 'PERSISTENCE_FAILED',
+          message: 'Failed to record billing checkout session in database',
+          details: insertErr.message,
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,

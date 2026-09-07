@@ -34,24 +34,24 @@ describe('Central Publication Quality Gate', () => {
     expect(outcome.remediationAdvice).toBeDefined();
   });
 
-  it('should hard-suppress recommendations when blocks are missing (<90% completeness)', () => {
+  it('should hard-suppress recommendations when blocks are missing (<95% completeness)', () => {
     const missingMeta: QualityMetadata = {
       ...baseMeta,
-      completenessPct: 75.0,
-      totalBlocksReceived: 72,
+      completenessPct: 94.0,
+      totalBlocksReceived: 90,
     };
     const outcome = evaluateQualityGate(missingMeta);
     expect(outcome.gateStatus).toBe('BLOCKED_MISSING_INPUT');
     expect(outcome.isPublishable).toBe(false);
     expect(outcome.isSuppressed).toBe(true);
-    expect(outcome.suppressionReason).toContain('75.0%');
+    expect(outcome.suppressionReason).toContain('94.0%');
   });
 
-  it('should allow publication with warning if completeness is between 90% and 99%', () => {
+  it('should allow publication with warning if completeness is between 95% and 99%', () => {
     const warningMeta: QualityMetadata = {
       ...baseMeta,
-      completenessPct: 95.0,
-      totalBlocksReceived: 91,
+      completenessPct: 96.0,
+      totalBlocksReceived: 92,
     };
     const outcome = evaluateQualityGate(warningMeta);
     expect(outcome.gateStatus).toBe('PUBLISHABLE_WITH_WARNING');

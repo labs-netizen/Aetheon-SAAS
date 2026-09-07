@@ -27,6 +27,7 @@ import { evaluateQualityGate } from '@/features/quality/qualityGate';
 import { getBlockTimes } from '@/lib/dates/blocks96';
 import { formatPower, formatEnergy, formatPercentage } from '@/lib/units/energy';
 import { formatPaiseToInr } from '@/lib/units/currency';
+import { PRODUCTS } from '@/types';
 
 export default function GridIntelligencePage() {
   const { currentSite, isEntitled } = useSite();
@@ -146,17 +147,39 @@ export default function GridIntelligencePage() {
     });
   }, [forecastResult, currentSite, forecastBlocks.length]);
 
+  const isDemo = Boolean(currentSite?.is_demo);
+  const hasValidForecast = Boolean(forecastResult && Array.isArray(forecastResult.blocks) && forecastResult.blocks.length > 0);
+
   // Cost Explorer calculations based on server-returned blocks
   const explorerCalculations = useMemo(() => {
+    if (!isDemo && (!hasValidForecast || forecastBlocks.length === 0)) {
+      return {
+        totalDailyKwh: 0,
+        baselineCostPaise: 0,
+        scenarioCostPaise: 0,
+        dailyAvoidedPaise: 0,
+        monthlyAvoidedPaise: 0,
+        landedUnitCostInr: 'DATA GAP',
+        isDataGap: true,
+      };
+    }
+
     const totalDailyKwh = forecastBlocks.reduce((acc, b) => acc + (b.demand_kw || 0) * 0.25, 0);
-    const baselineCostPaise = Math.round(totalDailyKwh * 7.85 * 100);
 
     let avoidedKwh = 0;
-    if (solarEnabled) avoidedKwh += 4200;
-    if (bessEnabled) avoidedKwh += 1500;
+    if (solarEnabled) {
+      const solarKwhFromBlocks = forecastBlocks.reduce((acc, b) => acc + (b.solar_kw || 0) * 0.25, 0);
+      avoidedKwh += isDemo ? 4200 : solarKwhFromBlocks;
+    }
+    if (bessEnabled) {
+      avoidedKwh += isDemo ? 1500 : 0;
+    }
+
+    const baselineTariff = 7.85;
+    const baselineCostPaise = Math.round(totalDailyKwh * baselineTariff * 100);
 
     const scenarioKwhFromGrid = Math.max(0, totalDailyKwh - avoidedKwh);
-    const gridTariffRate = oaEnabled ? 5.20 : 7.85;
+    const gridTariffRate = oaEnabled ? (isDemo ? 5.20 : 5.80) : baselineTariff;
     const scenarioCostPaise = Math.round(scenarioKwhFromGrid * gridTariffRate * 100);
 
     const dailyAvoidedPaise = Math.max(0, baselineCostPaise - scenarioCostPaise);
@@ -169,8 +192,9 @@ export default function GridIntelligencePage() {
       dailyAvoidedPaise,
       monthlyAvoidedPaise,
       landedUnitCostInr: totalDailyKwh > 0 ? (scenarioCostPaise / (totalDailyKwh * 100)).toFixed(2) : '0.00',
+      isDataGap: false,
     };
-  }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled]);
+  }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast]);
 
   const handleExportCsv = () => {
     const headers = ['block_index', 'start_time', 'forecast_demand_kw', 'forecast_price_inr_per_mwh', 'solar_generation_kw', 'is_high_cost'];
@@ -187,16 +211,16 @@ export default function GridIntelligencePage() {
     document.body.removeChild(link);
   };
 
-  const peakBlock = forecastResult?.peak_demand_block || 38;
-  const peakKw = forecastResult?.peak_demand_kw || 2180.5;
-  const avgPrice = forecastResult?.average_price_inr_per_mwh || 4560;
+  const peakBlock = hasValidForecast ? forecastResult.peak_demand_block : (isDemo ? 38 : null);
+  const peakKw = hasValidForecast ? forecastResult.peak_demand_kw : (isDemo ? 2180.5 : null);
+  const avgPrice = hasValidForecast ? forecastResult.average_price_inr_per_mwh : (isDemo ? 4560 : null);
 
   return (
     <ModuleGate
       productId="GRID_INTELLIGENCE"
       productName="Grid Intelligence Monitor"
       description="Algorithmic Day-Ahead 96-block price & demand forecast, high-cost window alerts, and scenario cost explorer."
-      basePricePaise={4500000}
+      basePricePaise={PRODUCTS.GRID_INTELLIGENCE.basePricePaise}
       isEntitled={isEntitled('GRID_INTELLIGENCE')}
     >
       <div className="space-y-6">
@@ -235,7 +259,11 @@ export default function GridIntelligencePage() {
         {forecastError && (
           <div className="p-3 rounded bg-amber-950/40 border border-amber-800 text-xs text-amber-300 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>FastAPI live forecast unavailable ({forecastError}); rendering validated internal baseline.</span>
+            <span>
+              {isDemo
+                ? `FastAPI live forecast unavailable (${forecastError}); rendering validated internal baseline.`
+                : `Operational forecast unavailable (${forecastError}): DATA GAP / FORECAST UNAVAILABLE.`}
+            </span>
           </div>
         )}
 
@@ -253,40 +281,40 @@ export default function GridIntelligencePage() {
               <Card variant="industrial">
                 <span className="text-xs text-slate-400 block mb-1">Peak Demand Block</span>
                 <div className="text-xl font-bold font-mono text-slate-100">
-                  Block {peakBlock} ({getBlockTimes(peakBlock).startTime} - {getBlockTimes(peakBlock).endTime})
+                  {peakBlock !== null ? `Block ${peakBlock} (${getBlockTimes(peakBlock).startTime} - ${getBlockTimes(peakBlock).endTime})` : 'DATA GAP'}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Server projected demand: <strong>{formatPower(peakKw)}</strong>
+                  Server projected demand: <strong>{peakKw !== null ? formatPower(peakKw) : 'FORECAST UNAVAILABLE'}</strong>
                 </p>
               </Card>
 
               <Card variant="industrial">
                 <span className="text-xs text-slate-400 block mb-1">Average Daily Clearing Price</span>
                 <div className="text-xl font-bold font-mono text-sky-400">
-                  ₹{avgPrice.toLocaleString('en-IN')} / MWh
+                  {avgPrice !== null ? `₹${avgPrice.toLocaleString('en-IN')} / MWh` : 'DATA GAP'}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Model: <span className="font-mono text-[10px] text-teal-300">{forecastResult?.model_version || 'DEMO_BASELINE_v1.0'}</span>
+                  Model: <span className="font-mono text-[10px] text-teal-300">{avgPrice !== null ? (forecastResult?.model_version || (isDemo ? 'DEMO_BASELINE_v1.0' : 'INTERNAL_VALIDATION')) : 'FORECAST UNAVAILABLE'}</span>
                 </p>
               </Card>
 
               <Card variant="industrial">
                 <span className="text-xs text-slate-400 block mb-1">Highest Cost Window</span>
                 <div className="text-xl font-bold font-mono text-rose-400">
-                  Blocks 72–88 (18:00 - 22:00)
+                  {hasValidForecast || isDemo ? 'Blocks 72–88 (18:00 - 22:00)' : 'DATA GAP'}
                 </div>
                 <p className="text-xs text-rose-300 mt-1">
-                  Clearing price: <strong>₹7,800 - ₹9,600/MWh</strong>
+                  Clearing price: <strong>{hasValidForecast || isDemo ? '₹7,800 - ₹9,600/MWh' : 'FORECAST UNAVAILABLE'}</strong>
                 </p>
               </Card>
 
               <Card variant="industrial">
                 <span className="text-xs text-slate-400 block mb-1">Avoided Cost Opportunity</span>
                 <div className="text-xl font-bold font-mono text-teal-300">
-                  {formatPaiseToInr(explorerCalculations.dailyAvoidedPaise)} / day
+                  {explorerCalculations.isDataGap ? 'DATA GAP' : `${formatPaiseToInr(explorerCalculations.dailyAvoidedPaise)} / day`}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Monthly potential: <strong>{formatPaiseToInr(explorerCalculations.monthlyAvoidedPaise)}</strong>
+                  Monthly potential: <strong>{explorerCalculations.isDataGap ? 'CONFIGURATION REQUIRED' : formatPaiseToInr(explorerCalculations.monthlyAvoidedPaise)}</strong>
                 </p>
               </Card>
             </div>
@@ -461,18 +489,20 @@ export default function GridIntelligencePage() {
                         <div className="p-4 rounded-md bg-slate-950 border border-slate-800">
                           <span className="text-xs text-slate-400 block mb-1">Baseline Monthly Energy Bill</span>
                           <div className="text-xl font-bold font-mono text-slate-300">
-                            {formatPaiseToInr(explorerCalculations.baselineCostPaise * 30)}
+                            {explorerCalculations.isDataGap ? 'CONFIGURATION REQUIRED' : formatPaiseToInr(explorerCalculations.baselineCostPaise * 30)}
                           </div>
-                          <span className="text-[10px] text-slate-500 block mt-1">100% DISCOM sourcing @ ₹7.85/kWh</span>
+                          <span className="text-[10px] text-slate-500 block mt-1">
+                            {explorerCalculations.isDataGap ? 'DATA GAP / INSUFFICIENT TELEMETRY' : '100% DISCOM sourcing @ ₹7.85/kWh'}
+                          </span>
                         </div>
 
                         <div className="p-4 rounded-md bg-slate-950 border border-slate-800">
                           <span className="text-xs text-slate-400 block mb-1">Scenario Projected Monthly Bill</span>
                           <div className="text-xl font-bold font-mono text-emerald-400">
-                            {formatPaiseToInr(explorerCalculations.scenarioCostPaise * 30)}
+                            {explorerCalculations.isDataGap ? 'CONFIGURATION REQUIRED' : formatPaiseToInr(explorerCalculations.scenarioCostPaise * 30)}
                           </div>
                           <span className="text-[10px] text-emerald-300 block mt-1">
-                            Effective unit rate: ₹{explorerCalculations.landedUnitCostInr}/kWh
+                            {explorerCalculations.isDataGap ? 'DATA GAP' : `Effective unit rate: ₹${explorerCalculations.landedUnitCostInr}/kWh`}
                           </span>
                         </div>
                       </div>
@@ -483,7 +513,7 @@ export default function GridIntelligencePage() {
                           <span className="text-[11px] text-slate-300">Summed across solar self-consumption and battery arbitrage.</span>
                         </div>
                         <div className="text-2xl font-bold font-mono text-teal-400">
-                          {formatPaiseToInr(explorerCalculations.monthlyAvoidedPaise)} / mo
+                          {explorerCalculations.isDataGap ? 'DATA GAP' : `${formatPaiseToInr(explorerCalculations.monthlyAvoidedPaise)} / mo`}
                         </div>
                       </div>
                     </div>
