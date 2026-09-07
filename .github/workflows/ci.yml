@@ -37,13 +37,17 @@ jobs:
         run: |
           supabase start
           supabase db reset
+          supabase status -o env >> $GITHUB_ENV
+
+      - name: Configure Test Environment from Supabase
+        run: |
+          echo "NEXT_PUBLIC_SUPABASE_URL=${API_URL}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${ANON_KEY}" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_ROLE_KEY=${SERVICE_ROLE_KEY}" >> $GITHUB_ENV
+          echo "DATABASE_URL=${DB_URL}" >> $GITHUB_ENV
 
       - name: Run Unit, RLS & Adversarial API Tests
         run: npm test
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM0NDk2MDB9.CRXP_placeholder_anon_for_ci
-          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzQ0OTYwMH0.CRXP_placeholder_service_for_ci
 
       - name: Next.js Production Build
         run: npm run build

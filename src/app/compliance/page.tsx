@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ShieldCheck,
   Calendar,
@@ -9,6 +9,7 @@ import {
   Scale,
   Clock,
   ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -20,71 +21,109 @@ import { ModuleGate } from '@/components/shared/ModuleGate';
 export default function CompliancePage() {
   const { currentSite, isEntitled } = useSite();
   const [filterState, setFilterState] = useState('ALL');
+  const [complianceData, setComplianceData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [complianceError, setComplianceError] = useState<string | null>(null);
 
-  const regulatorySources = [
-    {
-      id: 'reg-01',
-      title: 'MSEDCL Multi-Year Tariff (MYT) Order FY 2024-25',
-      jurisdiction: 'MERC',
-      state: 'Maharashtra',
-      effectiveDate: '2024-04-01',
-      version: 'MERC_MYT_2024_VALIDATED',
-      status: 'APPROVED',
-      isDemo: false,
-    },
-    {
-      id: 'reg-02',
-      title: 'Draft Green Energy Open Access (GEOA) Regulations 2024',
-      jurisdiction: 'MERC',
-      state: 'Maharashtra',
-      effectiveDate: '2024-10-01',
-      version: 'MERC_GEOA_DRAFT_2024',
-      status: 'REVIEW_PENDING',
-      isDemo: true,
-    },
-    {
-      id: 'reg-03',
-      title: 'CERC Deviation Settlement Mechanism 2nd Amendment',
-      jurisdiction: 'CERC',
-      state: 'National',
-      effectiveDate: '2024-02-15',
-      version: 'CERC_DSM_AMEND2_2024',
-      status: 'APPROVED',
-      isDemo: false,
-    },
-  ];
+  useEffect(() => {
+    if (!currentSite?.id) return;
+    let isMounted = true;
+    setIsLoading(true);
+    setComplianceError(null);
+
+    fetch(`/api/compliance?siteId=${currentSite.id}`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || err.message || `HTTP ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (isMounted) setComplianceData(data);
+      })
+      .catch((err) => {
+        console.warn('Compliance API query error:', err);
+        if (isMounted) setComplianceError(err.message);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentSite?.id]);
+
+  // Approved/Published regulatory sources only
+  const regulatorySources = useMemo(() => {
+    if (complianceData?.sources && Array.isArray(complianceData.sources) && complianceData.sources.length > 0) {
+      return complianceData.sources.map((s: any) => ({
+        id: s.id,
+        title: s.document_title || 'State Tariff Order',
+        jurisdiction: s.jurisdiction,
+        state: s.state || 'National',
+        effectiveDate: s.effective_date,
+        version: s.version,
+        status: s.status,
+      }));
+    }
+
+    if (currentSite?.is_demo) {
+      return [
+        {
+          id: 'reg-01',
+          title: 'MSEDCL Multi-Year Tariff (MYT) Order FY 2024-25',
+          jurisdiction: 'MERC',
+          state: 'Maharashtra',
+          effectiveDate: '2024-04-01',
+          version: 'MERC_MYT_2024_DEMO',
+          status: 'APPROVED',
+        },
+      ];
+    }
+
+    return [];
+  }, [complianceData, currentSite?.is_demo]);
+
+  const filteredSources = useMemo(() => {
+    if (filterState === 'ALL') return regulatorySources;
+    return regulatorySources.filter((s: any) => s.state === filterState || s.state === 'National');
+  }, [regulatorySources, filterState]);
 
   const complianceCalendar = [
     {
       deadline: '2026-09-15',
-      obligation: 'Monthly Banking Energy Reconciliation with MSEDCL',
+      obligation: 'Monthly Banking Energy Reconciliation with DISCOM',
       type: 'DISCOM Filing',
       status: 'IN_PROGRESS',
-      owner: 'Vikram Desai (Energy Manager)',
+      owner: 'Energy Manager',
     },
     {
       deadline: '2026-09-25',
       obligation: 'Quarterly SLDC Open Access Scheduling Agreement Renewal',
       type: 'SLDC Statutory',
       status: 'NOT_STARTED',
-      owner: 'Rajesh Sharma (Admin)',
+      owner: 'Admin',
     },
     {
       deadline: '2026-10-05',
       obligation: 'Filing of RE Captive Shareholding Self-Certification',
       type: 'Regulatory Compliance',
       status: 'NOT_STARTED',
-      owner: 'Anita Roy (Finance Viewer)',
+      owner: 'Finance Viewer',
     },
   ];
 
+  const charges = complianceData?.charges;
+
   return (
     <ModuleGate
-      productId="OPEN_ACCESS_COMPLIANCE"
+      productId="OA_COMPLIANCE"
       productName="Open Access Compliance Sentinel"
       description="Automated statutory tracking, DISCOM landed open access charges, and regulatory approval pipeline."
-      basePricePaise={4000000}
-      isEntitled={isEntitled('OPEN_ACCESS_COMPLIANCE')}
+      basePricePaise={1490000}
+      isEntitled={isEntitled('OA_COMPLIANCE')}
     >
       <div className="space-y-6">
         {/* Header */}
@@ -96,27 +135,37 @@ export default function CompliancePage() {
                 Open Access Compliance Sentinel
               </h1>
               <Badge variant="warning">SPECIALIST_REVIEW_REQUIRED</Badge>
+              {complianceData?.hasApprovedData && (
+                <Badge variant="success">APPROVED RECORDS LOADED</Badge>
+              )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Automated statutory tracking, DISCOM charges, and regulatory approval pipeline.
+              Automated statutory tracking, DISCOM landed open access charges, and regulatory approval pipeline.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <Badge variant="info">MERC Jurisdiction</Badge>
+            {isLoading && <RefreshCw className="w-3.5 h-3.5 text-sky-400 animate-spin" />}
+            <span className="text-xs text-slate-400 font-mono">Jurisdiction: {currentSite?.state || 'Maharashtra'}</span>
           </div>
         </div>
 
-        {/* Statutory Disclaimer Alert */}
-        <div className="p-4 rounded-md border border-amber-900/50 bg-amber-950/20 text-xs text-amber-200/90 flex items-start gap-3">
-          <Scale className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <p className="leading-relaxed">
-            <strong>Decision Support & Compliance Notice:</strong> Content and calculations provided in this module are algorithmic estimates for planning purposes.
-            This platform does NOT provide formal legal opinions or represent official regulatory clearance from CERC, SERC, or SLDC.
+        {/* Regulatory Disclaimer Banner */}
+        <div className="p-3 bg-amber-950/20 border border-amber-800/40 rounded flex items-start gap-2.5 text-xs text-amber-200/90">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <p>
+            <strong>NOT LEGAL ADVICE:</strong> Regulatory parameters and tariff schedules reflect Commission orders approved for algorithmic decision support. Consult legal/regulatory counsel for statutory proceedings before SERC or SLDC.
           </p>
         </div>
 
-        {/* DISCOM Landed Charges Tracker */}
+        {complianceError && (
+          <div className="p-4 rounded bg-rose-950/40 border border-rose-800 text-xs text-rose-300 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>Compliance Record Service Error: {complianceError}</span>
+          </div>
+        )}
+
+        {/* Landed Charges Tracker */}
         <Card variant="industrial">
           <CardHeader>
             <div>
@@ -124,43 +173,59 @@ export default function CompliancePage() {
                 Open Access Landed Charges Tracker - {currentSite?.state || 'Maharashtra'} ({currentSite?.discom || 'MSEDCL'})
               </CardTitle>
               <CardDescription>
-                Applicable tariff components per unit for 33kV industrial connection.
+                Applicable tariff components per unit for {currentSite?.voltage_category || '33kV'} connection from approved records.
               </CardDescription>
             </div>
             <Badge variant="outline">Effective: FY 2024-25</Badge>
           </CardHeader>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-2">
-            <div className="p-3 bg-slate-950 rounded border border-slate-800">
-              <span className="text-xs text-slate-400 block mb-1">Cross-Subsidy Surcharge (CSS)</span>
-              <div className="text-lg font-bold font-mono text-slate-200">₹1.48 / kWh</div>
-              <span className="text-[10px] text-amber-400">Waived for GEOA Solar</span>
-            </div>
+          {charges ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-2">
+              <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                <span className="text-xs text-slate-400 block mb-1">Cross-Subsidy Surcharge (CSS)</span>
+                <div className="text-lg font-bold font-mono text-slate-200">
+                  ₹{Number(charges.cross_subsidy_surcharge_inr_per_kwh).toFixed(2)} / kWh
+                </div>
+                <span className="text-[10px] text-amber-400">Approved Tariff Order</span>
+              </div>
 
-            <div className="p-3 bg-slate-950 rounded border border-slate-800">
-              <span className="text-xs text-slate-400 block mb-1">Additional Surcharge (AS)</span>
-              <div className="text-lg font-bold font-mono text-slate-200">₹1.15 / kWh</div>
-              <span className="text-[10px] text-slate-500">Subject to DISCOM backing down</span>
-            </div>
+              <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                <span className="text-xs text-slate-400 block mb-1">Additional Surcharge (AS)</span>
+                <div className="text-lg font-bold font-mono text-slate-200">
+                  ₹{Number(charges.additional_surcharge_inr_per_kwh).toFixed(2)} / kWh
+                </div>
+                <span className="text-[10px] text-slate-500">Subject to backing down</span>
+              </div>
 
-            <div className="p-3 bg-slate-950 rounded border border-slate-800">
-              <span className="text-xs text-slate-400 block mb-1">Wheeling Charge</span>
-              <div className="text-lg font-bold font-mono text-slate-200">₹0.64 / kWh</div>
-              <span className="text-[10px] text-slate-500">33kV network level</span>
-            </div>
+              <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                <span className="text-xs text-slate-400 block mb-1">Wheeling Charge</span>
+                <div className="text-lg font-bold font-mono text-slate-200">
+                  ₹{Number(charges.wheeling_charge_inr_per_kwh).toFixed(2)} / kWh
+                </div>
+                <span className="text-[10px] text-slate-500">{currentSite?.voltage_category || '33kV'} level</span>
+              </div>
 
-            <div className="p-3 bg-slate-950 rounded border border-slate-800">
-              <span className="text-xs text-slate-400 block mb-1">State Transmission Loss</span>
-              <div className="text-lg font-bold font-mono text-slate-200">3.18%</div>
-              <span className="text-[10px] text-slate-500">In-kind energy deduction</span>
-            </div>
+              <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                <span className="text-xs text-slate-400 block mb-1">Transmission Charge</span>
+                <div className="text-lg font-bold font-mono text-slate-200">
+                  ₹{Number(charges.transmission_charge_inr_per_kwh).toFixed(2)} / kWh
+                </div>
+                <span className="text-[10px] text-slate-500">State grid network</span>
+              </div>
 
-            <div className="p-3 bg-slate-950 rounded border border-slate-800">
-              <span className="text-xs text-slate-400 block mb-1">Banking Surcharge</span>
-              <div className="text-lg font-bold font-mono text-slate-200">₹0.20 / kWh</div>
-              <span className="text-[10px] text-teal-400">Monthly settlement cycle</span>
+              <div className="p-3 bg-slate-950 rounded border border-slate-800">
+                <span className="text-xs text-slate-400 block mb-1">Banking Surcharge</span>
+                <div className="text-lg font-bold font-mono text-slate-200">
+                  {Number(charges.banking_charge_pct).toFixed(1)}%
+                </div>
+                <span className="text-[10px] text-teal-400">Monthly settlement cycle</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="p-6 text-center text-xs text-amber-300 bg-amber-950/20 border border-amber-800/40 rounded">
+              Regulatory Landed Charges: Data Pending Formal Commission Review / Currently Unavailable for {currentSite?.state || 'Current State'} ({currentSite?.discom || 'DISCOM'}). Aetheon does not manufacture unapproved tariff assumptions.
+            </div>
+          )}
         </Card>
 
         {/* Statutory Compliance Calendar */}
@@ -204,63 +269,71 @@ export default function CompliancePage() {
           </div>
         </Card>
 
-        {/* Regulatory Source Register & Approval Pipeline */}
-        <Card variant="default">
+        {/* Approved Regulatory Repository */}
+        <Card variant="industrial">
           <CardHeader>
-            <div>
-              <CardTitle className="text-slate-200">
-                <FileCheck className="w-4 h-4 text-sky-400" />
-                Regulatory Source Register & Review Workflow
-              </CardTitle>
-              <CardDescription>
-                Multi-stage governance pipeline: CAPTURED → EXTRACTED → REVIEW_PENDING → APPROVED → PUBLISHED.
-              </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-slate-100 flex items-center gap-2">
+                  <FileCheck className="w-4 h-4 text-sky-400" />
+                  Commission Approved Regulatory Documents
+                </CardTitle>
+                <CardDescription>
+                  Official orders approved and published by regulatory specialists. Internal draft states (REVIEW_PENDING) are excluded.
+                </CardDescription>
+              </div>
+              <div className="flex gap-1.5">
+                {['ALL', 'Maharashtra', 'National'].map((st) => (
+                  <Button
+                    key={st}
+                    variant={filterState === st ? 'primary' : 'outline'}
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setFilterState(st)}
+                  >
+                    {st}
+                  </Button>
+                ))}
+              </div>
             </div>
           </CardHeader>
 
-          <div className="space-y-3">
-            {regulatorySources.map((source) => {
-              const isApproved = source.status === 'APPROVED';
-              return (
+          <div className="p-6 pt-0 space-y-3">
+            {filteredSources.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500 italic">
+                No approved regulatory orders currently published for this jurisdiction. Internal records remain in review pipeline.
+              </div>
+            ) : (
+              filteredSources.map((doc: any) => (
                 <div
-                  key={source.id}
-                  className="p-4 rounded-md bg-slate-950 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3"
+                  key={doc.id}
+                  className="p-3.5 rounded-md bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                 >
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <h5 className="text-xs font-semibold text-slate-200">{source.title}</h5>
-                      <Badge variant={isApproved ? 'success' : 'warning'}>
-                        {source.status}
-                      </Badge>
-                      {source.isDemo && <Badge variant="demo">DEMO</Badge>}
+                      <Badge variant="success">{doc.jurisdiction}</Badge>
+                      <Badge variant="outline">{doc.state}</Badge>
+                      <span className="text-[10px] text-slate-500 font-mono">Effective: {doc.effectiveDate}</span>
                     </div>
-                    <p className="text-[11px] text-slate-400">
-                      Jurisdiction: <strong className="text-slate-300">{source.jurisdiction}</strong> • Effective: {source.effectiveDate} • Version: {source.version}
-                    </p>
+                    <h4 className="text-xs font-semibold text-slate-200">{doc.title}</h4>
+                    <p className="text-[11px] text-slate-400 font-mono">Version: {doc.version} • Status: {doc.status}</p>
                   </div>
 
-                  <div>
-                    {isApproved ? (
-                      <span className="text-[11px] text-emerald-400 font-medium">
-                        ✓ Published & Approved for Customer Use
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-amber-400 font-medium">
-                        ⚠ Blocked from Customer View (Pending Reviewer Sign-off)
-                      </span>
-                    )}
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    <Badge variant="success">APPROVED & VALIDATED</Badge>
                   </div>
                 </div>
-              );
-            })}
+              ))
+            )}
           </div>
         </Card>
 
-        {/* Provenance Footer */}
+        {/* Calculation Provenance Footer */}
         <ProvenanceFooter
-          modelVersion="OA_COMPLIANCE_ENGINE_v1.0"
-          modelGenerationTime="2026-09-07T00:00:00Z"
-          tariffVersion="MERC_MYT_2024_VALIDATED"
+          modelVersion="REGULATORY_PARSER_v1.0"
+          tariffVersion="MERC_MYT_FY2024_25"
+          ruleVersion="GEOA_RULES_2022_AMEND"
+          sourceType="Maharashtra Electricity Regulatory Commission (MERC)"
         />
       </div>
     </ModuleGate>

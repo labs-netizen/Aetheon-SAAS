@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+// Mapping each report type to its canonical required product entitlement
+const REPORT_PRODUCT_REQUIREMENTS: Record<string, string> = {
+  GRID_DAILY_BRIEF: 'GRID_INTELLIGENCE',
+  GRID_MONTHLY_REPORT: 'GRID_INTELLIGENCE',
+  DSM_MONTHLY_REVIEW: 'DSM_RISK',
+  BESS_PERFORMANCE_REPORT: 'BESS_ARBITRAGE',
+  RENEWABLES_RECONCILIATION: 'RENEWABLE_PORTFOLIO',
+  COMPLIANCE_AUDIT: 'OA_COMPLIANCE',
+};
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -14,8 +24,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Authorize user and site access
-    const authResult = await authorizeApiRequest(req, { siteId });
+    const requiredProduct = REPORT_PRODUCT_REQUIREMENTS[reportType] || 'GRID_INTELLIGENCE';
+
+    // 1. Authorize user, site access, and required product entitlement
+    const authResult = await authorizeApiRequest(req, {
+      siteId,
+      productId: requiredProduct,
+    });
     if (!authResult.authorized) {
       return authResult.response;
     }
@@ -29,15 +44,15 @@ export async function POST(req: NextRequest) {
       .eq('id', siteId)
       .single();
 
-    const siteName = site?.name || 'Aetheon Facility';
+    const siteName = site?.name || 'Facility';
     const state = site?.state || 'Maharashtra';
     const discom = site?.discom || 'MSEDCL';
-    const contractDemand = site?.contract_demand_value || 2500;
+    const contractDemand = site?.contract_demand_value || 1000;
     const nowIso = new Date().toISOString();
-    const pStart = periodStart || '2026-09-01';
-    const pEnd = periodEnd || '2026-09-07';
+    const pStart = periodStart || new Date().toISOString().substring(0, 10);
+    const pEnd = periodEnd || pStart;
 
-    // 3. Generate Report Data & CSV Content based on reportType
+    // 3. Build CSV Header
     let csvLines: string[] = [];
     let summaryData: Record<string, any> = {};
 
@@ -47,70 +62,199 @@ export async function POST(req: NextRequest) {
     csvLines.push(`# State: ${state} | DISCOM: ${discom} | Sanctioned Demand: ${contractDemand} kVA`);
     csvLines.push(`# Period: ${pStart} to ${pEnd}`);
     csvLines.push(`# Generated At: ${nowIso}`);
-    csvLines.push(`# Disclaimer: Algorithmic decision support. Not formal SLDC/CERC regulatory advice.`);
+    csvLines.push(`# Product Entitlement Verified: ${requiredProduct}`);
+    csvLines.push(`# Disclaimer: Algorithmic decision support based on persisted operational data. Not formal SLDC/CERC regulatory advice.`);
     csvLines.push(``);
 
+    // 4. Query Actual Persisted Data per Report Type
     if (reportType === 'GRID_DAILY_BRIEF' || reportType === 'GRID_MONTHLY_REPORT') {
-      csvLines.push(`operating_date,block_index,start_time,end_time,forecast_load_kw,actual_load_kw,forecast_price_inr_per_mwh,is_high_cost_window`);
-      for (let b = 1; b <= 96; b++) {
-        const hour = Math.floor((b - 1) / 4);
-        const min = ((b - 1) % 4) * 15;
-        const startTime = `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-        const endHour = Math.floor(b / 4);
-        const endMin = (b % 4) * 15;
-        const endTime = `${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}`;
-        const load = (1800 + Math.sin(b / 10) * 400).toFixed(1);
-        const price = (4200 + Math.cos(b / 8) * 900).toFixed(1);
-        const isPeak = b >= 72 && b <= 88 ? 'true' : 'false';
-        csvLines.push(`${pStart},${b},${startTime},${endTime},${load},${load},${price},${isPeak}`);
+      // Query persisted forecast run
+      const { data: runs } = await adminClient
+        .from('grid_forecast_runs')
+        .select('*')
+        .eq('site_id', siteId)
+        .gte('operating_date', pStart)
+        .lte('operating_date', pEnd)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const latestRun = runs?.[0];
+      let blocks: any[] = [];
+      if (latestRun) {
+        const { data: blockRows } = await adminClient
+          .from('grid_forecast_blocks')
+          .select('*')
+          .eq('forecast_run_id', latestRun.id)
+          .order('block_index', { ascending: true });
+        blocks = blockRows || [];
       }
-      summaryData = {
-        averagePriceInrPerMwh: 4520,
-        peakDemandKw: 2240,
-        qualityGateStatus: 'PASSED',
-        freshnessStatus: 'RECENT',
-      };
+
+      // Query quality gate evaluation
+      const { data: quality } = await adminClient
+        .from('data_quality_evaluations')
+        .select('*')
+        .eq('site_id', siteId)
+        .eq('evaluation_date', pStart)
+        .maybeSingle();
+
+      if (blocks.length > 0) {
+        csvLines.push(`# MODEL VERSION: ${latestRun.model_version} | RUN ID: ${latestRun.id}`);
+        csvLines.push(`# QUALITY GATE: ${quality?.publication_gate_status || 'PUBLISHABLE'} | FRESHNESS: ${quality?.freshness_status || 'RECENT'}`);
+        csvLines.push(`operating_date,block_index,start_time,end_time,forecast_load_kw,forecast_price_inr_per_mwh,is_high_cost_window`);
+
+        for (const b of blocks) {
+          const hour = Math.floor((b.block_index - 1) / 4);
+          const min = ((b.block_index - 1) % 4) * 15;
+          const startTime = `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+          const endHour = Math.floor(b.block_index / 4);
+          const endMin = (b.block_index % 4) * 15;
+          const endTime = `${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}`;
+          csvLines.push(`${latestRun.operating_date},${b.block_index},${startTime},${endTime},${b.forecast_demand_kw},${b.forecast_price_inr_per_mwh},${b.is_high_cost_window}`);
+        }
+
+        summaryData = {
+          runId: latestRun.id,
+          modelVersion: latestRun.model_version,
+          averagePriceInrPerMwh: latestRun.average_price_inr_per_mwh,
+          peakDemandKw: latestRun.peak_demand_kw,
+          qualityGateStatus: quality?.publication_gate_status || 'PUBLISHABLE',
+          freshnessStatus: quality?.freshness_status || 'RECENT',
+          totalBlocks: blocks.length,
+        };
+      } else {
+        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No persisted grid forecast runs found for site '${siteId}' in period ${pStart} to ${pEnd}.`);
+        csvLines.push(`operating_date,block_index,status`);
+        csvLines.push(`${pStart},ALL,DATA_GAP_NO_PERSISTED_FORECAST`);
+        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No persisted forecast run exists for this period.' };
+      }
+
     } else if (reportType === 'DSM_MONTHLY_REVIEW') {
-      csvLines.push(`operating_date,block_index,scheduled_kw,actual_kw,deviation_kw,deviation_pct,estimated_penalty_inr,severity`);
-      for (let b = 1; b <= 96; b++) {
-        const sched = 2000;
-        const act = b === 42 || b === 43 ? 2350 : 2020;
-        const dev = act - sched;
-        const devPct = ((dev / sched) * 100).toFixed(2);
-        const penalty = dev > 200 ? (dev * 5.2).toFixed(2) : '0.00';
-        const sev = dev > 200 ? 'HIGH' : 'NORMAL';
-        csvLines.push(`${pStart},${b},${sched},${act},${dev},${devPct},${penalty},${sev}`);
+      const { data: incidents } = await adminClient
+        .from('dsm_incidents')
+        .select('*')
+        .eq('site_id', siteId)
+        .gte('operating_date', pStart)
+        .lte('operating_date', pEnd)
+        .order('start_block', { ascending: true });
+
+      if (incidents && incidents.length > 0) {
+        csvLines.push(`incident_id,operating_date,start_block,end_block,severity,max_deviation_pct,total_excess_energy_kwh,estimated_exposure_inr,root_cause_tag,acknowledged`);
+        let totalExposure = 0;
+        let totalExcessKwh = 0;
+        for (const inc of incidents) {
+          totalExposure += Number(inc.estimated_exposure_inr || 0);
+          totalExcessKwh += Number(inc.total_excess_energy_kwh || 0);
+          csvLines.push(`${inc.id},${inc.operating_date},${inc.start_block},${inc.end_block},${inc.severity},${inc.max_deviation_pct},${inc.total_excess_energy_kwh},${inc.estimated_exposure_inr},${inc.root_cause_tag},${inc.acknowledged}`);
+        }
+        summaryData = {
+          totalIncidents: incidents.length,
+          totalExposureInr: Number(totalExposure.toFixed(2)),
+          totalExcessEnergyKwh: Number(totalExcessKwh.toFixed(2)),
+        };
+      } else {
+        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No persisted DSM deviation incidents recorded for site '${siteId}' in period ${pStart} to ${pEnd}.`);
+        csvLines.push(`status,message`);
+        csvLines.push(`REPORT_DATA_GAP,Zero deviation incidents or missing actual interval data.`);
+        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No persisted DSM incidents found.' };
       }
-      summaryData = {
-        totalExcessEnergyKwh: 350,
-        estimatedPenaltyInr: 1820,
-        highRiskBlocks: 2,
-      };
+
     } else if (reportType === 'BESS_PERFORMANCE_REPORT') {
-      csvLines.push(`operating_date,block_index,action,power_kw,estimated_soc_pct,marginal_price_inr_per_mwh,net_value_inr`);
-      for (let b = 1; b <= 96; b++) {
-        const action = b >= 12 && b <= 24 ? 'CHARGE' : b >= 72 && b <= 84 ? 'DISCHARGE' : 'IDLE';
-        const power = action === 'IDLE' ? '0' : '500';
-        const soc = action === 'CHARGE' ? '85' : action === 'DISCHARGE' ? '25' : '50';
-        const netVal = action === 'DISCHARGE' ? '125.50' : '0.00';
-        csvLines.push(`${pStart},${b},${action},${power},${soc},4800,${netVal}`);
+      const { data: assets } = await adminClient
+        .from('bess_assets')
+        .select('*')
+        .eq('site_id', siteId);
+
+      const asset = assets?.[0];
+      let runs: any[] = [];
+      if (asset) {
+        const { data: runRows } = await adminClient
+          .from('bess_signal_runs')
+          .select('*')
+          .eq('battery_id', asset.id)
+          .gte('operating_date', pStart)
+          .lte('operating_date', pEnd);
+        runs = runRows || [];
       }
-      summaryData = {
-        grossArbitrageInr: 8400,
-        degradationCostInr: 1200,
-        netOpportunityInr: 7200,
-      };
+
+      if (runs.length > 0) {
+        csvLines.push(`# BESS ASSET: ${asset.name} (${asset.id}) | CAPACITY: ${asset.usable_capacity_kwh} kWh | RATING: ${asset.power_rating_kw} kW`);
+        csvLines.push(`operating_date,solver_version,gross_arbitrage_inr,degradation_cost_inr,net_opportunity_inr,equivalent_cycles,is_suppressed`);
+        for (const r of runs) {
+          csvLines.push(`${r.operating_date},${r.solver_version},${r.gross_arbitrage_inr},${r.degradation_cost_inr},${r.net_opportunity_inr},${r.equivalent_cycles},${r.is_suppressed}`);
+        }
+        summaryData = {
+          assetId: asset.id,
+          totalRuns: runs.length,
+          grossArbitrageInr: runs.reduce((acc, r) => acc + Number(r.gross_arbitrage_inr || 0), 0),
+          netOpportunityInr: runs.reduce((acc, r) => acc + Number(r.net_opportunity_inr || 0), 0),
+        };
+      } else {
+        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No persisted BESS signal runs found for site '${siteId}' in period ${pStart} to ${pEnd}.`);
+        csvLines.push(`status,message`);
+        csvLines.push(`REPORT_DATA_GAP,No BESS asset configured or zero optimization runs found.`);
+        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No persisted BESS signal runs found.' };
+      }
+
+    } else if (reportType === 'RENEWABLES_RECONCILIATION') {
+      const { data: ledger } = await adminClient
+        .from('renewable_generation_ledger')
+        .select('*')
+        .eq('site_id', siteId)
+        .gte('operating_date', pStart)
+        .lte('operating_date', pEnd)
+        .order('operating_date', { ascending: true });
+
+      if (ledger && ledger.length > 0) {
+        csvLines.push(`operating_date,total_measured_generation_kwh,total_modelled_generation_kwh,performance_ratio_pct,avoided_emissions_tco2e,emission_factor_source,reconciliation_status`);
+        for (const row of ledger) {
+          csvLines.push(`${row.operating_date},${row.total_measured_generation_kwh},${row.total_modelled_generation_kwh},${row.performance_ratio_pct},${row.avoided_emissions_tco2e},${row.emission_factor_source},${row.reconciliation_status}`);
+        }
+        summaryData = {
+          totalReconciledDays: ledger.length,
+          totalAvoidedEmissionsTco2e: ledger.reduce((acc, r) => acc + Number(r.avoided_emissions_tco2e || 0), 0),
+        };
+      } else {
+        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No persisted renewable generation ledger entries found for period ${pStart} to ${pEnd}.`);
+        csvLines.push(`status,message`);
+        csvLines.push(`REPORT_DATA_GAP,No reconciled generation data available.`);
+        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No persisted renewable generation records found.' };
+      }
+
     } else {
-      // Default Generic Compliance / Renewable Report
-      csvLines.push(`metric_key,metric_label,value,unit,classification`);
-      csvLines.push(`solar_generation_mwh,Total Solar Generation,18.4,MWh,MEASURED`);
-      csvLines.push(`avoided_emissions_tco2e,Avoided Scope 2 Emissions,13.25,tCO2e,ESTIMATED`);
-      csvLines.push(`grid_import_reconciliation,Grid Import Energy,42.8,MWh,MEASURED`);
-      csvLines.push(`discom_banking_charges,Banking Charges Incurred,14200,INR,ESTIMATED`);
-      summaryData = {
-        solarGenerationMwh: 18.4,
-        avoidedEmissionsTco2e: 13.25,
-      };
+      // COMPLIANCE_AUDIT or default
+      const { data: approvedSources } = await adminClient
+        .from('regulatory_sources')
+        .select('id, jurisdiction, state, document_title, effective_date, version, status')
+        .in('status', ['APPROVED', 'PUBLISHED'])
+        .or(`state.eq.${state},state.eq.National,state.is.null`);
+
+      const { data: charges } = await adminClient
+        .from('open_access_charges')
+        .select('*')
+        .eq('state', state)
+        .eq('discom', discom)
+        .maybeSingle();
+
+      if (approvedSources && approvedSources.length > 0) {
+        csvLines.push(`# JURISDICTION: ${state} (${discom})`);
+        csvLines.push(`source_id,jurisdiction,state,document_title,effective_date,version,status`);
+        for (const s of approvedSources) {
+          csvLines.push(`${s.id},${s.jurisdiction},${s.state},"${s.document_title}",${s.effective_date},${s.version},${s.status}`);
+        }
+        if (charges) {
+          csvLines.push(``);
+          csvLines.push(`# APPROVED LANDED CHARGES`);
+          csvLines.push(`css_inr_per_kwh,as_inr_per_kwh,wheeling_inr_per_kwh,transmission_inr_per_kwh,banking_charge_pct`);
+          csvLines.push(`${charges.cross_subsidy_surcharge_inr_per_kwh},${charges.additional_surcharge_inr_per_kwh},${charges.wheeling_charge_inr_per_kwh},${charges.transmission_charge_inr_per_kwh},${charges.banking_charge_pct}`);
+        }
+        summaryData = {
+          approvedSourcesCount: approvedSources.length,
+          chargesAvailable: Boolean(charges),
+        };
+      } else {
+        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No approved regulatory records published for jurisdiction '${state}'.`);
+        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No approved regulatory orders published.' };
+      }
     }
 
     const csvContent = csvLines.join('\n');
@@ -134,65 +278,50 @@ export async function POST(req: NextRequest) {
       ? 'DSM'
       : reportType.startsWith('BESS')
       ? 'BESS'
+      : reportType.startsWith('COMPLIANCE')
+      ? 'COMPLIANCE'
       : 'RENEWABLE';
 
     const reportTitle = `${siteName} - ${reportType.replace(/_/g, ' ')} (${pStart})`;
 
-    // 4. Record into report_records table matching actual database schema
-    const { data: record, error: recordErr } = await adminClient
+    // Persist to report_records
+    const { data: record, error: recordError } = await adminClient
       .from('report_records')
       .insert({
-        organisation_id: authResult.organisationId,
         site_id: siteId,
-        module: reportModule,
         report_type: reportType,
         period_start: pStart,
         period_end: pEnd,
-        title: reportTitle,
-        summary: {
-          ...summaryData,
-          siteName,
-          state,
-          discom,
-          contractDemand,
-          storage_path: storagePath,
-          csv_content: csvContent,
-        },
-        quality_status: 'PASSED',
-        model_version: 'AETHEON_REPORT_ENGINE_v1.0',
-        tariff_version: 'MERC_MYT_2024_DEMO',
-        rule_version: 'CERC_2024_V1',
         generated_by: authResult.user.id,
+        file_path: storagePath,
+        summary_metrics: summaryData,
+        title: reportTitle,
+        module: reportModule,
+        status: 'READY',
       })
       .select()
       .single();
 
-    if (recordErr || !record) {
-      console.error('Failed to create report record:', recordErr);
+    if (recordError) {
+      console.error('Failed to insert report record:', recordError);
       return NextResponse.json(
-        { error: 'DATABASE_ERROR', message: 'Failed to record generated report.', details: recordErr?.message },
+        { error: 'DATABASE_ERROR', message: recordError.message },
         { status: 500 }
       );
     }
 
-    const downloadUrl = `/api/reports/${record.id}/download`;
-    await adminClient
-      .from('report_records')
-      .update({ download_url: downloadUrl })
-      .eq('id', record.id);
-
     return NextResponse.json({
       success: true,
       reportId: record.id,
+      title: reportTitle,
       reportType,
       siteId,
-      siteName,
-      periodStart: pStart,
-      periodEnd: pEnd,
-      generatedAt: record.created_at,
-      downloadUrl,
+      storagePath,
+      downloadUrl: `/api/reports/download/${record.id}`,
+      summary: summaryData,
     });
   } catch (err) {
+    console.error('Report generation error:', err);
     return NextResponse.json(
       { error: 'INTERNAL_ERROR', details: err instanceof Error ? err.message : String(err) },
       { status: 500 }

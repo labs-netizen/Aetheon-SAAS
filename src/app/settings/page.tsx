@@ -35,6 +35,7 @@ function SettingsContent() {
   const [activeSubTab, setActiveSubTab] = useState<'upload' | 'site' | 'readiness' | 'billing'>(initialTab);
 
   // CSV Upload State
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileContent, setFileContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
@@ -162,6 +163,7 @@ function SettingsContent() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setSelectedFile(file);
     setFileName(file.name);
     setCommitFeedback(null);
     const reader = new FileReader();
@@ -187,19 +189,27 @@ function SettingsContent() {
   };
 
   const handleCommitToDatabase = async () => {
-    if (!parseResult || !parseResult.parsedData.length) return;
+    if (!currentSite?.id) return;
     setIsCommitting(true);
     setCommitFeedback(null);
 
     try {
+      const formData = new FormData();
+      formData.append('siteId', currentSite.id);
+      if (selectedFile) {
+        formData.append('file', selectedFile);
+        formData.append('filename', selectedFile.name);
+      } else if (fileContent) {
+        const blob = new Blob([fileContent], { type: 'text/csv' });
+        formData.append('file', blob, fileName || 'amr_data.csv');
+        formData.append('filename', fileName || 'amr_data.csv');
+      } else {
+        throw new Error('No CSV file selected for upload.');
+      }
+
       const res = await fetch('/api/ingestion/commit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          siteId: currentSite.id,
-          filename: fileName,
-          parsedData: parseResult.parsedData,
-        }),
+        body: formData,
       });
 
       const data = await res.json();
@@ -209,7 +219,7 @@ function SettingsContent() {
 
       setCommitFeedback({
         type: 'success',
-        message: `Successfully committed ${data.totalBlocks || parseResult.acceptedRows} interval blocks to site database (Run ID: ${data.ingestionRunId}).`,
+        message: `Successfully committed ${data.totalBlocks || 96} interval blocks to site database (Run ID: ${data.ingestionRunId}).`,
       });
       await refreshSites();
     } catch (err) {

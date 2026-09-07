@@ -121,8 +121,8 @@ export async function POST(request: Request) {
         granted_by: user.id,
       });
 
-    // Create default entitlements for the new organisation (GRID_INTELLIGENCE and OPEN_ACCESS)
-    await adminClient
+    // Create default entitlements for the new organisation (GRID_INTELLIGENCE and OA_COMPLIANCE)
+    const { error: entError } = await adminClient
       .from('entitlements')
       .insert([
         {
@@ -133,16 +133,22 @@ export async function POST(request: Request) {
         },
         {
           organisation_id: org.id,
-          product_id: 'OPEN_ACCESS_COMPLIANCE',
+          product_id: 'OA_COMPLIANCE',
           site_id: site.id,
           is_active: true,
         },
       ]);
 
+    if (entError) {
+      console.warn('Initial entitlement grant warning:', entError.message);
+    }
+
     // Record audit event
-    await recordAuditEvent(adminClient, {
+    const auditRes = await recordAuditEvent(adminClient, {
       organisation_id: org.id,
+      site_id: site.id,
       actor_id: user.id,
+      actor_role: 'ORGANISATION_ADMIN',
       action: 'ORGANISATION_CREATED',
       entity_type: 'ORGANISATION',
       entity_id: org.id,
@@ -152,6 +158,10 @@ export async function POST(request: Request) {
         registered_by: user.email,
       },
     });
+
+    if (!auditRes.success) {
+      console.error('Organisation creation audit recording failure:', auditRes.error);
+    }
 
     return NextResponse.json({
       success: true,

@@ -26,8 +26,7 @@ export default function AdminPage() {
 
   const isInternalAdmin =
     activeRole === 'AETHEON_ANALYST' ||
-    activeRole === 'AETHEON_REGULATORY_REVIEWER' ||
-    activeRole === 'ORGANISATION_ADMIN';
+    activeRole === 'AETHEON_REGULATORY_REVIEWER';
 
   const [adminData, setAdminData] = useState<{
     auditEvents: any[];

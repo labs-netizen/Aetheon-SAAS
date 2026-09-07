@@ -4,8 +4,9 @@
  * Secret tokens are held exclusively on the server and never exposed to client browsers.
  */
 
+const isProduction = process.env.NODE_ENV === 'production';
 const ANALYTICS_BASE_URL = process.env.ANALYTICS_SERVICE_URL || 'http://127.0.0.1:8000';
-const ANALYTICS_SERVICE_TOKEN = process.env.ANALYTICS_SERVICE_TOKEN || 'internal-dev-secret-token';
+const ANALYTICS_SERVICE_TOKEN = process.env.ANALYTICS_SERVICE_TOKEN || (isProduction ? '' : 'internal-dev-secret-token');
 
 export interface GridForecastParams {
   siteId: string;
@@ -36,6 +37,9 @@ export interface BESSSolverParams {
   dischargeEfficiency?: number;
   degradationCostPerCycleInr?: number;
   pricesInrPerMwh: number[];
+  maintenanceLockActive?: boolean;
+  telemetryStale?: boolean;
+  interconnectionRestricted?: boolean;
 }
 
 export interface RenewableReconciliationParams {
@@ -47,6 +51,9 @@ export interface RenewableReconciliationParams {
 }
 
 async function callAnalyticsEndpoint<TResponse>(endpoint: string, payload: unknown): Promise<TResponse> {
+  if (!ANALYTICS_SERVICE_TOKEN) {
+    throw new Error('CRITICAL: ANALYTICS_SERVICE_TOKEN is not configured (analytics client fails closed in production)');
+  }
   const url = `${ANALYTICS_BASE_URL}${endpoint}`;
   try {
     const response = await fetch(url, {

@@ -5,35 +5,58 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function GET(request: Request) {
   try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // Ignore
-            }
-          },
-        },
-      }
-    );
+    let user = null;
+    const adminClient = createAdminClient();
+    const authHeader = request.headers.get('authorization') || request.headers.get('Authorization');
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
+    if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+      const token = authHeader.slice(7).trim();
+      const { data: tokenUser } = await adminClient.auth.getUser(token);
+      if (tokenUser?.user) {
+        user = tokenUser.user;
+      }
+    }
+
+    if (!user) {
+      const cookieStore = await cookies();
+      const supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return cookieStore.getAll();
+            },
+            setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+              try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                  cookieStore.set(name, value, options)
+                );
+              } catch {
+                // Ignore
+              }
+            },
+          },
+        }
+      );
+
+      const { data: { user: cookieUser } } = await supabase.auth.getUser();
+      user = cookieUser;
+    }
+
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Check if user has internal role
-    const adminClient = createAdminClient();
+    // Check internal role and platform admin permissions
+    const { data: profile } = await adminClient
+      .from('user_profiles')
+      .select('is_platform_admin')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const isPlatformAdmin = Boolean(profile?.is_platform_admin);
+
     const { data: membership } = await adminClient
       .from('memberships')
       .select('role, is_active, expires_at')
@@ -42,9 +65,31 @@ export async function GET(request: Request) {
       .maybeSingle();
 
     const role = membership?.role;
-    const isInternal = role === 'AETHEON_ANALYST' || role === 'AETHEON_REGULATORY_REVIEWER' || role === 'ORGANISATION_ADMIN';
 
-    if (!isInternal) {
+    // Reject customer administrators explicitly
+    if (role === 'ORGANISATION_ADMIN' && !isPlatformAdmin) {
+      return NextResponse.json(
+        { error: 'Forbidden: Customer Organisation Admins are not permitted platform administration access' },
+        { status: 403 }
+      );
+    }
+
+    // Enforce analyst expiry
+    if (role === 'AETHEON_ANALYST') {
+      if (!membership?.expires_at || new Date(membership.expires_at) <= new Date()) {
+        return NextResponse.json(
+          { error: 'Forbidden: Analyst support session has expired or is invalid' },
+          { status: 403 }
+        );
+      }
+    }
+
+    const isAuthorizedInternal =
+      isPlatformAdmin ||
+      (role === 'AETHEON_ANALYST' && Boolean(membership?.expires_at && new Date(membership.expires_at) > new Date())) ||
+      role === 'AETHEON_REGULATORY_REVIEWER';
+
+    if (!isAuthorizedInternal) {
       return NextResponse.json({ error: 'Forbidden: Internal access required' }, { status: 403 });
     }
 

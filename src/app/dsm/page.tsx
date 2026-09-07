@@ -26,11 +26,14 @@ export default function DSMPage() {
   const [dsmData, setDsmData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  const [dsmError, setDsmError] = useState<string | null>(null);
+
   // Trigger real backend DSM calculation from /api/dsm
   useEffect(() => {
     if (!currentSite?.id) return;
     let isMounted = true;
     setIsLoading(true);
+    setDsmError(null);
 
     const targetDate = new Date().toISOString().substring(0, 10);
     // 96-block schedule vs actual
@@ -47,16 +50,35 @@ export default function DSMPage() {
       body: JSON.stringify({
         siteId: currentSite.id,
         operatingDate: targetDate,
+        contractDemandKw: currentSite.contract_demand_value || 1000,
         scheduledDrawalKw: scheduled,
         actualDrawalKw: actual,
       }),
     })
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || errData.message || `HTTP ${res.status}`);
+        }
+        return res.json();
+      })
       .then((data) => {
-        if (isMounted) setDsmData(data);
+        if (isMounted) {
+          setDsmData(data);
+          if (Array.isArray(data.incidents)) {
+            const persistedAcks = new Set<string>();
+            data.incidents.forEach((inc: any) => {
+              if (inc.acknowledged && inc.id) persistedAcks.add(inc.id);
+            });
+            if (persistedAcks.size > 0) {
+              setAcknowledgedIncidents((prev) => new Set([...prev, ...persistedAcks]));
+            }
+          }
+        }
       })
       .catch((err) => {
         console.warn('DSM API fetch error:', err);
+        if (isMounted) setDsmError(err.message);
       })
       .finally(() => {
         if (isMounted) setIsLoading(false);
@@ -67,7 +89,7 @@ export default function DSMPage() {
     };
   }, [currentSite?.id]);
 
-  // Use backend incidents if available, or fallback to validated baseline
+  // Use backend incidents if available, or fallback ONLY in demo mode
   const incidents = useMemo(() => {
     if (dsmData?.incidents && Array.isArray(dsmData.incidents) && dsmData.incidents.length > 0) {
       return dsmData.incidents.map((inc: any, i: number) => ({
@@ -76,38 +98,67 @@ export default function DSMPage() {
         blocks: `Blocks ${inc.start_block} to ${inc.end_block} (${inc.block_count || (inc.end_block - inc.start_block + 1)} blocks)`,
         severity: inc.severity || 'CRITICAL',
         maxDeviation: `+${(inc.max_deviation_pct || 15).toFixed(1)}%`,
-        excessEnergyKwh: inc.excess_energy_kwh || 225.0,
+        excessEnergyKwh: inc.total_excess_energy_kwh || inc.excess_energy_kwh || 225.0,
         estimatedExposure: `₹${Math.round(inc.estimated_exposure_inr || 3150).toLocaleString('en-IN')}`,
-        cause: inc.cause || 'Industrial ramp-up deviation beyond CERC allowable band',
+        cause: inc.root_cause_tag || inc.cause || 'Industrial ramp-up deviation beyond CERC allowable band',
+        acknowledged: Boolean(inc.acknowledged),
       }));
     }
 
-    return [
-      {
-        id: 'inc-01',
-        timeWindow: '13:15 - 14:30 IST',
-        blocks: 'Blocks 54 to 58 (5 blocks)',
-        severity: 'CRITICAL',
-        maxDeviation: '+15.0%',
-        excessEnergyKwh: 225.0,
-        estimatedExposure: '₹3,150.00',
-        cause: 'Facility press shop unexpected parallel shift startup',
-      },
-      {
-        id: 'inc-02',
-        timeWindow: '07:15 - 08:15 IST',
-        blocks: 'Blocks 30 to 33 (4 blocks)',
-        severity: 'WATCH',
-        maxDeviation: '+6.6%',
-        excessEnergyKwh: 80.0,
-        estimatedExposure: '₹280.00',
-        cause: 'Morning compressor pre-heating variance',
-      },
-    ];
-  }, [dsmData]);
+    if (currentSite?.is_demo) {
+      return [
+        {
+          id: 'inc-01',
+          timeWindow: '13:15 - 14:30 IST',
+          blocks: 'Blocks 54 to 58 (5 blocks)',
+          severity: 'CRITICAL',
+          maxDeviation: '+15.0%',
+          excessEnergyKwh: 225.0,
+          estimatedExposure: '₹3,150.00',
+          cause: 'Facility press shop unexpected parallel shift startup',
+          acknowledged: false,
+        },
+        {
+          id: 'inc-02',
+          timeWindow: '07:15 - 08:15 IST',
+          blocks: 'Blocks 30 to 33 (4 blocks)',
+          severity: 'WATCH',
+          maxDeviation: '+6.6%',
+          excessEnergyKwh: 80.0,
+          estimatedExposure: '₹280.00',
+          cause: 'Morning compressor pre-heating variance',
+          acknowledged: false,
+        },
+      ];
+    }
 
-  // Deterministic 96 blocks for deviation analysis
+    return [];
+  }, [dsmData, currentSite?.is_demo]);
+
+  // Deviation blocks
   const deviationBlocks = useMemo(() => {
+    if (dsmData?.blocks && Array.isArray(dsmData.blocks) && dsmData.blocks.length > 0) {
+      return dsmData.blocks.map((b: any) => {
+        const timing = getBlockTimes(b.block_index);
+        const scheduled = b.scheduled_drawal_kw || 1200.0;
+        const actual = b.actual_drawal_kw || 1200.0;
+        const devKw = actual - scheduled;
+        const pct = Math.abs(b.deviation_pct ?? (devKw / scheduled) * 100.0);
+        return {
+          block_index: b.block_index,
+          startTime: timing.startTime,
+          endTime: timing.endTime,
+          scheduledKw: scheduled,
+          actualKw: actual,
+          devKw,
+          devPct: pct,
+          risk: b.risk_level || (pct >= 12.0 ? 'CRITICAL' : pct >= 8.0 ? 'HIGH' : pct >= 4.0 ? 'WATCH' : 'NORMAL'),
+        };
+      });
+    }
+
+    if (!currentSite?.is_demo) return [];
+
     const blocks = [];
     for (let b = 1; b <= 96; b++) {
       const timing = getBlockTimes(b);
@@ -137,21 +188,45 @@ export default function DSMPage() {
       });
     }
     return blocks;
-  }, []);
+  }, [dsmData, currentSite?.is_demo]);
 
   const handleAcknowledge = async (id: string) => {
     setAcknowledgedIncidents((prev) => new Set(prev).add(id));
+    if (currentSite?.id) {
+      try {
+        await fetch('/api/dsm', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ incidentId: id, siteId: currentSite.id }),
+        });
+      } catch (ackErr) {
+        console.warn('Failed to persist incident acknowledgement to DB:', ackErr);
+      }
+    }
   };
 
   return (
     <ModuleGate
-      productId="DSM_MONITOR"
+      productId="DSM_RISK"
       productName="DSM Risk Monitor"
       description="Deviation Settlement Mechanism exposure tracking, 96-block scheduling variance, and regulatory breach prevention."
-      basePricePaise={5500000}
-      isEntitled={isEntitled('DSM_MONITOR')}
+      basePricePaise={2990000}
+      isEntitled={isEntitled('DSM_RISK')}
     >
       <div className="space-y-6">
+        {dsmError && (
+          <div className="p-4 rounded-md bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+            <div>
+              <strong>DSM Calculation Error:</strong> {dsmError}. Live mode requires active AMR interval telemetry.
+            </div>
+          </div>
+        )}
+        {currentSite?.is_demo && (
+          <div className="flex items-center gap-2">
+            <Badge variant="warning">DEMO / SYNTHETIC / UNVERIFIED</Badge>
+          </div>
+        )}
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -317,7 +392,7 @@ export default function DSMPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                {deviationBlocks.map((b) => (
+                {deviationBlocks.map((b: any) => (
                   <tr
                     key={b.block_index}
                     className={

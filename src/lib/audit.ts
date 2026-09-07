@@ -6,13 +6,16 @@ export interface AuditEventParams {
   entity_type: string;
   entity_id?: string;
   actor_id?: string;
+  actor_role?: string;
+  site_id?: string;
   details?: Record<string, any>;
   ip_address?: string;
+  user_agent?: string;
 }
 
 /**
  * Canonical typed helper for writing to tamper-evident audit_logs table.
- * Adheres to unified schema: action, entity_type, entity_id, actor_id, details, organisation_id.
+ * Adheres to unified schema: action, entity_type, entity_id, actor_id, actor_role, details, organisation_id.
  * Trigger chain_audit_log computes SHA-256 hash chaining automatically.
  */
 export async function recordAuditEvent(
@@ -24,15 +27,18 @@ export async function recordAuditEvent(
       .from('audit_logs')
       .insert({
         organisation_id: params.organisation_id,
+        site_id: params.site_id || null,
         action: params.action,
         entity_type: params.entity_type,
         entity_id: params.entity_id || null,
         actor_id: params.actor_id || null,
+        actor_role: params.actor_role || 'SYSTEM',
         details: params.details || {},
         // Backwards compatibility columns
         event_type: params.action,
         event_payload: params.details || {},
         ip_address: params.ip_address || null,
+        user_agent: params.user_agent || null,
       });
 
     if (error) {

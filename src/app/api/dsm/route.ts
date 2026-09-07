@@ -3,6 +3,99 @@ import { fetchDSMCalculation } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const siteId = searchParams.get('siteId');
+    const operatingDate = searchParams.get('operatingDate') || new Date().toISOString().substring(0, 10);
+
+    if (!siteId) {
+      return NextResponse.json({ error: 'siteId query parameter is required' }, { status: 400 });
+    }
+
+    const authResult = await authorizeApiRequest(req, {
+      siteId,
+      productId: 'DSM_RISK',
+    });
+
+    if (!authResult.authorized) {
+      return authResult.response;
+    }
+
+    const adminClient = createAdminClient();
+    const { data: incidents, error } = await adminClient
+      .from('dsm_incidents')
+      .select('*')
+      .eq('site_id', siteId)
+      .eq('operating_date', operatingDate)
+      .order('start_block', { ascending: true });
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      siteId,
+      operatingDate,
+      incidents: incidents || [],
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal error fetching DSM incidents' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { incidentId, siteId } = body;
+
+    if (!incidentId || !siteId) {
+      return NextResponse.json({ error: 'incidentId and siteId are required' }, { status: 400 });
+    }
+
+    const authResult = await authorizeApiRequest(req, {
+      siteId,
+      productId: 'DSM_RISK',
+      requiredRoles: ['ORGANISATION_ADMIN', 'ENERGY_MANAGER', 'OPERATOR'],
+    });
+
+    if (!authResult.authorized) {
+      return authResult.response;
+    }
+
+    const adminClient = createAdminClient();
+    const { data: updated, error } = await adminClient
+      .from('dsm_incidents')
+      .update({
+        acknowledged: true,
+        acknowledged_by: authResult.user.id,
+        acknowledged_at: new Date().toISOString(),
+      })
+      .eq('id', incidentId)
+      .eq('site_id', siteId)
+      .select()
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'DSM incident acknowledgement persisted to database',
+      incident: updated,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal error updating incident' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -111,7 +204,6 @@ export async function POST(req: NextRequest) {
         incidents.push(currentIncident);
       }
     }
-    calculationResult.incidents = incidents;
 
     // 5. Persist identified incidents to dsm_incidents safely via service client
     const adminClient = createAdminClient();
@@ -129,10 +221,17 @@ export async function POST(req: NextRequest) {
           root_cause_tag: inc.root_cause_tag,
         }));
 
-        const { error: incError } = await adminClient.from('dsm_incidents').insert(incidentRows);
+        const { data: insertedRows, error: incError } = await adminClient
+          .from('dsm_incidents')
+          .insert(incidentRows)
+          .select();
+
         if (incError) {
           throw new Error(incError.message);
         }
+        calculationResult.incidents = insertedRows || incidents;
+      } else {
+        calculationResult.incidents = [];
       }
       calculationResult.persisted = true;
     } catch (dbErr) {

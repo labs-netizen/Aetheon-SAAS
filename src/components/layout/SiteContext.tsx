@@ -75,9 +75,8 @@ const DEMO_SITES: Site[] = [
 
 const ALL_PRODUCT_ENTITLEMENTS = [
   'GRID_INTELLIGENCE',
-  'OPEN_ACCESS_COMPLIANCE',
-  'DSM_MONITOR',
-  'DSM_RISK_MONITOR',
+  'OA_COMPLIANCE',
+  'DSM_RISK',
   'BESS_ARBITRAGE',
   'RENEWABLE_PORTFOLIO',
 ];
@@ -240,9 +239,11 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
 
   const isEntitled = (productId: string): boolean => {
     if (isDemo) return true;
-    return entitlements.includes(productId) ||
-      (productId === 'DSM_RISK_MONITOR' && entitlements.includes('DSM_MONITOR')) ||
-      (productId === 'DSM_MONITOR' && entitlements.includes('DSM_RISK_MONITOR'));
+    const normalized =
+      productId === 'OPEN_ACCESS_COMPLIANCE' ? 'OA_COMPLIANCE' :
+      productId === 'DSM_MONITOR' || productId === 'DSM_RISK_MONITOR' ? 'DSM_RISK' :
+      productId;
+    return entitlements.includes(normalized) || entitlements.includes(productId);
   };
 
   return (

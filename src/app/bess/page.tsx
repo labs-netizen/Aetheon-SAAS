@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   BatteryCharging,
   Zap,
@@ -21,30 +21,64 @@ import { formatPower, formatEnergy, formatSoc } from '@/lib/units/energy';
 
 export default function BESSPage() {
   const { currentSite, isEntitled } = useSite();
+  const [siteAsset, setSiteAsset] = useState<any>(null);
   const [maintenanceLock, setMaintenanceLock] = useState(false);
-  const [simulatedSoc, setSimulatedSoc] = useState(48.0);
+  const [simulatedSoc, setSimulatedSoc] = useState(50.0);
   const [bessData, setBessData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [bessError, setBessError] = useState<string | null>(null);
 
-  // Asset parameters
+  // 1. Fetch real BESS asset for current site
+  useEffect(() => {
+    if (!currentSite?.id) return;
+    let isMounted = true;
+
+    fetch(`/api/bess?siteId=${currentSite.id}`)
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then((data) => {
+        if (isMounted && data?.asset) {
+          setSiteAsset(data.asset);
+          if (data.asset.current_soc_pct !== undefined) {
+            setSimulatedSoc(Number(data.asset.current_soc_pct));
+          }
+          if (data.asset.maintenance_lock !== undefined) {
+            setMaintenanceLock(Boolean(data.asset.maintenance_lock));
+          }
+        }
+      })
+      .catch((err) => console.warn('BESS asset query error:', err));
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentSite?.id]);
+
+  const usableCapacity = siteAsset?.usable_capacity_kwh ? Number(siteAsset.usable_capacity_kwh) : 1000.0;
+  const powerRating = siteAsset?.power_rating_kw ? Number(siteAsset.power_rating_kw) : 500.0;
+  const minSoc = siteAsset?.min_soc_pct ? Number(siteAsset.min_soc_pct) : 10.0;
+  const maxSoc = siteAsset?.max_soc_pct ? Number(siteAsset.max_soc_pct) : 90.0;
+  const isSafetyLocked = maintenanceLock || simulatedSoc < minSoc;
+
   const battery = {
-    name: 'Industrial Lithium-Ion Storage Unit 1',
-    usableCapacityKwh: 1000.0,
-    powerRatingKw: 500.0,
-    minSocPct: 10.0,
-    maxSocPct: 90.0,
-    chargeEff: 0.92,
-    dischargeEff: 0.92,
-    degCostPerCycleInr: 1800.0,
+    name: siteAsset?.name || 'Factory BESS Unit 1',
+    usableCapacityKwh: usableCapacity,
+    powerRatingKw: powerRating,
+    minSocPct: minSoc,
+    maxSocPct: maxSoc,
+    chargeEff: siteAsset?.charge_efficiency ? Number(siteAsset.charge_efficiency) : 0.92,
+    dischargeEff: siteAsset?.discharge_efficiency ? Number(siteAsset.discharge_efficiency) : 0.92,
+    degCostPerCycleInr: siteAsset?.degradation_cost_per_cycle_inr ? Number(siteAsset.degradation_cost_per_cycle_inr) : 1500.0,
   };
 
-  const isSafetyLocked = maintenanceLock || simulatedSoc < battery.minSocPct;
-
-  // Fetch real solver advisory from /api/bess
+  // 2. Fetch real solver advisory from /api/bess
   useEffect(() => {
     if (!currentSite?.id) return;
     let isMounted = true;
     setIsLoading(true);
+    setBessError(null);
 
     const targetDate = new Date().toISOString().substring(0, 10);
     // 96-block price array sample
@@ -59,27 +93,34 @@ export default function BESSPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        batteryId: 'bess_01',
+        batteryId: siteAsset?.id || undefined,
         siteId: currentSite.id,
         operatingDate: targetDate,
-        usableCapacityKwh: battery.usableCapacityKwh,
-        powerRatingKw: battery.powerRatingKw,
+        usableCapacityKwh: usableCapacity,
+        powerRatingKw: powerRating,
         initialSocPct: simulatedSoc,
-        minSocPct: battery.minSocPct,
-        maxSocPct: battery.maxSocPct,
-        chargeEfficiency: battery.chargeEff,
-        dischargeEfficiency: battery.dischargeEff,
-        degradationCostPerCycleInr: battery.degCostPerCycleInr,
+        minSocPct: minSoc,
+        maxSocPct: maxSoc,
+        chargeEfficiency: siteAsset?.charge_efficiency ? Number(siteAsset.charge_efficiency) : 0.92,
+        dischargeEfficiency: siteAsset?.discharge_efficiency ? Number(siteAsset.discharge_efficiency) : 0.92,
+        degradationCostPerCycleInr: siteAsset?.degradation_cost_per_cycle_inr ? Number(siteAsset.degradation_cost_per_cycle_inr) : 1500.0,
         pricesInrPerMwh: samplePrices,
         maintenanceLockActive: maintenanceLock,
       }),
     })
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || errData.message || `HTTP ${res.status}`);
+        }
+        return res.json();
+      })
       .then((data) => {
         if (isMounted) setBessData(data);
       })
       .catch((err) => {
         console.warn('BESS API error:', err);
+        if (isMounted) setBessError(err.message);
       })
       .finally(() => {
         if (isMounted) setIsLoading(false);
@@ -88,32 +129,65 @@ export default function BESSPage() {
     return () => {
       isMounted = false;
     };
-  }, [currentSite?.id, simulatedSoc, maintenanceLock]);
+  }, [currentSite?.id, siteAsset?.id, simulatedSoc, maintenanceLock, usableCapacity, powerRating, minSoc, maxSoc]);
 
-  const grossArbitrage = bessData?.gross_arbitrage_value_inr ?? bessData?.gross_arbitrage_inr ?? 5620;
-  const degradationCost = bessData?.estimated_degradation_cost_inr ?? bessData?.degradation_cost_inr ?? 2160;
-  const netOpportunity = bessData?.net_opportunity_value_inr ?? bessData?.net_opportunity_inr ?? 3460;
-  const cycles = bessData?.cycles_equivalent ?? bessData?.equivalent_cycles ?? 1.2;
+  const grossArbitrage = bessData?.gross_arbitrage_value_inr ?? bessData?.gross_arbitrage_inr ?? (currentSite?.is_demo ? 5620 : 0);
+  const degradationCost = bessData?.estimated_degradation_cost_inr ?? bessData?.degradation_cost_inr ?? (currentSite?.is_demo ? 2160 : 0);
+  const netOpportunity = bessData?.net_opportunity_value_inr ?? bessData?.net_opportunity_inr ?? (currentSite?.is_demo ? 3460 : 0);
+  const cycles = bessData?.cycles_equivalent ?? bessData?.equivalent_cycles ?? (currentSite?.is_demo ? 1.2 : 0);
 
   // Advisory opportunity windows
-  const opportunityWindows = [
-    {
-      action: 'CHARGE',
-      timeWindow: '01:30 - 04:30 IST',
-      blocks: 'Blocks 7–18',
-      avgPrice: '₹2,900 / MWh',
-      targetSoc: '85.0%',
-      rationale: 'Deep off-peak night valley tariff on Day-Ahead Market.',
-    },
-    {
-      action: 'DISCHARGE',
-      timeWindow: '18:30 - 20:30 IST',
-      blocks: 'Blocks 74–82',
-      avgPrice: '₹8,500 / MWh',
-      targetSoc: '18.0%',
-      rationale: 'Discharge against evening peak ToD tariff slab.',
-    },
-  ];
+  const opportunityWindows = useMemo(() => {
+    if (bessData?.schedule_blocks && Array.isArray(bessData.schedule_blocks) && bessData.schedule_blocks.length > 0) {
+      const chargeBlocks = bessData.schedule_blocks.filter((b: any) => b.action === 'CHARGE');
+      const dischargeBlocks = bessData.schedule_blocks.filter((b: any) => b.action === 'DISCHARGE');
+      const windows: any[] = [];
+      if (chargeBlocks.length > 0) {
+        windows.push({
+          action: 'CHARGE',
+          timeWindow: `${chargeBlocks[0].start_time || '01:30'} - ${chargeBlocks[chargeBlocks.length - 1].end_time || '04:30'} IST`,
+          blocks: `Blocks ${chargeBlocks[0].block_index}–${chargeBlocks[chargeBlocks.length - 1].block_index}`,
+          avgPrice: 'Off-Peak Tariff Valley',
+          targetSoc: `${maxSoc}%`,
+          rationale: 'Off-peak solar or night valley charging window recommended by advisory solver.',
+        });
+      }
+      if (dischargeBlocks.length > 0) {
+        windows.push({
+          action: 'DISCHARGE',
+          timeWindow: `${dischargeBlocks[0].start_time || '18:30'} - ${dischargeBlocks[dischargeBlocks.length - 1].end_time || '20:30'} IST`,
+          blocks: `Blocks ${dischargeBlocks[0].block_index}–${dischargeBlocks[dischargeBlocks.length - 1].block_index}`,
+          avgPrice: 'Peak Tariff Window',
+          targetSoc: `${minSoc}%`,
+          rationale: 'Discharge against evening peak ToD tariff slab for demand cost mitigation.',
+        });
+      }
+      if (windows.length > 0) return windows;
+    }
+
+    if (currentSite?.is_demo) {
+      return [
+        {
+          action: 'CHARGE',
+          timeWindow: '01:30 - 04:30 IST',
+          blocks: 'Blocks 7–18',
+          avgPrice: '₹2,900 / MWh',
+          targetSoc: '85.0%',
+          rationale: 'Deep off-peak night valley tariff on Day-Ahead Market.',
+        },
+        {
+          action: 'DISCHARGE',
+          timeWindow: '18:30 - 20:30 IST',
+          blocks: 'Blocks 74–82',
+          avgPrice: '₹8,500 / MWh',
+          targetSoc: '18.0%',
+          rationale: 'Discharge against evening peak ToD tariff slab.',
+        },
+      ];
+    }
+
+    return [];
+  }, [bessData, currentSite?.is_demo, minSoc, maxSoc]);
 
   return (
     <ModuleGate
@@ -142,9 +216,23 @@ export default function BESSPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Badge variant="outline">Advisory Mode (Zero Plant Control)</Badge>
+          {bessError && (
+          <div className="p-4 rounded-md bg-rose-950/40 border border-rose-800 text-rose-300 text-xs flex items-center gap-3">
+            <AlertOctagon className="w-5 h-5 text-rose-400 shrink-0" />
+            <div>
+              <strong>BESS Optimization Service Error:</strong> {bessError}. Live mode requires active BESS asset configuration.
+            </div>
           </div>
+        )}
+        {currentSite?.is_demo && (
+          <div className="flex items-center gap-2">
+            <Badge variant="warning">DEMO / SYNTHETIC / UNVERIFIED</Badge>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">Advisory Mode (Zero Plant Control)</Badge>
+        </div>
         </div>
 
         {/* Strict Advisory Boundary Banner */}
@@ -238,7 +326,7 @@ export default function BESSPage() {
           ) : (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {opportunityWindows.map((win, idx) => (
+                {opportunityWindows.map((win: any, idx: number) => (
                   <div
                     key={idx}
                     className="p-4 rounded-md bg-slate-950 border border-slate-800 space-y-2"

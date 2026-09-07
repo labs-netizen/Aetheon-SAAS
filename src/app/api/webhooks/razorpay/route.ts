@@ -8,14 +8,18 @@ export async function POST(req: NextRequest) {
     const signature = req.headers.get('x-razorpay-signature');
     const eventId = req.headers.get('x-razorpay-event-id');
 
+    // Fail closed: Webhook secret must be explicitly configured in runtime
     const configuredSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!configuredSecret && process.env.NODE_ENV === 'production') {
+    if (!configuredSecret) {
       return NextResponse.json(
-        { error: 'CONFIGURATION_ERROR', message: 'RAZORPAY_WEBHOOK_SECRET is not configured for production.' },
+        {
+          error: 'CONFIGURATION_ERROR',
+          message: 'RAZORPAY_WEBHOOK_SECRET is not configured. Webhook processing fails closed.',
+        },
         { status: 500 }
       );
     }
-    const webhookSecret = configuredSecret || 'test_webhook_secret_aetheon';
+    const webhookSecret = configuredSecret;
 
     // 1. Signature Verification
     if (!signature || !verifyWebhookSignature(rawBody, signature, webhookSecret)) {
@@ -37,8 +41,15 @@ export async function POST(req: NextRequest) {
 
     const effectiveEventId = eventId || eventPayload.id || eventPayload?.payload?.payment?.entity?.id;
 
+    if (!effectiveEventId) {
+      return NextResponse.json(
+        { error: 'INVALID_EVENT', message: 'No resolvable event ID present in webhook payload' },
+        { status: 400 }
+      );
+    }
+
     // 2. Replay Check
-    if (effectiveEventId && isWebhookReplay(effectiveEventId, eventPayload.created_at)) {
+    if (isWebhookReplay(effectiveEventId, eventPayload.created_at)) {
       return NextResponse.json(
         { status: 'already_processed', reason: 'Replay or duplicated event' },
         { status: 200 }
@@ -49,74 +60,49 @@ export async function POST(req: NextRequest) {
     const eventType: string = eventPayload.event || 'unknown';
 
     const paymentEntity = eventPayload?.payload?.payment?.entity || {};
-    const notes = paymentEntity.notes || {};
-    const orgId = notes.org_id || notes.organisation_id;
+    const subscriptionEntity = eventPayload?.payload?.subscription?.entity || {};
+    const notes = paymentEntity.notes || subscriptionEntity.notes || {};
+    const orgId = notes.org_id || notes.organisation_id || null;
     const siteId = notes.site_id || null;
-    const productId = notes.product_id || 'GRID_INTELLIGENCE';
-    const amountPaise = Number(paymentEntity.amount || 0);
-    const providerRef = paymentEntity.order_id || paymentEntity.id || effectiveEventId;
+    const rawProductId = notes.product_id || 'GRID_INTELLIGENCE';
+    const productId =
+      rawProductId === 'OPEN_ACCESS_COMPLIANCE' ? 'OA_COMPLIANCE' :
+      rawProductId === 'DSM_MONITOR' ? 'DSM_RISK' :
+      rawProductId;
+    const amountPaise = Number(paymentEntity.amount || subscriptionEntity.amount || 0);
+    const providerRef = subscriptionEntity.id || paymentEntity.order_id || paymentEntity.id || effectiveEventId;
 
-    // 3. Atomic Database RPC: Idempotency lock + Subscription + Entitlement + Invoice
-    if (effectiveEventId && orgId) {
-      const { data: rpcResult, error: rpcError } = await supabase.rpc('process_razorpay_webhook_atomic', {
-        p_event_id: effectiveEventId,
-        p_event_type: eventType,
-        p_payload: eventPayload,
-        p_org_id: orgId,
-        p_site_id: siteId,
-        p_product_id: productId,
-        p_provider_ref: providerRef,
-        p_amount_paise: amountPaise,
-      });
+    // 3. Atomic Database RPC (service_role privileged): Idempotency lock + State Mutation
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('process_razorpay_webhook_atomic', {
+      p_event_id: effectiveEventId,
+      p_event_type: eventType,
+      p_payload: eventPayload,
+      p_org_id: orgId,
+      p_site_id: siteId,
+      p_product_id: productId,
+      p_provider_ref: providerRef,
+      p_amount_paise: amountPaise,
+    });
 
-      if (rpcError) {
-        console.error('Atomic webhook processing RPC error:', rpcError);
-        return NextResponse.json(
-          { error: 'DATABASE_TRANSACTION_FAILED', details: rpcError.message },
-          { status: 500 }
-        );
-      }
-
-      if (rpcResult?.status === 'already_processed') {
-        return NextResponse.json(
-          { status: 'already_processed', message: 'Event was already processed.' },
-          { status: 200 }
-        );
-      }
-
-      recordProcessedWebhook(effectiveEventId);
-    } else if (eventType === 'subscription.cancelled') {
-      const subEntity = eventPayload?.payload?.subscription?.entity || {};
-      const subRef = subEntity.id;
-
-      if (subRef) {
-        await supabase
-          .from('subscriptions')
-          .update({ status: 'CANCELLED', cancel_at_period_end: true })
-          .eq('billing_provider_ref', subRef);
-      }
-    } else if (eventType === 'payment.failed') {
-      const failedNotes = paymentEntity.notes || {};
-      const failedOrgId = failedNotes.org_id || failedNotes.organisation_id;
-
-      if (failedOrgId) {
-        await supabase
-          .from('notification_logs')
-          .insert({
-            organisation_id: failedOrgId,
-            recipient_email: paymentEntity.email || 'finance@aetheon.in',
-            template_id: 'PAYMENT_FAILURE',
-            subject: 'Billing Alert: Payment Failed',
-            payload: {
-              error_code: paymentEntity.error_code,
-              error_description: paymentEntity.error_description,
-            },
-            delivery_status: 'SENT',
-          });
-      }
+    if (rpcError) {
+      console.error('Atomic webhook processing RPC error:', rpcError);
+      // Return 500 so Razorpay retries if transaction failed
+      return NextResponse.json(
+        { error: 'DATABASE_TRANSACTION_FAILED', details: rpcError.message },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ received: true, status: 'processed' }, { status: 200 });
+    if (rpcResult?.status === 'already_processed') {
+      return NextResponse.json(
+        { status: 'already_processed', message: 'Event was already processed.' },
+        { status: 200 }
+      );
+    }
+
+    recordProcessedWebhook(effectiveEventId);
+
+    return NextResponse.json({ received: true, status: 'processed', rpcResult }, { status: 200 });
   } catch (err) {
     console.error('Webhook processing error:', err);
     return NextResponse.json(

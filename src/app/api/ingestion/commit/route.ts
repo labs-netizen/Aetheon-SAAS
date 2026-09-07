@@ -6,8 +6,48 @@ import { validate96BlockContiguity, parseAndValidateCsv } from '@/features/inges
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { siteId, filename, csvText, fileContent, parsedData: clientParsedData } = body;
+    let siteId: string | null = null;
+    let filename: string | null = null;
+    let rawBuffer: Buffer | null = null;
+    let rawCsvText = '';
+
+    const contentType = req.headers.get('content-type') || '';
+
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      siteId = formData.get('siteId') as string;
+      filename = (formData.get('filename') as string) || 'amr_upload.csv';
+      const file = formData.get('file') as File | null;
+
+      if (!file) {
+        return NextResponse.json(
+          { error: 'FILE_REQUIRED', message: 'multipart/form-data must include an uploaded file' },
+          { status: 400 }
+        );
+      }
+
+      filename = file.name || filename;
+      const arrayBuffer = await file.arrayBuffer();
+      rawBuffer = Buffer.from(arrayBuffer);
+      rawCsvText = rawBuffer.toString('utf-8');
+    } else {
+      // JSON payload support
+      const body = await req.json();
+      siteId = body.siteId;
+      filename = body.filename || 'amr_upload.csv';
+      if (body.csvText) {
+        rawCsvText = body.csvText;
+        rawBuffer = Buffer.from(rawCsvText, 'utf-8');
+      } else if (body.fileContent) {
+        rawCsvText = body.fileContent;
+        rawBuffer = Buffer.from(rawCsvText, 'utf-8');
+      } else if (body.parsedData && Array.isArray(body.parsedData)) {
+        const header = 'operating_date,block_index,start_time,end_time,load_kw\n';
+        const rows = body.parsedData.map((r: any) => `${r.operating_date},${r.block_index},${r.start_time},${r.end_time},${r.load_kw}`).join('\n');
+        rawCsvText = header + rows;
+        rawBuffer = Buffer.from(rawCsvText, 'utf-8');
+      }
+    }
 
     if (!siteId || !filename) {
       return NextResponse.json(
@@ -26,40 +66,47 @@ export async function POST(req: NextRequest) {
       return authResult.response;
     }
 
-    // 2. Server-calculated SHA-256 Checksum (Never trust client-supplied checksum)
-    const rawContent = csvText || fileContent || (clientParsedData ? JSON.stringify(clientParsedData) : '');
-    if (!rawContent) {
+    if (!rawBuffer || rawCsvText.trim().length === 0) {
       return NextResponse.json(
-        { error: 'csvText, fileContent, or non-empty parsedData is required for ingestion' },
+        { error: 'EMPTY_FILE', message: 'Original raw CSV file bytes are required for ingestion' },
         { status: 400 }
       );
     }
 
-    const serverChecksum = crypto.createHash('sha256').update(rawContent).digest('hex');
+    // 2. Server-calculated SHA-256 Checksum on Actual File Bytes
+    const serverChecksum = crypto.createHash('sha256').update(rawBuffer).digest('hex');
 
-    // 3. Resolve or parse 96-block rows
-    let rowsToIngest: any[] = [];
-    if (clientParsedData && Array.isArray(clientParsedData) && clientParsedData.length > 0) {
-      rowsToIngest = clientParsedData;
-    } else if (csvText || fileContent) {
-      const parsed = parseAndValidateCsv(csvText || fileContent, siteId);
-      if (parsed.errors.length > 0 || parsed.acceptedRows !== 96) {
-        return NextResponse.json(
-          { error: 'CSV_PARSING_FAILED', errors: parsed.errors },
-          { status: 422 }
-        );
-      }
-      rowsToIngest = parsed.parsedData;
+    // 3. Authoritative Server-Side CSV Parsing & Schema Validation
+    const parseResult = parseAndValidateCsv(rawCsvText, siteId);
+    if (parseResult.isDuplicate) {
+      return NextResponse.json(
+        { error: 'DUPLICATE_FILE', message: 'File with identical content has already been processed for this site' },
+        { status: 409 }
+      );
+    }
+    if (parseResult.errors.length > 0 || parseResult.acceptedRows === 0) {
+      return NextResponse.json(
+        {
+          error: 'CSV_PARSING_FAILED',
+          message: 'Server CSV validation detected invalid formatting or data violations.',
+          errors: parseResult.errors,
+          rejectedRows: parseResult.rejectedRows,
+        },
+        { status: 422 }
+      );
     }
 
-    // 4. Validate 96-block contiguity & completeness
+    const rowsToIngest = parseResult.parsedData;
+
+    // 4. Server-Side 96-Block Contiguity Validation
     const contiguity = validate96BlockContiguity(rowsToIngest);
-    if (!contiguity.isContiguous) {
+    if (!contiguity.isContiguous || rowsToIngest.length < 96) {
       return NextResponse.json(
         {
           error: 'NON_CONTIGUOUS_BLOCKS',
-          message: 'The submitted interval data does not form a complete 1-96 contiguous block set.',
+          message: 'The submitted file does not form a complete 1-96 contiguous block set.',
           missingBlocksByDate: contiguity.missingBlocksByDate,
+          receivedBlocks: rowsToIngest.length,
         },
         { status: 422 }
       );
@@ -67,12 +114,12 @@ export async function POST(req: NextRequest) {
 
     const adminClient = createAdminClient();
 
-    // 5. Store raw file privately in tenant-uploads bucket
+    // 5. Store Original File Privately in tenant-uploads bucket
     const storagePath = `tenants/${authResult.organisationId}/${siteId}/${filename}_${serverChecksum.slice(0, 8)}.csv`;
     try {
       await adminClient.storage
         .from('tenant-uploads')
-        .upload(storagePath, rawContent, {
+        .upload(storagePath, rawBuffer, {
           contentType: 'text/csv',
           upsert: true,
         });
@@ -80,13 +127,13 @@ export async function POST(req: NextRequest) {
       console.warn('Tenant upload private storage warning:', storageErr);
     }
 
-    // 6. Compute real freshness based on operating date relative to current time
+    // 6. Compute Real Freshness Status from Operating Date
     const operatingDateStr = rowsToIngest[0]?.operating_date || new Date().toISOString().split('T')[0];
     const opDate = new Date(operatingDateStr);
     const diffHours = (Date.now() - opDate.getTime()) / (1000 * 60 * 60);
     const freshnessStatus = diffHours <= 24 ? 'RECENT' : diffHours <= 168 ? 'DELAYED' : 'STALE';
 
-    // Prepare rows for PostgreSQL JSONB RPC
+    // Format rows for JSONB RPC
     const formattedRows = rowsToIngest.map((row: any) => {
       const hour = Math.floor((row.block_index - 1) / 4);
       const min = ((row.block_index - 1) % 4) * 15;
@@ -104,7 +151,7 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // 7. Atomic Transactional Commit via PostgreSQL RPC
+    // 7. Atomic Transactional Commit via PostgreSQL RPC (service_role privileged)
     const { data: rpcResult, error: rpcError } = await adminClient.rpc(
       'commit_ingestion_transaction',
       {
@@ -146,8 +193,10 @@ export async function POST(req: NextRequest) {
       totalBlocks: formattedRows.length,
       serverChecksum,
       freshnessStatus,
+      publicationGateStatus: rpcResult?.publication_gate_status || 'PUBLISHABLE',
     });
   } catch (err) {
+    console.error('Ingestion commit error:', err);
     return NextResponse.json(
       { error: 'INTERNAL_ERROR', details: err instanceof Error ? err.message : String(err) },
       { status: 500 }

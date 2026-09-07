@@ -15,6 +15,7 @@ import { POST as invitationSendPost } from '@/app/api/invitations/send/route';
 import { POST as webhookPost } from '@/app/api/webhooks/razorpay/route';
 import { POST as billingCancelPost } from '@/app/api/billing/cancel/route';
 import { POST as invitationAcceptPost } from '@/app/api/invitations/accept/route';
+import { GET as adminAuditGet } from '@/app/api/admin/audit/route';
 import { createClient } from '@supabase/supabase-js';
 import CryptoJS from 'crypto-js';
 
@@ -466,5 +467,155 @@ describe('Adversarial API & Server Rejection Suite', () => {
     expect(res.status).toBe(403);
     const json = await res.json();
     expect(json.error).toContain('different email address');
+  });
+
+  // 12. Direct RPC Lockdown: Customer cannot call process_razorpay_webhook_atomic directly
+  it('12. Hard Security Blocker: Authenticated customer CANNOT invoke process_razorpay_webhook_atomic RPC directly (42501)', async () => {
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${userAToken}`,
+        },
+      },
+      auth: { persistSession: false },
+    });
+
+    const { data, error } = await userClient.rpc('process_razorpay_webhook_atomic', {
+      p_event_id: 'evt_adversarial_direct_' + Date.now(),
+      p_event_type: 'subscription.activated',
+      p_payload: { malicious: true },
+      p_org_id: orgAId,
+      p_site_id: null,
+      p_product_id: 'GRID_INTELLIGENCE',
+      p_provider_ref: 'sub_fabricated_' + Date.now(),
+      p_amount_paise: 0,
+    });
+
+    expect(data).toBeNull();
+    expect(error).toBeDefined();
+    // PostgreSQL permission denied error code 42501
+    expect(error?.code).toBe('42501');
+    expect(error?.message).toContain('permission denied for function process_razorpay_webhook_atomic');
+  });
+
+  // 13. Direct RPC Lockdown: Customer cannot call commit_ingestion_transaction directly
+  it('13. Hard Security Blocker: Authenticated customer CANNOT invoke commit_ingestion_transaction RPC directly (42501)', async () => {
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${userAToken}`,
+        },
+      },
+      auth: { persistSession: false },
+    });
+
+    const { data, error } = await userClient.rpc('commit_ingestion_transaction', {
+      p_site_id: siteAId,
+      p_filename: 'adversarial_direct.csv',
+      p_checksum_sha256: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      p_uploaded_by: 'c0000000-0000-0000-0000-000000000001',
+      p_rows: [],
+      p_freshness_status: 'FRESH',
+      p_actor_role: 'SYSTEM',
+      p_org_id: orgAId,
+    });
+
+    expect(data).toBeNull();
+    expect(error).toBeDefined();
+    expect(error?.code).toBe('42501');
+    expect(error?.message).toContain('permission denied for function commit_ingestion_transaction');
+  });
+
+  // 14. Customer ORGANISATION_ADMIN cannot access internal platform admin audit API
+  it('14. Customer vs Platform Admin: ORGANISATION_ADMIN cannot access /api/admin/audit (403)', async () => {
+    const req = new NextRequest('http://localhost:3000/api/admin/audit', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${userAToken}`, // Rajesh Sharma: ORGANISATION_ADMIN
+      },
+    });
+
+    const res = await adminAuditGet(req);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toContain('Customer Organisation Admins are not permitted platform administration access');
+  });
+
+  // 15. Expired Aetheon Analyst support access is denied
+  it('15. Analyst Expiry Enforcement: Expired AETHEON_ANALYST is denied platform admin access (403)', async () => {
+    // Create an expired analyst user session
+    const expiredAnalystEmail = `expired.analyst.${Date.now()}@aetheon.energy`;
+    const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
+      email: expiredAnalystEmail,
+      password: 'AnalystPassword123!',
+      email_confirm: true,
+    });
+    expect(createErr).toBeNull();
+    const analystId = newUser.user.id;
+
+    // Set membership to AETHEON_ANALYST with past expires_at
+    await adminClient.from('memberships').insert({
+      organisation_id: orgAId,
+      user_id: analystId,
+      role: 'AETHEON_ANALYST',
+      is_active: true,
+      expires_at: new Date(Date.now() - 3600000).toISOString(), // 1 hour in past
+    });
+
+    // Sign in as expired analyst
+    const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false },
+    });
+    const { data: authData } = await client.auth.signInWithPassword({
+      email: expiredAnalystEmail,
+      password: 'AnalystPassword123!',
+    });
+    const expiredToken = authData.session!.access_token;
+
+    const req = new NextRequest('http://localhost:3000/api/admin/audit', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${expiredToken}`,
+      },
+    });
+
+    const res = await adminAuditGet(req);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toContain('Analyst support session has expired');
+
+    // Clean up
+    await adminClient.auth.admin.deleteUser(analystId);
+  });
+
+  // 16. Entitlement Uniqueness with NULL site_id (UNIQUE NULLS NOT DISTINCT)
+  it('16. Entitlement Uniqueness: Duplicate org-wide entitlement with site_id = NULL is strictly rejected', async () => {
+    const testProd = 'DSM_RISK';
+    // Clean any pre-existing
+    await adminClient.from('entitlements').delete().match({
+      organisation_id: orgAId,
+      product_id: testProd,
+    });
+
+    // 1st insertion: org-wide entitlement
+    const { error: ins1Err } = await adminClient.from('entitlements').insert({
+      organisation_id: orgAId,
+      product_id: testProd,
+      site_id: null,
+      is_active: true,
+    });
+    expect(ins1Err).toBeNull();
+
+    // 2nd insertion: duplicate org-wide entitlement with site_id = NULL
+    const { error: ins2Err } = await adminClient.from('entitlements').insert({
+      organisation_id: orgAId,
+      product_id: testProd,
+      site_id: null,
+      is_active: true,
+    });
+
+    expect(ins2Err).toBeDefined();
+    // Unique violation code 23505
+    expect(ins2Err?.code).toBe('23505');
   });
 });

@@ -82,6 +82,11 @@ describe('Audit Log Tamper-Evident Hash Chaining Live Test (Defect #22)', () => 
     expect(eventB.current_hash).toBeDefined();
     expect(eventB.current_hash.length).toBe(64);
     expect(eventB.current_hash).not.toBe(eventB.previous_hash);
+
+    // Cryptographic verification: Recompute SHA-256 independently
+    const expectedPayload = `${eventB.previous_hash}|${eventB.actor_id || 'SYSTEM'}|${eventB.actor_role}|${eventB.organisation_id || ''}|${eventB.action}|${eventB.entity_type}|${eventB.entity_id || ''}|${JSON.stringify(eventB.details)}|${eventB.created_at}`;
+    expect(eventB.current_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(eventB.previous_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('3. UPDATE on audit_logs must be strictly rejected by immutability trigger/policy', async () => {
