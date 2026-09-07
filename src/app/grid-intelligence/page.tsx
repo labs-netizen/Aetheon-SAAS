@@ -91,7 +91,12 @@ export default function GridIntelligencePage() {
       }));
     }
 
-    // Deterministic fallback labeled DEMO / INTERNAL_VALIDATION
+    // In LIVE mode, fail closed: do NOT synthesize Math.sin() blocks when backend output is unavailable
+    if (!currentSite?.is_demo) {
+      return [];
+    }
+
+    // Deterministic fallback permitted ONLY in explicit trusted DEMO mode
     const pts: Block96Point[] = [];
     const baseDemand = (currentSite?.contract_demand_value || 1000) * 0.75;
 

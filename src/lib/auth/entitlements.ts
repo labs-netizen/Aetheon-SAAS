@@ -39,24 +39,18 @@ export async function checkServerEntitlement(
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   const isDemoOrg = organisationId === 'a0000000-0000-0000-0000-000000000001' || organisationId === 'org-demo-001';
 
-  if (isDemoMode && isDemoOrg) {
+  if (isDemoMode && isDemoOrg && productId !== 'OA_COMPLIANCE') {
     // In demo mode, demo org has access to standard modules
     const demoAllowed = ['GRID_INTELLIGENCE', 'DSM_RISK', 'BESS_ARBITRAGE', 'RENEWABLE_PORTFOLIO'];
     if (demoAllowed.includes(productId)) {
       return { entitled: true, planTier: 'DEMO_FULL_SUITE' };
     }
-    // OA_COMPLIANCE can be toggled/locked to demonstrate unsubscribed state
-    return {
-      entitled: false,
-      reason: 'DEMO_UNSUBSCRIBED: Open Access Compliance Sentinel subscription is not active.',
-      planTier: 'NONE',
-    };
   }
 
-  // Authoritative database check via Supabase client
+  // Authoritative database check via Supabase admin client
   try {
-    const { createServerSupabaseClient } = await import('@/lib/supabase/server');
-    const supabase = createServerSupabaseClient();
+    const { createAdminClient } = await import('@/lib/supabase/admin');
+    const supabase = createAdminClient();
 
     const { data, error } = await supabase
       .from('entitlements')

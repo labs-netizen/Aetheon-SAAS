@@ -50,33 +50,54 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: regErr.message }, { status: 500 });
     }
 
-    // 4. Query applicable Open Access landed charges
-    const { data: charges, error: chargesErr } = await adminClient
+    const today = new Date().toISOString().split('T')[0];
+
+    // 4. Query applicable Open Access landed charges (Strict Approval Gate)
+    const { data: chargesList, error: chargesErr } = await adminClient
       .from('open_access_charges')
-      .select('*')
+      .select('*, regulatory_sources!inner(id, status)')
       .eq('state', siteState)
       .eq('discom', siteDiscom)
-      .order('effective_from', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
+      .lte('effective_from', today)
+      .order('effective_from', { ascending: false });
 
     if (chargesErr) {
       return NextResponse.json({ error: chargesErr.message }, { status: 500 });
     }
 
-    // 5. Query applicable DISCOM Retail Tariffs
-    const { data: tariffs, error: tariffErr } = await adminClient
+    const applicableCharge = chargesList?.find(
+      (c) =>
+        (c.voltage_category === siteVoltage || !c.voltage_category) &&
+        (!c.effective_until || c.effective_until >= today)
+    ) || chargesList?.[0] || null;
+
+    // 5. Query applicable DISCOM Retail Tariffs (Strict Approval Gate)
+    const { data: tariffsList, error: tariffErr } = await adminClient
       .from('discom_tariffs')
-      .select('*')
+      .select('*, regulatory_sources!inner(id, status)')
       .eq('state', siteState)
       .eq('discom', siteDiscom)
-      .order('effective_from', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
+      .lte('effective_from', today)
+      .order('effective_from', { ascending: false });
 
     if (tariffErr) {
       return NextResponse.json({ error: tariffErr.message }, { status: 500 });
     }
+
+    const applicableTariff = tariffsList?.find(
+      (t) =>
+        (t.voltage_category === siteVoltage || !t.voltage_category) &&
+        (!t.effective_until || t.effective_until >= today)
+    ) || tariffsList?.[0] || null;
+
+    // 6. Query approved statutory compliance calendar obligations
+    const { data: obligations } = await adminClient
+      .from('compliance_obligations')
+      .select('*')
+      .or(`state.eq.${siteState},state.eq.National,state.is.null`)
+      .order('deadline_date', { ascending: true });
 
     return NextResponse.json({
       site: {
@@ -87,8 +108,9 @@ export async function GET(req: NextRequest) {
         voltageCategory: siteVoltage,
       },
       sources: regSources || [],
-      charges: charges || null,
-      tariff: tariffs || null,
+      charges: applicableCharge,
+      tariff: applicableTariff,
+      calendar: obligations || [],
       hasApprovedData: Boolean(regSources && regSources.length > 0),
       legalDisclaimer: 'NOT FORMAL LEGAL ADVICE. Statutory parameters are published from official Commission regulatory orders for algorithmic decision support only.',
     });

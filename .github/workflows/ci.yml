@@ -54,6 +54,27 @@ jobs:
         env:
           NEXT_PUBLIC_APP_URL: http://localhost:3000
 
+      - name: Setup Python for Analytics Microservice
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Start Analytics Microservice in Background
+        run: |
+          cd services/analytics
+          pip install -r requirements.txt
+          nohup uvicorn main:app --host 0.0.0.0 --port 8000 &
+          echo "Waiting for FastAPI to become healthy..."
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8000/health | grep -q "healthy"; then
+              echo "FastAPI is up and healthy!"
+              break
+            fi
+            sleep 1
+          done
+        env:
+          ANALYTICS_SERVICE_TOKEN: aetheon-dev-analytics-secret-2026
+
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
@@ -61,6 +82,8 @@ jobs:
         run: npx playwright test
         env:
           NEXT_PUBLIC_APP_URL: http://localhost:3000
+          ANALYTICS_SERVICE_URL: http://127.0.0.1:8000
+          ANALYTICS_SERVICE_TOKEN: aetheon-dev-analytics-secret-2026
 
   validate-analytics:
     name: Python Analytics Microservice Validation

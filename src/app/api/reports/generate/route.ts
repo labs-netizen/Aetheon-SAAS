@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     csvLines.push(``);
 
     // 4. Query Actual Persisted Data per Report Type
-    if (reportType === 'GRID_DAILY_BRIEF' || reportType === 'GRID_MONTHLY_REPORT') {
+    if (reportType === 'GRID_DAILY_BRIEF' || reportType === 'GRID_MONTHLY_REPORT' || reportType === 'DAILY_DISPATCH') {
       // Query persisted forecast run
       const { data: runs } = await adminClient
         .from('grid_forecast_runs')
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
         const { data: blockRows } = await adminClient
           .from('grid_forecast_blocks')
           .select('*')
-          .eq('forecast_run_id', latestRun.id)
+          .eq('run_id', latestRun.id)
           .order('block_index', { ascending: true });
         blocks = blockRows || [];
       }
@@ -258,21 +258,29 @@ export async function POST(req: NextRequest) {
     }
 
     const csvContent = csvLines.join('\n');
+    summaryData.csv_content = csvContent;
     const storagePath = `tenants/${authResult.organisationId}/${siteId}/${reportType}_${pStart}_${Date.now()}.csv`;
 
-    // Attempt to store in private tenant-reports bucket
-    try {
-      await adminClient.storage
-        .from('tenant-reports')
-        .upload(storagePath, csvContent, {
-          contentType: 'text/csv',
-          upsert: true,
-        });
-    } catch (storageErr) {
-      console.warn('Storage upload notice (falling back to inline summary persistence):', storageErr);
+    // 5. Store in private tenant-reports bucket (fail closed on upload error)
+    const { error: storageError } = await adminClient.storage
+      .from('tenant-reports')
+      .upload(storagePath, csvContent, {
+        contentType: 'text/csv',
+        upsert: true,
+      });
+
+    if (storageError) {
+      console.error('Failed to upload report to tenant-reports storage:', storageError);
+      return NextResponse.json(
+        {
+          error: 'STORAGE_UPLOAD_FAILED',
+          message: `Failed to archive report to private storage: ${storageError.message}`,
+        },
+        { status: 500 }
+      );
     }
 
-    const reportModule = reportType.startsWith('GRID')
+    const reportModule = (reportType.startsWith('GRID') || reportType === 'DAILY_DISPATCH')
       ? 'GRID'
       : reportType.startsWith('DSM')
       ? 'DSM'
@@ -283,21 +291,28 @@ export async function POST(req: NextRequest) {
       : 'RENEWABLE';
 
     const reportTitle = `${siteName} - ${reportType.replace(/_/g, ' ')} (${pStart})`;
+    const qualityStatus = summaryData.qualityGateStatus || (summaryData.status === 'REPORT_DATA_GAP' ? 'DATA_GAP' : 'PASSED');
+    const modelVersion = summaryData.modelVersion || 'GATEWAY_RAW_v1.0';
 
-    // Persist to report_records
+    // 6. Persist to report_records with canonical database schema
     const { data: record, error: recordError } = await adminClient
       .from('report_records')
       .insert({
+        organisation_id: authResult.organisationId,
         site_id: siteId,
+        module: reportModule,
         report_type: reportType,
         period_start: pStart,
         period_end: pEnd,
-        generated_by: authResult.user.id,
-        file_path: storagePath,
-        summary_metrics: summaryData,
         title: reportTitle,
-        module: reportModule,
-        status: 'READY',
+        summary: summaryData,
+        quality_status: qualityStatus,
+        model_version: modelVersion,
+        tariff_version: 'MSEDCL_HT1_TOD_2024_VALIDATED',
+        rule_version: 'CERC_DSM_2024',
+        generated_by: authResult.user.id,
+        download_url: `/api/reports/placeholder/download`,
+        storage_path: storagePath,
       })
       .select()
       .single();
@@ -310,6 +325,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const canonicalDownloadUrl = `/api/reports/${record.id}/download`;
+
+    // Update download_url to canonical route
+    await adminClient
+      .from('report_records')
+      .update({ download_url: canonicalDownloadUrl })
+      .eq('id', record.id);
+
     return NextResponse.json({
       success: true,
       reportId: record.id,
@@ -317,8 +340,17 @@ export async function POST(req: NextRequest) {
       reportType,
       siteId,
       storagePath,
-      downloadUrl: `/api/reports/download/${record.id}`,
+      downloadUrl: canonicalDownloadUrl,
       summary: summaryData,
+      report: {
+        id: record.id,
+        download_url: canonicalDownloadUrl,
+        storage_path: storagePath,
+        title: reportTitle,
+        report_type: reportType,
+        site_id: siteId,
+        summary: summaryData,
+      },
     });
   } catch (err) {
     console.error('Report generation error:', err);

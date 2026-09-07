@@ -11,7 +11,7 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, and Pytest solvers (73/73 passing):
+A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (96/96 passing):
 
 ### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
 1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
@@ -23,7 +23,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 7. **Role Boundary Enforcement**: Trigger `trg_enforce_membership_role_boundary` prevents customer `ORGANISATION_ADMIN`s from assigning internal Aetheon roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`).
 8. **Site-Level Access Isolation**: Function `has_site_access()` verifies that a user assigned to Site 1 receives zero rows when querying Site 2 telemetry, even if both sites belong to the same organisation.
 9. **Regulatory Visibility Gate**: Unapproved regulatory rules (`REVIEW_PENDING`, `CHANGE_DETECTED`, `EXTRACTED`, `CAPTURED`) are strictly hidden from customer sessions; only `APPROVED` and `PUBLISHED` rules are visible.
-10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `bess_optimisation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
+10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `grid_forecast_blocks`, `bess_optimisation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
 11. **Server-Generated Data Protection**: Customer accounts cannot forge or directly insert forecast runs.
 
 ### 2.2 Live Tamper-Evident Audit Chaining (`tests/integration/audit_chaining.test.ts` - 4/4 Passing)
@@ -31,8 +31,9 @@ A comprehensive automated security test suite has been implemented across Vitest
 2. **Cryptographic Chaining**: Event B's `previous_hash` strictly matches Event A's `current_hash`.
 3. **UPDATE Immutability**: Database trigger rejects any UPDATE operation on `audit_logs`.
 4. **DELETE Immutability**: Database trigger rejects any DELETE operation on `audit_logs`.
+5. **Concurrency Safety**: Migration 11 enforces `pg_advisory_xact_lock(hashtext('audit_logs_hash_chain'))` to guarantee zero chain forks under concurrent inserts.
 
-### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 11/11 Passing)
+### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 20/20 Passing)
 1. **Unauthenticated Request Rejection**: Unauthenticated requests to `/api/forecast` return 401 Unauthorized.
 2. **Cross-Tenant Site Isolation**: Attempting to query an operational endpoint for a site belonging to a foreign organisation returns 403 Forbidden.
 3. **Site Boundary Isolation**: A user without an active `site_access` grant for a specific site is rejected with 403 Forbidden.
@@ -44,36 +45,46 @@ A comprehensive automated security test suite has been implemented across Vitest
 9. **Duplicate Ingestion Rejection**: Ingestion commit endpoint computes SHA-256 on actual file content and rejects duplicates with 409 Conflict.
 10. **Webhook Replay Deduplication**: Replayed Razorpay webhook events are transactionally deduplicated via atomic pre-insertion.
 11. **Invitation Email Binding**: User B attempting to accept an invitation token issued to User A's email is rejected with 403 Forbidden.
+12. **Analyst Expiry Enforcement**: Expired AETHEON_ANALYST memberships return 403 Forbidden across server endpoints.
+13. **Indefinite Analyst Creation Rejection**: Creating an analyst role without an `expires_at` or with `expires_at` > 24 hours is rejected at write-time.
+14. **Compliance Approval Gate**: `/api/compliance` strictly filters out REVIEW_PENDING or unapproved rules; returns only APPROVED/PUBLISHED entries.
+15. **Unmapped Webhook Quarantine**: Razorpay webhooks referencing unknown checkout sessions are quarantined and rejected without granting entitlements.
+16. **Canonical Report Generation Contract**: Report generation enforces canonical `report_records` schema, stores provenance, and uploads to private storage.
+17. **Canonical Report Download Route**: `/api/reports/[id]/download` enforces site access and returns structured `REPORT_FILE_UNAVAILABLE` on missing files without data fabrication.
+18. **Fail-Closed Live Grid Ingestion**: Live grid calculations fail closed with `DATA GAP` if 96-block meter inputs are absent.
+19. **Fail-Closed Live Renewables**: Live renewables calculations reject scalar synthesis and demand 96-block measured intervals.
+20. **Fail-Safe Alert Acknowledgment**: Alert status mutations fail closed if database update fails.
 
 ---
 
 ## 3. Implemented Protections
 
 ### 3.1 Multi-Tenant & Site-Level Isolation
-- **Row Level Security (RLS)**: Enforced directly at the PostgreSQL layer. All tenant tables (`sites`, `interval_data_96`, `subscriptions`, `alerts`, `audit_logs`) contain an `organisation_id` foreign key.
+- **Row Level Security (RLS)**: Enforced directly at the PostgreSQL layer across 11 migrations. All tenant tables (`sites`, `interval_data_96`, `subscriptions`, `alerts`, `audit_logs`, `compliance_obligations`, `report_records`) contain an `organisation_id` foreign key.
 - **Site-Level Access Helper**: `has_site_access(p_user_id, p_site_id)` checks both explicit entries in `site_access` and organisation administration privileges, completely closing site-bleed vulnerabilities.
 - **Session Scoping**: Authenticated queries resolve tenant membership via the `memberships` table. Direct cross-tenant querying is prevented at the database kernel level.
-- **Private Storage**: Supabase Storage buckets for CSV uploads and report PDFs are configured as private with signed URLs for authorized users only.
+- **Private Storage**: Supabase Storage buckets for CSV uploads and report files are configured as private with signed URLs for authorized users only.
 
-### 3.2 Role-Based Access Control (RBAC)
-- 6 distinct canonical roles enforced across both UI routing, API guard, and database triggers:
+### 3.2 Role-Based Access Control (RBAC) & Analyst Expiry
+- 6 distinct canonical roles enforced across UI routing, API guard, and database triggers:
   - `ORGANISATION_ADMIN`: Organization, billing, user, and site administration. Cannot assign internal Aetheon roles.
   - `ENERGY_MANAGER`: Operational dashboards, data upload, asset configuration. Zero billing management.
   - `OPERATOR`: Alerts view and incident acknowledgment. Zero billing management and zero user management.
   - `FINANCE_SUSTAINABILITY_VIEWER`: Read-only financial and sustainability reports. Zero operational ingestion.
-  - `AETHEON_ANALYST`: Internal support role with mandatory time-expiry (`expires_at`) and mandatory audit logging of every query.
+  - `AETHEON_ANALYST`: Internal support role with mandatory write-time and runtime time-expiry (`expires_at`, max 24 hours) and mandatory audit logging.
   - `AETHEON_REGULATORY_REVIEWER`: Internal regulatory publishing role. Completely isolated from customer billing permissions.
 - **Client Role Switcher Isolation**: Gated behind `NEXT_PUBLIC_DEMO_MODE === 'true'`. In production mode, role switching in client UI is disabled and role identity is strictly derived from verified Supabase session claims.
 
 ### 3.3 Secret Management & Frontend Boundary
 - Frontend code utilizes only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 - Supabase `SERVICE_ROLE_KEY`, Razorpay webhook secrets, and analytics service tokens are restricted strictly to server-side Next.js route handlers.
-- Safe CSV parsing in V1: Spreadsheet parsing vulnerabilities eliminated by uninstalling legacy unmaintained libraries and strictly supporting CSV formats.
+- Safe CSV parsing: Spreadsheet parsing vulnerabilities eliminated by strictly supporting standard CSV formats with server-side SHA-256 calculation and contiguity validation.
+- Client-controlled `parsedData` JSON bypass has been removed from live customer endpoints.
 
 ### 3.4 Idempotency & Webhook Verification
 - Segregated billing provider modes: `MOCK_DEVELOPMENT`, `RAZORPAY_TEST`, and `RAZORPAY_LIVE`. Fails closed if mock mode is attempted in production.
 - Razorpay webhooks require cryptographic HMAC-SHA256 signature verification before updating subscription state.
-- Ingestion runs compute SHA-256 file hashes to prevent double-counting of interval loads.
+- Authoritative commercial bindings are persisted in `billing_checkout_sessions` before checkout; webhooks verify against local records rather than trusting notes.
 - Webhook deduplication enforces atomic pre-insertion in `processed_webhook_events`.
 
 ---
@@ -85,6 +96,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 - PostgreSQL trigger `trg_chain_audit_log_hash` computes:
   `current_hash = encode(sha256((coalesce(previous_hash, 'GENESIS') || coalesce(actor_id::text, '') || coalesce(action, '') || coalesce(entity_type, '') || coalesce(created_at::text, ''))::bytea), 'hex')`
 - PostgreSQL trigger `trg_protect_audit_logs` rejects any UPDATE or DELETE operations on audit records.
+- Concurrency protected via `pg_advisory_xact_lock`.
 
 ### 4.2 Regulatory Publication Quality Gate
 - Untrusted web-scraped or AI-extracted regulatory parameters are locked in `CAPTURED`, `EXTRACTED`, `CHANGE_DETECTED`, or `REVIEW_PENDING`.
@@ -93,9 +105,9 @@ A comprehensive automated security test suite has been implemented across Vitest
 
 ### 4.3 Aetheon Admin Security Requirements
 - Multi-Factor Authentication (MFA / AAL2) Status: `PRODUCTION_CONFIG_REQUIRED`. For local development and CI testing, GoTrue AAL1 is functional; production deployment mandates enabling Supabase Auth TOTP/MFA for all accounts with internal roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`) or `is_platform_admin = true`.
-- Analyst access sessions expire automatically after a maximum of 24 hours (`expires_at` enforced at database and RLS layers).
+- Analyst access sessions expire automatically after a maximum of 24 hours (`expires_at` enforced at database write-time, RLS layers, and API guard).
 
 ### 4.4 Operational Failure & Fail-Safe Persistence
 - Operational API routes (`/api/forecast`, `/api/dsm`, `/api/bess`, `/api/renewables`) fail safely: if model run persistence fails, the route returns an error rather than publishing an unpersisted result.
 - Telemetry failure triggers an automatic transition of site monitoring to `DEGRADED`.
-- Advisory Suppression: When data freshness is lost (>24h) or completeness drops below 95%, recommendations are hard-suppressed to prevent erroneous operational actions.
+- Live mode never synthesizes fake operational curves or synthetic fallback numbers when telemetry or tariffs are unavailable.

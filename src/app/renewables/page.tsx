@@ -44,15 +44,21 @@ export default function RenewablesPage() {
     setReconError(null);
 
     const targetDate = new Date().toISOString().substring(0, 10);
+    const isDemo = Boolean(currentSite.is_demo);
+
     fetch('/api/renewables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         siteId: currentSite.id,
         operatingDate: targetDate,
-        installedCapacityKw: 1200.0,
-        measuredGenerationKwh: 4420.0,
-        siteTotalConsumptionKwh: 5200.0,
+        ...(isDemo
+          ? {
+              installedCapacityKw: 1200.0,
+              measuredGenerationKwh: 4420.0,
+              siteTotalConsumptionKwh: 5200.0,
+            }
+          : {}),
       }),
     })
       .then(async (res) => {

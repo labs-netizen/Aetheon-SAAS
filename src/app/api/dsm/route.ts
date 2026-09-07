@@ -118,30 +118,40 @@ export async function POST(req: NextRequest) {
       return authResult.response;
     }
 
-    // 2. Section 11: Missing schedule or actual meter data -> suppress compliance/exposure result
-    if (
-      !scheduledDrawalKw ||
-      !actualDrawalKw ||
-      !Array.isArray(scheduledDrawalKw) ||
-      !Array.isArray(actualDrawalKw) ||
-      scheduledDrawalKw.length === 0 ||
-      actualDrawalKw.length === 0
-    ) {
-      return NextResponse.json(
-        {
-          is_suppressed: true,
-          suppression_reason: 'MISSING_DATA: Missing approved schedule or actual meter interval data.',
-          summary: {
-            total_deviation_kwh: 0,
-            estimated_penalty_inr: 0,
-            high_risk_blocks_count: 0,
-            quality_status: 'BLOCKED_MISSING_INPUT',
+    // 2. Fetch or validate 96-block schedule and actual drawal
+    const adminClient = createAdminClient();
+    let effectiveScheduled = scheduledDrawalKw;
+    let effectiveActual = actualDrawalKw;
+
+    // In live mode, if schedule or actual not supplied or incomplete, load directly from persisted interval_data_96
+    if (!effectiveScheduled || !effectiveActual || !Array.isArray(effectiveScheduled) || !Array.isArray(effectiveActual) || effectiveScheduled.length !== 96 || effectiveActual.length !== 96) {
+      const { data: intervals, error: intErr } = await adminClient
+        .from('interval_data_96')
+        .select('block_index, scheduled_drawal_kw, actual_drawal_kw')
+        .eq('site_id', siteId)
+        .eq('operating_date', operatingDate)
+        .order('block_index', { ascending: true });
+
+      if (intErr || !intervals || intervals.length !== 96) {
+        return NextResponse.json(
+          {
+            is_suppressed: true,
+            suppression_reason: 'MISSING_DATA: Missing approved 96-block schedule or actual meter interval data for operating date.',
+            summary: {
+              total_deviation_kwh: 0,
+              estimated_penalty_inr: 0,
+              high_risk_blocks_count: 0,
+              quality_status: 'BLOCKED_MISSING_INPUT',
+            },
+            blocks: [],
+            incidents: [],
           },
-          blocks: [],
-          incidents: [],
-        },
-        { status: 200 }
-      );
+          { status: 200 }
+        );
+      }
+
+      effectiveScheduled = intervals.map((row) => Number(row.scheduled_drawal_kw || 0));
+      effectiveActual = intervals.map((row) => Number(row.actual_drawal_kw || 0));
     }
 
     // 3. Call FastAPI analytics microservice
@@ -150,8 +160,8 @@ export async function POST(req: NextRequest) {
       calculationResult = await fetchDSMCalculation({
         siteId,
         operatingDate,
-        scheduledDrawalKw,
-        actualDrawalKw,
+        scheduledDrawalKw: effectiveScheduled,
+        actualDrawalKw: effectiveActual,
         contractDemandKw,
       });
     } catch (apiErr) {
@@ -206,7 +216,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Persist identified incidents to dsm_incidents safely via service client
-    const adminClient = createAdminClient();
     try {
       if (incidents.length > 0) {
         const incidentRows = incidents.map((inc) => ({

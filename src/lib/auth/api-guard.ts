@@ -186,7 +186,7 @@ export async function authorizeApiRequest(
   // 4. Verify Organisation Membership
   const { data: membership, error: memError } = await adminClient
     .from('memberships')
-    .select('role, is_active')
+    .select('role, is_active, expires_at')
     .eq('organisation_id', resolvedOrgId)
     .eq('user_id', user.id)
     .eq('is_active', true)
@@ -206,6 +206,22 @@ export async function authorizeApiRequest(
   }
 
   const userRole = membership.role as PlatformRole;
+
+  // Enforce time-bounded least privilege for AETHEON_ANALYST
+  if (userRole === 'AETHEON_ANALYST') {
+    if (!membership.expires_at || new Date(membership.expires_at) <= new Date()) {
+      return {
+        authorized: false,
+        response: NextResponse.json(
+          {
+            error: 'ANALYST_ACCESS_EXPIRED',
+            message: 'Aetheon Analyst delegated access has expired or does not possess a valid future expiry timestamp.',
+          },
+          { status: 403 }
+        ),
+      };
+    }
+  }
 
   // 5. Verify Site-Level Access (has_site_access)
   if (options.siteId && userRole !== 'ORGANISATION_ADMIN') {

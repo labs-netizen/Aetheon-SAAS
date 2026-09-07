@@ -81,13 +81,16 @@ export default function BESSPage() {
     setBessError(null);
 
     const targetDate = new Date().toISOString().substring(0, 10);
-    // 96-block price array sample
-    const samplePrices = Array.from({ length: 96 }, (_, i) => {
-      if (i >= 32 && i <= 44) return 6500;
-      if (i >= 72 && i <= 88) return 8500;
-      if (i <= 24) return 2900;
-      return 4500;
-    });
+    const isDemo = Boolean(currentSite.is_demo);
+    // 96-block price array sample (demo only)
+    const samplePrices = isDemo
+      ? Array.from({ length: 96 }, (_, i) => {
+          if (i >= 32 && i <= 44) return 6500;
+          if (i >= 72 && i <= 88) return 8500;
+          if (i <= 24) return 2900;
+          return 4500;
+        })
+      : undefined;
 
     fetch('/api/bess', {
       method: 'POST',
@@ -96,16 +99,20 @@ export default function BESSPage() {
         batteryId: siteAsset?.id || undefined,
         siteId: currentSite.id,
         operatingDate: targetDate,
-        usableCapacityKwh: usableCapacity,
-        powerRatingKw: powerRating,
-        initialSocPct: simulatedSoc,
-        minSocPct: minSoc,
-        maxSocPct: maxSoc,
-        chargeEfficiency: siteAsset?.charge_efficiency ? Number(siteAsset.charge_efficiency) : 0.92,
-        dischargeEfficiency: siteAsset?.discharge_efficiency ? Number(siteAsset.discharge_efficiency) : 0.92,
-        degradationCostPerCycleInr: siteAsset?.degradation_cost_per_cycle_inr ? Number(siteAsset.degradation_cost_per_cycle_inr) : 1500.0,
-        pricesInrPerMwh: samplePrices,
-        maintenanceLockActive: maintenanceLock,
+        ...(isDemo
+          ? {
+              usableCapacityKwh: usableCapacity,
+              powerRatingKw: powerRating,
+              initialSocPct: simulatedSoc,
+              minSocPct: minSoc,
+              maxSocPct: maxSoc,
+              chargeEfficiency: siteAsset?.charge_efficiency ? Number(siteAsset.charge_efficiency) : 0.92,
+              dischargeEfficiency: siteAsset?.discharge_efficiency ? Number(siteAsset.discharge_efficiency) : 0.92,
+              degradationCostPerCycleInr: siteAsset?.degradation_cost_per_cycle_inr ? Number(siteAsset.degradation_cost_per_cycle_inr) : 1500.0,
+              pricesInrPerMwh: samplePrices,
+              maintenanceLockActive: maintenanceLock,
+            }
+          : {}),
       }),
     })
       .then(async (res) => {

@@ -16,6 +16,9 @@ import { POST as webhookPost } from '@/app/api/webhooks/razorpay/route';
 import { POST as billingCancelPost } from '@/app/api/billing/cancel/route';
 import { POST as invitationAcceptPost } from '@/app/api/invitations/accept/route';
 import { GET as adminAuditGet } from '@/app/api/admin/audit/route';
+import { GET as complianceGet } from '@/app/api/compliance/route';
+import { POST as reportsGeneratePost } from '@/app/api/reports/generate/route';
+import { GET as reportsDownloadGet } from '@/app/api/reports/[id]/download/route';
 import { createClient } from '@supabase/supabase-js';
 import CryptoJS from 'crypto-js';
 
@@ -260,7 +263,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
       },
       body: JSON.stringify({
         siteId: siteAId,
-        operatingDate: '2026-09-08',
+        operatingDate: '2026-01-01', // Date with no persisted interval data
         contractDemandKw: 2500,
         scheduledDrawalKw: [], // Missing schedule!
         actualDrawalKw: [],
@@ -360,6 +363,20 @@ describe('Adversarial API & Server Rejection Suite', () => {
   it('9. Webhook Idempotency: Concurrent/replayed webhooks do not duplicate state', async () => {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_aetheon';
     const eventId = `evt_test_${Date.now()}`;
+    const paymentId = `pay_${Date.now()}`;
+    const orderId = `order_test_${Date.now()}`;
+
+    // Seed local checkout session for authoritative mapping
+    await adminClient.from('billing_checkout_sessions').insert({
+      provider_reference: orderId,
+      organisation_id: orgAId,
+      site_id: siteAId,
+      product_id: 'GRID_INTELLIGENCE',
+      amount_paise: 1990000,
+      provider_mode: 'MOCK_DEVELOPMENT',
+      status: 'CREATED',
+    });
+
     const payload = JSON.stringify({
       id: eventId,
       event: 'payment.captured',
@@ -367,7 +384,8 @@ describe('Adversarial API & Server Rejection Suite', () => {
       payload: {
         payment: {
           entity: {
-            id: `pay_${Date.now()}`,
+            id: paymentId,
+            order_id: orderId,
             amount: 1990000,
             notes: {
               org_id: orgAId,
@@ -582,7 +600,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     const res = await adminAuditGet(req);
     expect(res.status).toBe(403);
     const json = await res.json();
-    expect(json.error).toContain('Analyst support session has expired');
+    expect(json.error).toContain('Forbidden');
 
     // Clean up
     await adminClient.auth.admin.deleteUser(analystId);
@@ -617,5 +635,250 @@ describe('Adversarial API & Server Rejection Suite', () => {
     expect(ins2Err).toBeDefined();
     // Unique violation code 23505
     expect(ins2Err?.code).toBe('23505');
+  });
+
+  // 17. Analyst Expiry Write-Time Enforcement
+  it('17. Write-Time Constraint: AETHEON_ANALYST with NULL expiry or expiry > 24 hours is rejected by trigger', async () => {
+    const dummyAnalystEmail = `test.analyst.${Date.now()}@example.com`;
+    const { data: newUser } = await adminClient.auth.admin.createUser({
+      email: dummyAnalystEmail,
+      password: 'AnalystPassword123!',
+      email_confirm: true,
+    });
+    const analystId = newUser.user.id;
+
+    // A. NULL expiry must be rejected
+    const { error: nullExpiryErr } = await adminClient.from('memberships').insert({
+      organisation_id: orgAId,
+      user_id: analystId,
+      role: 'AETHEON_ANALYST',
+      is_active: true,
+      expires_at: null,
+    });
+    expect(nullExpiryErr).toBeDefined();
+    expect(nullExpiryErr?.message).toContain('specify an explicit expires_at');
+
+    // B. Expiry > 24 hours must be rejected
+    const { error: longExpiryErr } = await adminClient.from('memberships').insert({
+      organisation_id: orgAId,
+      user_id: analystId,
+      role: 'AETHEON_ANALYST',
+      is_active: true,
+      expires_at: new Date(Date.now() + 25 * 3600 * 1000).toISOString(), // 25 hours
+    });
+    expect(longExpiryErr).toBeDefined();
+    expect(longExpiryErr?.message).toContain('cannot exceed 24 hours');
+
+    await adminClient.auth.admin.deleteUser(analystId);
+  });
+
+  // 18. Compliance API Approval Gate Enforcement
+  it('18. Compliance Approval Gate: Customer API returns APPROVED charge and suppresses REVIEW_PENDING charge', async () => {
+    // Ensure orgA has OA_COMPLIANCE entitlement for test
+    await adminClient.from('entitlements').upsert({
+      organisation_id: orgAId,
+      product_id: 'OA_COMPLIANCE',
+      site_id: siteAId,
+      is_active: true,
+    }, { onConflict: 'organisation_id,product_id,site_id' });
+
+    // Insert REVIEW_PENDING source with higher/newer charges and APPROVED source with valid charges
+    const pendingSourceId = 'd0000000-0000-0000-0000-000000000099';
+    const approvedSourceId = 'd0000000-0000-0000-0000-000000000098';
+
+    const { error: srcErr } = await adminClient.from('regulatory_sources').upsert([
+      {
+        id: pendingSourceId,
+        jurisdiction: 'SERC',
+        state: 'Maharashtra',
+        document_title: 'Draft Unapproved Tariff Order 2026',
+        document_date: '2026-01-01',
+        effective_date: '2026-01-01',
+        version: '1.0',
+        status: 'REVIEW_PENDING',
+        is_demo: false,
+      },
+      {
+        id: approvedSourceId,
+        jurisdiction: 'SERC',
+        state: 'Maharashtra',
+        document_title: 'Approved Multi-Year Tariff Order 2026',
+        document_date: '2026-01-01',
+        effective_date: '2026-01-01',
+        version: '1.0',
+        status: 'APPROVED',
+        is_demo: false,
+      },
+    ]);
+    expect(srcErr).toBeNull();
+
+    // Insert open access charges with valid column names
+    const { error: insErr } = await adminClient.from('open_access_charges').insert([
+      {
+        regulatory_source_id: pendingSourceId,
+        state: 'Maharashtra',
+        discom: 'MSEDCL',
+        voltage_category: '33kV',
+        effective_from: '2026-06-01',
+        cross_subsidy_surcharge_inr_per_kwh: 9.99, // Bogus pending charge
+        additional_surcharge_inr_per_kwh: 0.50,
+        wheeling_charge_inr_per_kwh: 4.50,
+        transmission_charge_inr_per_kwh: 0.80,
+        banking_charge_pct: 5.0,
+        is_demo: false,
+      },
+      {
+        regulatory_source_id: approvedSourceId,
+        state: 'Maharashtra',
+        discom: 'MSEDCL',
+        voltage_category: '33kV',
+        effective_from: '2026-01-01',
+        cross_subsidy_surcharge_inr_per_kwh: 1.85, // True approved charge
+        additional_surcharge_inr_per_kwh: 0.50,
+        wheeling_charge_inr_per_kwh: 1.15,
+        transmission_charge_inr_per_kwh: 0.40,
+        banking_charge_pct: 5.0,
+        is_demo: false,
+      },
+    ]);
+    expect(insErr).toBeNull();
+
+    const req = new NextRequest(`http://localhost:3000/api/compliance?siteId=${siteAId}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+      },
+    });
+
+    const res = await complianceGet(req);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.charges).toBeDefined();
+    // Must return the APPROVED charge, never the REVIEW_PENDING 9.99 charge
+    expect(Number(json.charges.cross_subsidy_surcharge_inr_per_kwh)).toBe(1.85);
+    expect(Number(json.charges.cross_subsidy_surcharge_inr_per_kwh)).not.toBe(9.99);
+
+    // Clean up
+    await adminClient.from('open_access_charges').delete().match({ regulatory_source_id: pendingSourceId });
+    await adminClient.from('open_access_charges').delete().match({ regulatory_source_id: approvedSourceId });
+    await adminClient.from('regulatory_sources').delete().match({ id: pendingSourceId });
+    await adminClient.from('regulatory_sources').delete().match({ id: approvedSourceId });
+  });
+
+  // 19. Webhook Unmapped Provider Reference Hardening
+  it('19. Webhook Hardening: Unmapped provider reference is rejected even with valid signature', async () => {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_aetheon';
+    const rawPayload = JSON.stringify({
+      event: 'order.paid',
+      payload: {
+        payment: {
+          entity: {
+            id: 'pay_unmapped_test_999',
+            order_id: 'order_nonexistent_reference_123',
+            amount: 2490000,
+            status: 'captured',
+            notes: { org_id: orgAId, site_id: siteAId, product_id: 'DSM_RISK' },
+          },
+        },
+      },
+    });
+
+    const signature = CryptoJS.HmacSHA256(rawPayload, webhookSecret).toString(CryptoJS.enc.Hex);
+
+    const req = new NextRequest('http://localhost:3000/api/webhooks/razorpay', {
+      method: 'POST',
+      headers: {
+        'x-razorpay-signature': signature,
+        'Content-Type': 'application/json',
+      },
+      body: rawPayload,
+    });
+
+    const res = await webhookPost(req);
+    expect(res.status).toBe(500);
+    const json = await res.json();
+    expect(json.error).toBe('DATABASE_TRANSACTION_FAILED');
+    expect(json.details).toContain('Unknown provider reference');
+  });
+
+  // 20. Grid Forecast Run -> Report with exact 96 blocks via run_id
+  it('20. Grid Report: Generates report with exact 96 persisted blocks matching run_id', async () => {
+    const testDate = '2026-09-08';
+    // Clean any prior forecast run for this site and date
+    await adminClient.from('grid_forecast_runs').delete().match({ site_id: siteAId, operating_date: testDate });
+
+    // Create a mock grid_forecast_run and 96 grid_forecast_blocks
+    const { data: forecastRun, error: runErr } = await adminClient
+      .from('grid_forecast_runs')
+      .insert({
+        site_id: siteAId,
+        operating_date: testDate,
+        model_version: 'GRID_INTEL_v1.0.4',
+        quality_status: 'PASSED',
+        average_price_inr_per_mwh: 4620.50,
+        peak_demand_kw: 1420.5,
+        peak_demand_block: 45,
+      })
+      .select('id')
+      .single();
+
+    expect(runErr).toBeNull();
+    const runId = forecastRun.id;
+
+    // Insert 96 blocks with run_id
+    const blocks = Array.from({ length: 96 }, (_, i) => ({
+      run_id: runId,
+      block_index: i + 1,
+      start_time: `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`,
+      end_time: `${String(Math.floor((i + 1) / 4)).padStart(2, '0')}:${String(((i + 1) % 4) * 15).padStart(2, '0')}`,
+      forecast_demand_kw: 1200 + i * 2,
+      forecast_price_inr_per_mwh: 4500 + i * 10,
+      confidence_lower_kw: 1100,
+      confidence_upper_kw: 1300,
+      is_high_cost_window: i >= 72 && i <= 88,
+    }));
+
+    const { error: blockErr } = await adminClient.from('grid_forecast_blocks').insert(blocks);
+    expect(blockErr).toBeNull();
+
+    // Generate report
+    const req = new NextRequest('http://localhost:3000/api/reports/generate', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        siteId: siteAId,
+        module: 'GRID_INTELLIGENCE',
+        reportType: 'DAILY_DISPATCH',
+        periodStart: testDate,
+        periodEnd: testDate,
+      }),
+    });
+
+    const res = await reportsGeneratePost(req);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.report).toBeDefined();
+    expect(json.report.id).toBeDefined();
+    expect(json.report.download_url).toBe(`/api/reports/${json.report.id}/download`);
+
+    // Download generated report
+    const dlReq = new NextRequest(`http://localhost:3000/api/reports/${json.report.id}/download`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${userAToken}`,
+      },
+    });
+
+    const dlRes = await reportsDownloadGet(dlReq, { params: { id: json.report.id } });
+    expect(dlRes.status).toBe(200);
+    const csvContent = await dlRes.text();
+    // CSV must contain the model version and 96 data rows
+    expect(csvContent).toContain('GRID_INTEL_v1.0.4');
+    expect(csvContent).toContain(`RUN ID: ${runId}`);
+    const dataLines = csvContent.split('\n').filter(line => line.startsWith(testDate));
+    expect(dataLines.length).toBe(96);
   });
 });

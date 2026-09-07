@@ -58,6 +58,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [creationError, setCreationError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // First site onboarding state
+  const [siteFormName, setSiteFormName] = useState('');
+  const [siteFormState, setSiteFormState] = useState('Maharashtra');
+  const [siteFormDiscom, setSiteFormDiscom] = useState('MSEDCL');
+  const [siteFormVoltage, setSiteFormVoltage] = useState('33kV');
+  const [siteFormDemand, setSiteFormDemand] = useState('1500');
+  const [siteFormMetering, setSiteFormMetering] = useState('Main Incomer Feeder 1');
+  const [siteCreationError, setSiteCreationError] = useState<string | null>(null);
+  const [isSubmittingSite, setIsSubmittingSite] = useState(false);
+
   const supabase = createClient();
 
   const handleSignOut = async () => {
@@ -95,6 +105,42 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const handleCreateFirstSite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!siteFormName.trim() || !currentOrg?.id) return;
+
+    setIsSubmittingSite(true);
+    setSiteCreationError(null);
+    try {
+      const res = await fetch('/api/sites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organisationId: currentOrg.id,
+          name: siteFormName.trim(),
+          state: siteFormState,
+          discom: siteFormDiscom,
+          voltageCategory: siteFormVoltage,
+          contractDemandValue: Number(siteFormDemand),
+          contractDemandUnit: 'kVA',
+          meteringPoint: siteFormMetering.trim(),
+          loadClass: 'Industrial C&I',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to initialize facility site');
+      }
+
+      await refreshSites();
+    } catch (err) {
+      setSiteCreationError(err instanceof Error ? err.message : 'Error creating facility');
+    } finally {
+      setIsSubmittingSite(false);
+    }
+  };
+
   // 1. Loading State
   if (tenancyStatus === 'LOADING') {
     return (
@@ -108,7 +154,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // 2. No Organisation / Onboarding Required State
+  // 2. No Organisation State
   if (tenancyStatus === 'NO_ORGANISATION') {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
@@ -172,6 +218,126 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Button>
             </div>
           )}
+        </Card>
+      </div>
+    );
+  }
+
+  // 3. Onboarding Required (Organisation exists, First Site Required)
+  if (tenancyStatus === 'ONBOARDING_REQUIRED') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-6">
+        <Card variant="industrial" className="max-w-lg w-full border-slate-800 bg-slate-900/90 shadow-2xl p-6 space-y-6">
+          <CardHeader className="p-0">
+            <div className="w-12 h-12 rounded-xl bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center mb-3">
+              <Building2 className="w-6 h-6" />
+            </div>
+            <CardTitle className="text-xl">Configure First Industrial Facility</CardTitle>
+            <CardDescription className="text-xs text-slate-400 mt-1">
+              Organisation <strong className="text-slate-200">{currentOrg?.name}</strong> is registered. Configure your primary facility electrical profile to activate intelligence dashboards.
+            </CardDescription>
+          </CardHeader>
+
+          {siteCreationError && (
+            <div className="p-3 rounded bg-rose-950/40 border border-rose-800/60 text-xs text-rose-300 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>{siteCreationError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleCreateFirstSite} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-300">Facility / Site Name</label>
+              <Input
+                required
+                placeholder="e.g. Chakan Manufacturing Unit 1"
+                value={siteFormName}
+                onChange={(e) => setSiteFormName(e.target.value)}
+                className="bg-slate-950 border-slate-800 text-xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">State Jurisdiction</label>
+                <select
+                  value={siteFormState}
+                  onChange={(e) => setSiteFormState(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+                >
+                  <option value="Maharashtra">Maharashtra</option>
+                  <option value="Gujarat">Gujarat</option>
+                  <option value="Tamil Nadu">Tamil Nadu</option>
+                  <option value="Karnataka">Karnataka</option>
+                  <option value="Rajasthan">Rajasthan</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Distribution Utility (DISCOM)</label>
+                <Input
+                  required
+                  placeholder="e.g. MSEDCL"
+                  value={siteFormDiscom}
+                  onChange={(e) => setSiteFormDiscom(e.target.value)}
+                  className="bg-slate-950 border-slate-800 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Interconnection Voltage</label>
+                <select
+                  value={siteFormVoltage}
+                  onChange={(e) => setSiteFormVoltage(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-teal-500"
+                >
+                  <option value="11kV">11kV</option>
+                  <option value="22kV">22kV</option>
+                  <option value="33kV">33kV</option>
+                  <option value="66kV">66kV</option>
+                  <option value="110kV">110kV</option>
+                  <option value="132kV">132kV</option>
+                  <option value="220kV">220kV</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Contract Demand (kVA)</label>
+                <Input
+                  required
+                  type="number"
+                  min="50"
+                  step="10"
+                  placeholder="1500"
+                  value={siteFormDemand}
+                  onChange={(e) => setSiteFormDemand(e.target.value)}
+                  className="bg-slate-950 border-slate-800 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-300">Metering Point Description</label>
+              <Input
+                required
+                placeholder="e.g. Main 33kV Incomer Feeder"
+                value={siteFormMetering}
+                onChange={(e) => setSiteFormMetering(e.target.value)}
+                className="bg-slate-950 border-slate-800 text-xs"
+              />
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <Button type="submit" disabled={isSubmittingSite} className="flex-1 text-xs bg-teal-600 hover:bg-teal-500 text-white">
+                {isSubmittingSite ? 'Configuring Facility...' : 'Initialize Facility & Launch'}
+              </Button>
+              <Button type="button" variant="outline" onClick={handleSignOut} className="text-xs border-slate-800 text-slate-400">
+                Sign Out
+              </Button>
+            </div>
+          </form>
         </Card>
       </div>
     );

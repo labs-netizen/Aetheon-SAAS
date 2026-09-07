@@ -101,25 +101,23 @@ export async function POST(req: NextRequest) {
     // Resolve real asset UUID if not passed or passed placeholder
     let effectiveBatteryId = batteryId;
     let actualAsset: any = null;
-    if (!effectiveBatteryId || effectiveBatteryId === 'bess_01' || !/^[0-9a-fA-F-]{36}$/.test(effectiveBatteryId)) {
-      const { data: asset } = await adminClient
-        .from('bess_assets')
-        .select('*')
-        .eq('site_id', siteId)
-        .maybeSingle();
+    const { data: asset } = await adminClient
+      .from('bess_assets')
+      .select('*')
+      .eq('site_id', siteId)
+      .maybeSingle();
 
-      if (asset) {
-        effectiveBatteryId = asset.id;
-        actualAsset = asset;
-      }
+    if (asset) {
+      effectiveBatteryId = asset.id;
+      actualAsset = asset;
     }
 
     const capKwh = usableCapacityKwh || actualAsset?.usable_capacity_kwh || 1000.0;
     const pRating = powerRatingKw || actualAsset?.power_rating_kw || 500.0;
-    const soc = initialSocPct !== undefined && initialSocPct !== null ? initialSocPct : actualAsset?.current_soc_pct ?? 50.0;
+    const soc = initialSocPct !== undefined && initialSocPct !== null ? initialSocPct : actualAsset?.current_soc_pct ?? null;
     const isMaintenance = maintenanceLockActive !== undefined ? maintenanceLockActive : Boolean(actualAsset?.maintenance_lock);
 
-    // 2. Section 12: Backend Safety Interlock & Suppression Enforcement
+    // 2. Section 12: Backend Safety Interlock & Suppression Enforcement (Evaluated First)
     if (soc === null || soc === undefined || soc < 0 || soc > 100) {
       return NextResponse.json({
         battery_id: effectiveBatteryId,
@@ -168,6 +166,45 @@ export async function POST(req: NextRequest) {
         operating_date: operatingDate,
         is_suppressed: true,
         suppression_reason: 'SAFETY_INTERLOCK: Grid interconnect feeder capacity constrained by DISCOM SLDC order.',
+        gross_arbitrage_inr: 0,
+        degradation_cost_inr: 0,
+        net_opportunity_inr: 0,
+        equivalent_cycles: 0,
+        schedule_blocks: [],
+      });
+    }
+
+    // Resolve prices: if pricesInrPerMwh not supplied, attempt to load from latest grid_forecast_blocks or site tariff
+    let effectivePrices: number[] = Array.isArray(pricesInrPerMwh) && pricesInrPerMwh.length === 96 ? pricesInrPerMwh : [];
+    if (effectivePrices.length !== 96) {
+      // Query latest forecast run
+      const { data: run } = await adminClient
+        .from('grid_forecast_runs')
+        .select('id')
+        .eq('site_id', siteId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (run) {
+        const { data: blocks } = await adminClient
+          .from('grid_forecast_blocks')
+          .select('clearing_price_inr_mwh')
+          .eq('run_id', run.id)
+          .order('block_index', { ascending: true });
+
+        if (blocks && blocks.length === 96) {
+          effectivePrices = blocks.map((b) => Number(b.clearing_price_inr_mwh || 4500));
+        }
+      }
+    }
+
+    if (effectivePrices.length !== 96) {
+      return NextResponse.json({
+        battery_id: effectiveBatteryId,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: 'DATA_GAP: Authoritative 96-block price curve unavailable for site operating date. Advisory suppressed.',
         gross_arbitrage_inr: 0,
         degradation_cost_inr: 0,
         net_opportunity_inr: 0,

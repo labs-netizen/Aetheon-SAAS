@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { billingProvider } from '@/features/billing/razorpayAdapter';
 
 const PRODUCT_PRICES_PAISE: Record<string, number> = {
@@ -43,6 +44,20 @@ export async function POST(req: NextRequest) {
       customerEmail: authResult.user.email || 'billing@aetheon.in',
       customerName: 'Aetheon Customer',
     });
+
+    // 3. Persist authoritative local provider reference mapping
+    const adminClient = createAdminClient();
+    await adminClient
+      .from('billing_checkout_sessions')
+      .insert({
+        provider_reference: session.orderId,
+        organisation_id: organisationId,
+        site_id: siteId || null,
+        product_id: productId,
+        amount_paise: amountPaise,
+        provider_mode: session.billingMode,
+        status: 'CREATED',
+      });
 
     return NextResponse.json({
       success: true,

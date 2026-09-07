@@ -91,29 +91,45 @@ export default function CompliancePage() {
     return regulatorySources.filter((s: any) => s.state === filterState || s.state === 'National');
   }, [regulatorySources, filterState]);
 
-  const complianceCalendar = [
-    {
-      deadline: '2026-09-15',
-      obligation: 'Monthly Banking Energy Reconciliation with DISCOM',
-      type: 'DISCOM Filing',
-      status: 'IN_PROGRESS',
-      owner: 'Energy Manager',
-    },
-    {
-      deadline: '2026-09-25',
-      obligation: 'Quarterly SLDC Open Access Scheduling Agreement Renewal',
-      type: 'SLDC Statutory',
-      status: 'NOT_STARTED',
-      owner: 'Admin',
-    },
-    {
-      deadline: '2026-10-05',
-      obligation: 'Filing of RE Captive Shareholding Self-Certification',
-      type: 'Regulatory Compliance',
-      status: 'NOT_STARTED',
-      owner: 'Finance Viewer',
-    },
-  ];
+  const complianceCalendar = useMemo(() => {
+    if (complianceData?.calendar && Array.isArray(complianceData.calendar) && complianceData.calendar.length > 0) {
+      return complianceData.calendar.map((c: any) => ({
+        deadline: c.deadline_date,
+        obligation: c.obligation_title,
+        type: c.obligation_type,
+        status: c.status,
+        owner: c.owner_role ? c.owner_role.replace(/_/g, ' ') : 'Energy Manager',
+      }));
+    }
+
+    if (currentSite?.is_demo) {
+      return [
+        {
+          deadline: '2026-09-15',
+          obligation: 'Monthly Banking Energy Reconciliation with DISCOM',
+          type: 'DISCOM Filing',
+          status: 'IN_PROGRESS',
+          owner: 'Energy Manager',
+        },
+        {
+          deadline: '2026-09-25',
+          obligation: 'Quarterly SLDC Open Access Scheduling Agreement Renewal',
+          type: 'SLDC Statutory',
+          status: 'NOT_STARTED',
+          owner: 'Admin',
+        },
+        {
+          deadline: '2026-10-05',
+          obligation: 'Filing of RE Captive Shareholding Self-Certification',
+          type: 'Regulatory Compliance',
+          status: 'NOT_STARTED',
+          owner: 'Finance Viewer',
+        },
+      ];
+    }
+
+    return [];
+  }, [complianceData, currentSite?.is_demo]);
 
   const charges = complianceData?.charges;
 
@@ -243,7 +259,12 @@ export default function CompliancePage() {
           </CardHeader>
 
           <div className="space-y-3">
-            {complianceCalendar.map((item, idx) => (
+            {complianceCalendar.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500 italic bg-slate-950/50 rounded-md border border-slate-900">
+                DATA GAP: No published statutory obligations found for this jurisdiction.
+              </div>
+            ) : (
+              complianceCalendar.map((item: any, idx: number) => (
               <div
                 key={idx}
                 className="p-3.5 rounded-md bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -265,7 +286,7 @@ export default function CompliancePage() {
                   <ExternalLink className="w-3 h-3" />
                 </Button>
               </div>
-            ))}
+            )))}
           </div>
         </Card>
 

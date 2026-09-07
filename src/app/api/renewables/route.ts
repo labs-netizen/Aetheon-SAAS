@@ -119,15 +119,31 @@ export async function POST(req: NextRequest) {
       if (intervals && intervals.length === 96) {
         blocks96 = intervals.map((i) => Number(i.generation_solar_kw || 0));
       } else if (typeof inputMeasured === 'number') {
-        // Synthesize 96 blocks from daily scalar for demo/preview compatibility
-        const peakKw = (inputMeasured / 5.0); // 5 effective solar hours
-        blocks96 = Array.from({ length: 96 }, (_, b) => {
-          if (b >= 24 && b <= 72) {
-            const t = (b - 24) / 48.0;
-            return Math.max(0, Number((peakKw * Math.sin(t * Math.PI) * 0.25).toFixed(2)));
-          }
-          return 0;
-        });
+        // Only permit scalar curve synthesis if site is explicitly demo
+        const { data: siteRecord } = await adminClient
+          .from('sites')
+          .select('is_demo')
+          .eq('id', siteId)
+          .maybeSingle();
+
+        if (siteRecord?.is_demo) {
+          const peakKw = (inputMeasured / 5.0); // 5 effective solar hours
+          blocks96 = Array.from({ length: 96 }, (_, b) => {
+            if (b >= 24 && b <= 72) {
+              const t = (b - 24) / 48.0;
+              return Math.max(0, Number((peakKw * Math.sin(t * Math.PI) * 0.25).toFixed(2)));
+            }
+            return 0;
+          });
+        } else {
+          return NextResponse.json(
+            {
+              error: 'DATA_GAP',
+              message: 'Live mode requires 96-block measured solar interval data. Synthetic scalar curve expansion is prohibited for customer assets.',
+            },
+            { status: 422 }
+          );
+        }
       } else {
         return NextResponse.json(
           {

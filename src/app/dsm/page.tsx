@@ -36,13 +36,15 @@ export default function DSMPage() {
     setDsmError(null);
 
     const targetDate = new Date().toISOString().substring(0, 10);
-    // 96-block schedule vs actual
-    const scheduled = Array.from({ length: 96 }, () => 1200.0);
-    const actual = Array.from({ length: 96 }, (_, i) => {
+    
+    // In demo mode only, generate deterministic synthetic 96-block arrays
+    const isDemo = Boolean(currentSite.is_demo);
+    const scheduled = isDemo ? Array.from({ length: 96 }, () => 1200.0) : undefined;
+    const actual = isDemo ? Array.from({ length: 96 }, (_, i) => {
       if (i >= 53 && i <= 57) return 1380.0; // 15% positive deviation
       if (i >= 29 && i <= 32) return 1280.0; // ~6.6% deviation
       return 1200.0;
-    });
+    }) : undefined;
 
     fetch('/api/dsm', {
       method: 'POST',
@@ -51,8 +53,7 @@ export default function DSMPage() {
         siteId: currentSite.id,
         operatingDate: targetDate,
         contractDemandKw: currentSite.contract_demand_value || 1000,
-        scheduledDrawalKw: scheduled,
-        actualDrawalKw: actual,
+        ...(isDemo ? { scheduledDrawalKw: scheduled, actualDrawalKw: actual } : {}),
       }),
     })
       .then(async (res) => {
@@ -191,17 +192,21 @@ export default function DSMPage() {
   }, [dsmData, currentSite?.is_demo]);
 
   const handleAcknowledge = async (id: string) => {
-    setAcknowledgedIncidents((prev) => new Set(prev).add(id));
-    if (currentSite?.id) {
-      try {
-        await fetch('/api/dsm', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ incidentId: id, siteId: currentSite.id }),
-        });
-      } catch (ackErr) {
-        console.warn('Failed to persist incident acknowledgement to DB:', ackErr);
+    if (!currentSite?.id) return;
+    try {
+      const res = await fetch('/api/dsm', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incidentId: id, siteId: currentSite.id }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || `Acknowledgement failed: HTTP ${res.status}`);
       }
+      setAcknowledgedIncidents((prev) => new Set(prev).add(id));
+    } catch (ackErr) {
+      console.error('Failed to persist incident acknowledgement to DB:', ackErr);
+      setDsmError(ackErr instanceof Error ? ackErr.message : 'Failed to acknowledge incident');
     }
   };
 

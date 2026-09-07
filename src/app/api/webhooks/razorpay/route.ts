@@ -62,15 +62,23 @@ export async function POST(req: NextRequest) {
     const paymentEntity = eventPayload?.payload?.payment?.entity || {};
     const subscriptionEntity = eventPayload?.payload?.subscription?.entity || {};
     const notes = paymentEntity.notes || subscriptionEntity.notes || {};
-    const orgId = notes.org_id || notes.organisation_id || null;
-    const siteId = notes.site_id || null;
-    const rawProductId = notes.product_id || 'GRID_INTELLIGENCE';
+    const providerRef = subscriptionEntity.id || paymentEntity.order_id || paymentEntity.id || effectiveEventId;
+
+    // Resolve authoritative local checkout session mapping (prevent arbitrary notes spoofing)
+    const { data: checkoutSession } = await supabase
+      .from('billing_checkout_sessions')
+      .select('organisation_id, site_id, product_id, amount_paise')
+      .eq('provider_reference', providerRef)
+      .maybeSingle();
+
+    const orgId = checkoutSession?.organisation_id || notes.org_id || notes.organisation_id || null;
+    const siteId = checkoutSession?.site_id || notes.site_id || null;
+    const rawProductId = checkoutSession?.product_id || notes.product_id || 'GRID_INTELLIGENCE';
     const productId =
       rawProductId === 'OPEN_ACCESS_COMPLIANCE' ? 'OA_COMPLIANCE' :
       rawProductId === 'DSM_MONITOR' ? 'DSM_RISK' :
       rawProductId;
-    const amountPaise = Number(paymentEntity.amount || subscriptionEntity.amount || 0);
-    const providerRef = subscriptionEntity.id || paymentEntity.order_id || paymentEntity.id || effectiveEventId;
+    const amountPaise = checkoutSession ? Number(checkoutSession.amount_paise) : Number(paymentEntity.amount || subscriptionEntity.amount || 0);
 
     // 3. Atomic Database RPC (service_role privileged): Idempotency lock + State Mutation
     const { data: rpcResult, error: rpcError } = await supabase.rpc('process_razorpay_webhook_atomic', {

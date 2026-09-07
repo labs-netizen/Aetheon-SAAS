@@ -42,6 +42,15 @@ export async function POST(req: NextRequest) {
         rawCsvText = body.fileContent;
         rawBuffer = Buffer.from(rawCsvText, 'utf-8');
       } else if (body.parsedData && Array.isArray(body.parsedData)) {
+        if (process.env.NODE_ENV === 'production') {
+          return NextResponse.json(
+            {
+              error: 'PARSED_DATA_DISALLOWED',
+              message: 'Direct JSON parsedData injection is disallowed in production. Submit authentic raw CSV file bytes.',
+            },
+            { status: 400 }
+          );
+        }
         const header = 'operating_date,block_index,start_time,end_time,load_kw\n';
         const rows = body.parsedData.map((r: any) => `${r.operating_date},${r.block_index},${r.start_time},${r.end_time},${r.load_kw}`).join('\n');
         rawCsvText = header + rows;
@@ -114,17 +123,24 @@ export async function POST(req: NextRequest) {
 
     const adminClient = createAdminClient();
 
-    // 5. Store Original File Privately in tenant-uploads bucket
+    // 5. Store Original File Privately in tenant-uploads bucket (fail closed on error)
     const storagePath = `tenants/${authResult.organisationId}/${siteId}/${filename}_${serverChecksum.slice(0, 8)}.csv`;
-    try {
-      await adminClient.storage
-        .from('tenant-uploads')
-        .upload(storagePath, rawBuffer, {
-          contentType: 'text/csv',
-          upsert: true,
-        });
-    } catch (storageErr) {
-      console.warn('Tenant upload private storage warning:', storageErr);
+    const { error: storageError } = await adminClient.storage
+      .from('tenant-uploads')
+      .upload(storagePath, rawBuffer, {
+        contentType: 'text/csv',
+        upsert: true,
+      });
+
+    if (storageError) {
+      console.error('Tenant upload private storage failed:', storageError);
+      return NextResponse.json(
+        {
+          error: 'STORAGE_UPLOAD_FAILED',
+          message: `Failed to archive original raw file into secure tenant storage: ${storageError.message}`,
+        },
+        { status: 500 }
+      );
     }
 
     // 6. Compute Real Freshness Status from Operating Date

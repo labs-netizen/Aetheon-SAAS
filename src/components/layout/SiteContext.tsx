@@ -98,22 +98,21 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
 
   const loadUserData = React.useCallback(async () => {
-    if (isDemo) {
-      setCurrentOrg(DEMO_ORG);
-      setSites(DEMO_SITES);
-      setCurrentSiteId(DEMO_SITES[0].id);
-      setEntitlements(ALL_PRODUCT_ENTITLEMENTS);
-      setTenancyStatus('READY');
-      setIsLoading(false);
-      return;
-    }
-
     setIsLoading(true);
     setErrorMessage(null);
 
     try {
       const { data: { user }, error: authError } = await supabase.auth.getUser();
       if (authError || !user) {
+        if (isDemo) {
+          setCurrentOrg(DEMO_ORG);
+          setSites(DEMO_SITES);
+          setCurrentSiteId(DEMO_SITES[0].id);
+          setEntitlements(ALL_PRODUCT_ENTITLEMENTS);
+          setTenancyStatus('READY');
+          setIsLoading(false);
+          return;
+        }
         setCurrentOrg(null);
         setSites([]);
         setEntitlements([]);
