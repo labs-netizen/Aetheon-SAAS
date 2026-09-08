@@ -328,6 +328,7 @@ describe('Authority & Auditability Integration Suite', () => {
           discom: 'MSEDCL',
           voltageCategory: '33kV',
           contractDemandValue: 2000,
+          contractDemandUnit: 'kVA',
           meteringPoint: '33kV Incomer 1',
           loadClass: 'Continuous Heavy Forge',
           billingAddress: {

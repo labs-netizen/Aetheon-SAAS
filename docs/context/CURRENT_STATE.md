@@ -1,7 +1,7 @@
 # CURRENT_STATE.md — Verified Repository State
 
 > **Last Updated**: September 2026 (Final Authority & Auditability Pass)  
-> **Verification Baseline**: Full clean database reset, auth user seeding, linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (13 files, 121 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), and Next.js production build (`npm run build`) executed cleanly.
+> **Verification Baseline**: Full clean database reset, auth user seeding, linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (14 files, 136 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), and Next.js production build (`npm run build`) executed cleanly.
 
 ## 1. Verified Metrics
 - **Database Migrations**: 18 applied SQL migrations (`20260907000001` through `20260907000018_atomic_org_creation_and_context_truth.sql`).
