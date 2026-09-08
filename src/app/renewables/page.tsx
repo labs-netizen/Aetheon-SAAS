@@ -82,7 +82,7 @@ export default function RenewablesPage() {
     return () => {
       isMounted = false;
     };
-  }, [currentSite?.id]);
+  }, [currentSite?.id, currentSite?.is_demo]);
 
   const selfConsumptionPct = solarAsset.measuredGenerationKwh > 0 ? (solarAsset.selfConsumptionKwh / solarAsset.measuredGenerationKwh) * 100.0 : 0;
   const performanceRatio = solarAsset.modelledGenerationKwh > 0 ? (solarAsset.measuredGenerationKwh / solarAsset.modelledGenerationKwh) * 100.0 : 0;

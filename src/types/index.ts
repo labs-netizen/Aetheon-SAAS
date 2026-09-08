@@ -33,6 +33,7 @@ export type ProductAvailabilityStatus =
   | 'DEVELOPMENT'
   | 'DEMO'
   | 'INTERNAL_VALIDATION'
+  | 'SPECIALIST_REVIEW_REQUIRED'
   | 'AVAILABLE'
   | 'DEGRADED'
   | 'RETIRED';
@@ -179,7 +180,7 @@ export const PRODUCTS: Record<ProductId, {
     description: 'Real-time landed cost tracking, DISCOM cross-subsidy and banking rules.',
     basePricePaise: 1490000,
     billingInterval: 'MONTHLY',
-    availabilityStatus: 'INTERNAL_VALIDATION',
+    availabilityStatus: 'SPECIALIST_REVIEW_REQUIRED',
   },
   DSM_RISK: {
     id: 'DSM_RISK',
@@ -195,7 +196,7 @@ export const PRODUCTS: Record<ProductId, {
     description: 'Dynamic arbitrage dispatch solver with battery degradation constraints.',
     basePricePaise: 4990000,
     billingInterval: 'MONTHLY',
-    availabilityStatus: 'INTERNAL_VALIDATION',
+    availabilityStatus: 'SPECIALIST_REVIEW_REQUIRED',
   },
   RENEWABLE_PORTFOLIO: {
     id: 'RENEWABLE_PORTFOLIO',

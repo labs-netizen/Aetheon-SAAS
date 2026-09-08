@@ -254,49 +254,52 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 5. DSM Rule Approval Gate - Resolve persisted approved/applicable DSM rule version
+    // 5. DSM Rule Approval Gate & Exposure Authority
     let ruleVersion = 'UNKNOWN';
     let ruleStatus = 'UNKNOWN';
     let ruleEffectiveDate = null;
     
     if (!isDemo) {
-      // In live customer mode, monetary exposure requires explicit approved regulatory rule
+      // In live customer mode, check approved regulatory rule effective on operatingDate
       const { data: rule } = await adminClient
         .from('regulatory_sources')
         .select('version, status, effective_date')
         .eq('jurisdiction', 'CERC')
         .eq('category', 'DSM')
         .eq('status', 'APPROVED')
+        .lte('effective_date', operatingDate)
         .order('effective_date', { ascending: false })
         .limit(1)
         .maybeSingle();
       
-      if (rule) {
-        ruleVersion = rule.version;
-        ruleStatus = rule.status;
-        ruleEffectiveDate = rule.effective_date;
-      } else {
-        ruleVersion = 'NO_APPROVED_RULE';
-        ruleStatus = 'MISSING';
-      }
+      ruleVersion = rule ? rule.version : 'NO_APPROVED_RULE';
+      ruleStatus = rule ? rule.status : 'REGULATORY_CONFIGURATION_REQUIRED';
+      ruleEffectiveDate = rule ? rule.effective_date : null;
       
       calculationResult.rule_version = ruleVersion;
       calculationResult.rule_status = ruleStatus;
       calculationResult.rule_effective_date = ruleEffectiveDate;
-      calculationResult.product_status = 'INTERNAL_VALIDATION';
-      
-      // If no approved monetary rule exists, suppress monetary penalty/compliance exposure
-      if (ruleStatus !== 'APPROVED') {
-        calculationResult.estimated_total_exposure_inr = 0;
-        calculationResult.blocks = calculationResult.blocks?.map((b: any) => ({
-          ...b,
-          estimated_penalty_inr: 0,
-        })) || [];
-      }
+      calculationResult.product_status = 'SPECIALIST_REVIEW_REQUIRED';
+
+      // Item 7: Live monetary exposure must not become authoritative merely because approved regulatory_sources row exists.
+      // Option B: Continue technical deviation/risk calculation, suppress live monetary exposure,
+      // and label SPECIALIST_REVIEW_REQUIRED / REGULATORY_CONFIGURATION_REQUIRED.
+      const exposureStatus = ruleStatus === 'APPROVED'
+        ? 'SPECIALIST_REVIEW_REQUIRED'
+        : 'REGULATORY_CONFIGURATION_REQUIRED';
+
+      calculationResult.estimated_total_exposure_inr = 0;
+      calculationResult.monetary_exposure_status = exposureStatus;
+      calculationResult.blocks = calculationResult.blocks?.map((b: any) => ({
+        ...b,
+        estimated_penalty_inr: 0,
+        monetary_exposure_status: exposureStatus,
+      })) || [];
     } else {
       calculationResult.rule_version = 'CERC_DSM_2024_DEMO';
       calculationResult.rule_status = 'DEMO';
-      calculationResult.product_status = 'INTERNAL_VALIDATION';
+      calculationResult.product_status = 'DEMO';
+      calculationResult.monetary_exposure_status = 'DEMO_CALCULATION';
     }
 
     // 6. Derive incident groupings from returned deviation blocks
@@ -340,8 +343,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 7. Persist incidents idempotently preserving acknowledgement history
+    // 7. Persist evaluation run record and incidents idempotently
     try {
+      const runResultStatus = incidents.length === 0 ? 'NO_MATERIAL_INCIDENTS' : 'INCIDENTS_DETECTED';
+      const { error: runError } = await adminClient
+        .from('dsm_evaluation_runs')
+        .upsert(
+          {
+            site_id: siteId,
+            operating_date: operatingDate,
+            calculation_timestamp: new Date().toISOString(),
+            input_completeness: 100.0,
+            validation_status: 'PASSED',
+            rule_version: calculationResult.rule_version || 'CERC_DSM_2024',
+            rule_status: calculationResult.rule_status || 'APPROVED',
+            model_version: calculationResult.model_version || 'DSM_SOLVER_v1.0',
+            result_status: runResultStatus,
+          },
+          { onConflict: 'site_id,operating_date' }
+        );
+
+      if (runError) {
+        throw new Error(`Failed to persist dsm_evaluation_runs: ${runError.message}`);
+      }
+
       if (incidents.length > 0) {
         // Fetch existing incidents to preserve acknowledgements
         const { data: existingIncidents } = await adminClient

@@ -56,6 +56,12 @@ const seedUsers = [
     password: 'AetheonDemo2026!',
     user_metadata: { full_name: 'Aetheon Regulatory Reviewer', is_platform_admin: false },
   },
+  {
+    id: 'c0000000-0000-0000-0000-000000000010',
+    email: 'alok.nondemo@kalyanibharat.com',
+    password: 'AetheonLive2026!',
+    user_metadata: { full_name: 'Alok Kulkarni (VP Energy & Infrastructure)', is_platform_admin: false },
+  },
 ];
 
 async function seed() {

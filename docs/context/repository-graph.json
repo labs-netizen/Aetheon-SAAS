@@ -42,6 +42,7 @@
     { "id": "table.grid_forecast_runs", "type": "table", "name": "grid_forecast_runs" },
     { "id": "table.grid_forecast_blocks", "type": "table", "name": "grid_forecast_blocks" },
     { "id": "table.dsm_incidents", "type": "table", "name": "dsm_incidents" },
+    { "id": "table.dsm_evaluation_runs", "type": "table", "name": "dsm_evaluation_runs" },
     { "id": "table.bess_assets", "type": "table", "name": "bess_assets" },
     { "id": "table.bess_signal_runs", "type": "table", "name": "bess_signal_runs" },
     { "id": "table.regulatory_sources", "type": "table", "name": "regulatory_sources" },
@@ -74,6 +75,7 @@
     { "from": "api.dsm", "to": "table.interval_data_96", "relation": "reads" },
     { "from": "api.dsm", "to": "service.analytics", "relation": "calls" },
     { "from": "api.dsm", "to": "table.dsm_incidents", "relation": "writes" },
+    { "from": "api.dsm", "to": "table.dsm_evaluation_runs", "relation": "writes" },
     { "from": "api.dsm", "to": "rpc.ack_dsm", "relation": "acknowledges" },
 
     { "from": "page.bess", "to": "api.bess", "relation": "fetches" },

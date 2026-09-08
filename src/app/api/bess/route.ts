@@ -118,6 +118,20 @@ export async function POST(req: NextRequest) {
     // Browser-supplied values are ONLY used in demo/test mode
     const isDemoMode = Boolean(authResult.isDemo) || (await adminClient.from('sites').select('is_demo').eq('id', siteId).maybeSingle()).data?.is_demo === true;
     const isLiveMode = !isDemoMode;
+
+    if (isLiveMode && !actualAsset) {
+      return NextResponse.json({
+        battery_id: null,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: 'NO_ACTIVE_BESS_ASSET: No active BESS asset registered for site.',
+        gross_arbitrage_inr: 0,
+        degradation_cost_inr: 0,
+        net_opportunity_inr: 0,
+        equivalent_cycles: 0,
+        schedule_blocks: [],
+      });
+    }
     
     // Server-authoritative safety parameters
     const capKwh = isLiveMode ? (actualAsset?.usable_capacity_kwh ?? 1000.0) : (usableCapacityKwh || actualAsset?.usable_capacity_kwh || 1000.0);

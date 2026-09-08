@@ -10,6 +10,7 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     testTimeout: 30000,
     hookTimeout: 30000,
+    fileParallelism: false,
     exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**", "**/codex review/**"],
   },
   resolve: {

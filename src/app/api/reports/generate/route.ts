@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     // 3. Fetch site info
     const { data: site } = await adminClient
       .from('sites')
-      .select('id, name, state, discom, contract_demand_value, voltage_category')
+      .select('id, name, state, discom, contract_demand_value, voltage_category, is_demo')
       .eq('id', siteId)
       .single();
 
@@ -108,77 +108,120 @@ export async function POST(req: NextRequest) {
         .eq('evaluation_date', pStart)
         .maybeSingle();
 
-      if (blocks.length > 0) {
-        // Fetch applicable tariff version from regulatory sources
-        let tariffVersion = null;
-        const { data: tariff } = await adminClient
-          .from('discom_tariffs')
-          .select('version, regulatory_source_id')
-          .eq('state', state)
-          .eq('discom', discom)
-          .eq('voltage_category', site?.voltage_category)
-          .order('effective_date', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (tariff) tariffVersion = tariff.version;
-
-        csvLines.push(`# MODEL VERSION: ${latestRun.model_version} | RUN ID: ${latestRun.id}`);
-        csvLines.push(`# QUALITY GATE: ${quality?.publication_gate_status || 'UNKNOWN'} | FRESHNESS: ${quality?.freshness_status || 'UNKNOWN'}`);
-        csvLines.push(`operating_date,block_index,start_time,end_time,forecast_load_kw,forecast_price_inr_per_mwh,is_high_cost_window`);
-
-        for (const b of blocks) {
-          const hour = Math.floor((b.block_index - 1) / 4);
-          const min = ((b.block_index - 1) % 4) * 15;
-          const startTime = `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-          const endHour = Math.floor(b.block_index / 4);
-          const endMin = (b.block_index % 4) * 15;
-          const endTime = `${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}`;
-          csvLines.push(`${latestRun.operating_date},${b.block_index},${startTime},${endTime},${b.forecast_demand_kw},${b.forecast_price_inr_per_mwh},${b.is_high_cost_window}`);
-        }
-
-        summaryData = {
-          runId: latestRun.id,
-          modelVersion: latestRun.model_version,
-          averagePriceInrPerMwh: latestRun.average_price_inr_per_mwh,
-          peakDemandKw: latestRun.peak_demand_kw,
-          qualityGateStatus: quality?.publication_gate_status || 'UNKNOWN',
-          freshnessStatus: quality?.freshness_status || 'UNKNOWN',
-          totalBlocks: blocks.length,
-          tariffVersion: tariffVersion,
-        };
-      } else {
-        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No persisted grid forecast runs found for site '${siteId}' in period ${pStart} to ${pEnd}.`);
-        csvLines.push(`operating_date,block_index,status`);
-        csvLines.push(`${pStart},ALL,DATA_GAP_NO_PERSISTED_FORECAST`);
-        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No persisted forecast run exists for this period.', tariffVersion: null };
+      if (!latestRun) {
+        return NextResponse.json(
+          {
+            error: 'REPORT_NOT_PUBLISHABLE',
+            reason: 'DATA_GAP',
+            message: `No persisted grid forecast runs found for site '${siteId}' in period ${pStart} to ${pEnd}.`,
+          },
+          { status: 422 }
+        );
       }
 
-    } else if (reportType === 'DSM_MONTHLY_REVIEW') {
-      // First, check if a valid DSM calculation/run exists for the requested period
-      const { data: dsmRuns } = await adminClient
-        .from('dsm_incidents')
-        .select('id')
-        .eq('site_id', siteId)
-        .gte('operating_date', pStart)
-        .lte('operating_date', pEnd)
-        .limit(1);
+      const is96Blocks = blocks.length === 96 && new Set(blocks.map((b: any) => b.block_index)).size === 96;
+      if (!is96Blocks) {
+        return NextResponse.json(
+          {
+            error: 'REPORT_NOT_PUBLISHABLE',
+            reason: 'DATA_GAP',
+            message: `Grid report requires exactly 96 unique interval blocks 1–96 (received ${blocks.length}).`,
+          },
+          { status: 422 }
+        );
+      }
 
-      // Fetch approved DSM rule version
-      let ruleVersion = null;
-      let ruleStatus = null;
-      const { data: rule } = await adminClient
-        .from('regulatory_sources')
-        .select('version, status, effective_date')
-        .eq('jurisdiction', 'CERC')
-        .eq('category', 'DSM')
-        .eq('status', 'APPROVED')
-        .order('effective_date', { ascending: false })
+      const isDemoSite = Boolean(site?.is_demo);
+      const isQualityPublishable = isDemoSite || (
+        quality &&
+        (quality.publication_gate_status === 'PUBLISHABLE' || quality.publication_gate_status === 'PUBLISHABLE_WITH_WARNING') &&
+        quality.freshness_status === 'RECENT' &&
+        quality.validation_status === 'PASSED'
+      );
+
+      if (!isQualityPublishable) {
+        const failureReason = !quality
+          ? 'MISSING_QUALITY_EVALUATION'
+          : quality.publication_gate_status !== 'PUBLISHABLE' && quality.publication_gate_status !== 'PUBLISHABLE_WITH_WARNING'
+          ? `QUALITY_GATE_${quality.publication_gate_status}`
+          : quality.freshness_status !== 'RECENT'
+          ? 'STALE_DATA'
+          : 'VALIDATION_FAILED';
+
+        return NextResponse.json(
+          {
+            error: 'REPORT_NOT_PUBLISHABLE',
+            reason: failureReason,
+            message: `Grid report output is not publishable: quality gate blocked or missing evidence (${failureReason}).`,
+            qualityGateStatus: quality?.publication_gate_status || 'UNKNOWN',
+            freshnessStatus: quality?.freshness_status || 'UNKNOWN',
+          },
+          { status: 422 }
+        );
+      }
+
+      // Fetch applicable tariff version from regulatory sources
+      let tariffVersion = null;
+      const { data: tariff } = await adminClient
+        .from('discom_tariffs')
+        .select('category_name, regulatory_source_id')
+        .eq('state', state)
+        .eq('discom', discom)
+        .order('effective_from', { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (rule) {
-        ruleVersion = rule.version;
-        ruleStatus = rule.status;
+      if (tariff) tariffVersion = tariff.category_name;
+
+      csvLines.push(`# MODEL VERSION: ${latestRun.model_version} | RUN ID: ${latestRun.id}`);
+      csvLines.push(`# QUALITY GATE: ${quality?.publication_gate_status || 'PUBLISHABLE'} | FRESHNESS: ${quality?.freshness_status || 'RECENT'}`);
+      csvLines.push(`operating_date,block_index,start_time,end_time,forecast_load_kw,forecast_price_inr_per_mwh,is_high_cost_window`);
+
+      for (const b of blocks) {
+        const hour = Math.floor((b.block_index - 1) / 4);
+        const min = ((b.block_index - 1) % 4) * 15;
+        const startTime = `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+        const endHour = Math.floor(b.block_index / 4);
+        const endMin = (b.block_index % 4) * 15;
+        const endTime = `${String(endHour).padStart(2, '0')}:${String(endMin).padStart(2, '0')}`;
+        csvLines.push(`${latestRun.operating_date},${b.block_index},${startTime},${endTime},${b.forecast_demand_kw},${b.forecast_price_inr_per_mwh},${b.is_high_cost_window}`);
       }
+
+      summaryData = {
+        runId: latestRun.id,
+        modelVersion: latestRun.model_version,
+        averagePriceInrPerMwh: latestRun.average_price_inr_per_mwh,
+        peakDemandKw: latestRun.peak_demand_kw,
+        qualityGateStatus: quality?.publication_gate_status || 'PUBLISHABLE',
+        freshnessStatus: quality?.freshness_status || 'RECENT',
+        totalBlocks: blocks.length,
+        tariffVersion: tariffVersion,
+      };
+
+    } else if (reportType === 'DSM_MONTHLY_REVIEW') {
+      // Use canonical dsm_evaluation_runs table as proof of calculation
+      const { data: dsmRuns } = await adminClient
+        .from('dsm_evaluation_runs')
+        .select('*')
+        .eq('site_id', siteId)
+        .gte('operating_date', pStart)
+        .lte('operating_date', pEnd);
+
+      const hasValidRun = dsmRuns && dsmRuns.length > 0;
+
+      if (!hasValidRun) {
+        return NextResponse.json(
+          {
+            error: 'REPORT_NOT_PUBLISHABLE',
+            reason: 'REPORT_DATA_GAP',
+            message: `No validated DSM evaluation run records exist for site '${siteId}' in period ${pStart} to ${pEnd}.`,
+          },
+          { status: 422 }
+        );
+      }
+
+      // Fetch approved DSM rule version
+      let ruleVersion = dsmRuns[0]?.rule_version || 'CERC_DSM_2024';
+      let ruleStatus = dsmRuns[0]?.rule_status || 'APPROVED';
 
       const { data: incidents } = await adminClient
         .from('dsm_incidents')
@@ -186,6 +229,7 @@ export async function POST(req: NextRequest) {
         .eq('site_id', siteId)
         .gte('operating_date', pStart)
         .lte('operating_date', pEnd)
+        .order('operating_date', { ascending: true })
         .order('start_block', { ascending: true });
 
       if (incidents && incidents.length > 0) {
@@ -202,18 +246,19 @@ export async function POST(req: NextRequest) {
           ruleStatus: ruleStatus,
           note: 'Validated DSM calculation with material incidents.',
         };
-      } else if (dsmRuns && dsmRuns.length > 0) {
+      } else {
         // Valid calculation exists but zero incidents
         csvLines.push(`# DATA STATUS: Valid DSM calculation exists for period ${pStart} to ${pEnd}. No material deviation incidents recorded.`);
         csvLines.push(`operating_date,status`);
         csvLines.push(`${pStart},NO_MATERIAL_INCIDENTS`);
-        summaryData = { totalIncidents: 0, totalEstimatedExposureInr: 0, ruleVersion: ruleVersion, ruleStatus: ruleStatus, note: 'Validated DSM calculation: Zero deviations beyond allowable band.' };
-      } else {
-        // No validated calculation/input
-        csvLines.push(`# DATA STATUS: REPORT DATA GAP - No validated DSM calculation or input data found for period ${pStart} to ${pEnd}.`);
-        csvLines.push(`operating_date,status`);
-        csvLines.push(`${pStart},REPORT_DATA_GAP`);
-        summaryData = { status: 'REPORT_DATA_GAP', reason: 'No validated DSM calculation/input exists for this period.', ruleVersion: ruleVersion, ruleStatus: ruleStatus };
+        summaryData = {
+          totalIncidents: 0,
+          totalEstimatedExposureInr: 0,
+          ruleVersion: ruleVersion,
+          ruleStatus: ruleStatus,
+          status: 'NO_MATERIAL_INCIDENTS',
+          note: 'Validated DSM calculation: Zero deviations beyond allowable band.',
+        };
       }
 
     } else if (reportType === 'BESS_PERFORMANCE_REPORT') {

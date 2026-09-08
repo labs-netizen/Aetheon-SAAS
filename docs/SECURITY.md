@@ -11,7 +11,7 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (106/106 passing):
+A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (136/136 passing):
 
 ### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
 1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
@@ -23,7 +23,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 7. **Role Boundary Enforcement**: Trigger `trg_enforce_membership_role_boundary` prevents customer `ORGANISATION_ADMIN`s from assigning internal Aetheon roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`).
 8. **Site-Level Access Isolation**: Function `has_site_access()` verifies that a user assigned to Site 1 receives zero rows when querying Site 2 telemetry, even if both sites belong to the same organisation.
 9. **Regulatory Visibility Gate**: Unapproved regulatory rules (`REVIEW_PENDING`, `CHANGE_DETECTED`, `EXTRACTED`, `CAPTURED`) are strictly hidden from customer sessions; only `APPROVED` and `PUBLISHED` rules are visible.
-10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `grid_forecast_blocks`, `bess_optimisation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
+10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `grid_forecast_blocks`, `bess_signal_runs`, `dsm_evaluation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
 11. **Server-Generated Data Protection**: Customer accounts cannot forge or directly insert forecast runs.
 
 ### 2.2 Live Tamper-Evident Audit Chaining (`tests/integration/audit_chaining.test.ts` - 5/5 Passing)
@@ -31,18 +31,18 @@ A comprehensive automated security test suite has been implemented across Vitest
 2. **Cryptographic Chaining**: Event B's `previous_hash` strictly matches Event A's `current_hash`.
 3. **UPDATE Immutability**: Database trigger rejects any UPDATE operation on `audit_logs`.
 4. **DELETE Immutability**: Database trigger rejects any DELETE operation on `audit_logs`.
-5. **Concurrency Safety**: Migration 11 enforces `pg_advisory_xact_lock(hashtext('audit_logs_hash_chain'))` to guarantee zero chain forks under concurrent inserts.
+5. **Concurrency Safety**: Enforces `pg_advisory_xact_lock(hashtext('audit_logs_hash_chain'))` to guarantee zero chain forks under concurrent inserts.
 
-### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 29/29 Passing)
+### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 34/34 Passing)
 1. **Unauthenticated Request Rejection**: Unauthenticated requests to `/api/forecast` return 401 Unauthorized.
 2. **Cross-Tenant Site Isolation**: Attempting to query an operational endpoint for a site belonging to a foreign organisation returns 403 Forbidden.
 3. **Site Boundary Isolation**: A user without an active `site_access` grant for a specific site is rejected with 403 Forbidden.
 4. **Subscription Entitlement Enforcement**: Requesting module endpoints without an active subscription entitlement returns 403 Forbidden.
 5. **Operator Role Rejection**: OPERATOR accounts attempting to modify site parameters return 403 Forbidden.
 6. **Internal Role Escalation**: Org Admin attempting to invite internal roles returns 403 Forbidden.
-7. **Missing DSM Inputs**: Missing schedule or meter data triggers result suppression (`MISSING_DATA`).
-8. **BESS Hardware Safety Interlocks**: BESS optimisation API suppresses recommendations when battery SOC is out of bounds or negative (`SAFETY_INTERLOCK`).
-9. **Duplicate Ingestion Rejection**: Ingestion commit endpoint computes SHA-256 on actual file content and rejects duplicates with 409 Conflict.
+7. **BESS Arbitrage Safety**: BESS optimisation API suppresses recommendations when battery SOC is out of bounds or negative (`SAFETY_INTERLOCK`).
+8. **Duplicate Ingestion Rejection**: Ingestion commit endpoint computes SHA-256 on actual file content and rejects duplicates with 409 Conflict.
+9. **Exact 96-Row Ingestion Enforcement**: Rejects non-96-row payloads with 400 Bad Request.
 10. **Webhook Replay Deduplication**: Replayed Razorpay webhook events are transactionally deduplicated via atomic pre-insertion.
 11. **Invitation Email Binding**: User B attempting to accept an invitation token issued to User A's email is rejected with 403 Forbidden.
 12. **Analyst Expiry Enforcement**: Expired AETHEON_ANALYST memberships return 403 Forbidden across server endpoints.
@@ -51,10 +51,13 @@ A comprehensive automated security test suite has been implemented across Vitest
 15. **Unmapped Webhook Quarantine**: Razorpay webhooks referencing unknown checkout sessions are quarantined and rejected without granting entitlements.
 16. **Canonical Report Generation Contract**: Report generation enforces canonical `report_records` schema, stores provenance, and uploads to private storage.
 17. **Canonical Report Download Route**: `/api/reports/[id]/download` enforces site access and returns structured `REPORT_FILE_UNAVAILABLE` on missing files without data fabrication.
-18. **Fail-Closed Live Grid Ingestion**: Live grid calculations fail closed with `DATA GAP` if 96-block meter inputs are absent.
-19. **Fail-Closed Live Renewables**: Live renewables calculations reject scalar synthesis and demand 96-block measured intervals.
-20. **Fail-Safe Alert Acknowledgment**: Alert status mutations fail closed if database update fails.
-21–29. **Extended Security Isolation Scenarios**: Additional webhook idempotency, subscription uniqueness enforcement, DSM incident deduplication, and billing_checkout_sessions role-boundary tests (covered in full in `tests/integration/adversarial_api.test.ts` and `tests/integration/security_isolation.test.ts`).
+18. **Billing First-Payment Atomicity**: Handles brand-new subscription flow, inserting into `billing_provider_ref` and provisioning entitlements.
+19. **Durable Webhook Quarantine**: Unmapped webhook provider reference inserts into `processed_webhook_events` with status `'QUARANTINED'` and returns 422 without rolling back quarantine.
+20. **Fail-Closed Grid Report Generation**: Generation aborts if forecast run is missing, quality is not publishable, freshness is stale, or validation failed.
+21. **Exact V1 CSV Contract Enforcement**: Rejects impossible calendar dates (e.g. 2026-02-31), multiple dates, or duplicate blocks.
+22. **BESS Performance Report Proof**: Verifies BESS performance report generation from optimization runs.
+23. **DSM Evaluation Run Proof**: Verifies zero-incident evaluation run stamp in `dsm_evaluation_runs` and distinguishes from data gaps in reports.
+24–34. **Extended Security Isolation Scenarios**: Quality gate server authority, voltage category mismatches, unentitled downloads, and role boundary validations.
 
 ---
 

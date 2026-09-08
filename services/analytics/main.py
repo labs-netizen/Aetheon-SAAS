@@ -35,9 +35,12 @@ app.add_middleware(
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 SERVICE_TOKEN = os.getenv("ANALYTICS_SERVICE_TOKEN")
 if not SERVICE_TOKEN:
-    if ENVIRONMENT == "production":
-        raise RuntimeError("CRITICAL: ANALYTICS_SERVICE_TOKEN must be explicitly configured in production environment")
-    SERVICE_TOKEN = "local-dev-analytics-token"
+    if ENVIRONMENT in ("production", "staging"):
+        raise RuntimeError(f"CRITICAL: ANALYTICS_SERVICE_TOKEN must be explicitly configured in {ENVIRONMENT} environment")
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING") == "1":
+        SERVICE_TOKEN = "fixture-test-analytics-token"
+    else:
+        raise RuntimeError("CRITICAL: ANALYTICS_SERVICE_TOKEN must be explicitly configured")
 
 
 def verify_service_token(authorization: str = Header(default="")):

@@ -137,7 +137,7 @@ export default function BESSPage() {
     return () => {
       isMounted = false;
     };
-  }, [currentSite?.id, siteAsset?.id, simulatedSoc, maintenanceLock, usableCapacity, powerRating, minSoc, maxSoc]);
+  }, [currentSite?.id, currentSite?.is_demo, siteAsset?.id, siteAsset?.charge_efficiency, siteAsset?.discharge_efficiency, siteAsset?.degradation_cost_per_cycle_inr, simulatedSoc, maintenanceLock, usableCapacity, powerRating, minSoc, maxSoc]);
 
   const grossArbitrage = bessData?.gross_arbitrage_value_inr ?? bessData?.gross_arbitrage_inr ?? (currentSite?.is_demo ? 5620 : 0);
   const degradationCost = bessData?.estimated_degradation_cost_inr ?? bessData?.degradation_cost_inr ?? (currentSite?.is_demo ? 2160 : 0);

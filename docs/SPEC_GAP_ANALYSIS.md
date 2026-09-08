@@ -46,14 +46,16 @@
 
 | Test Suite | Scope | Target Engine | Total Tests | Passed | Failed | Status |
 |---|---|---|---|---|---|---|
-| **Vitest Unit Tests** | Blocks96, currency, qualityGate, stateMachine, csvParser, entitlements, api_contracts | Node.js (Vitest v2.1) | 30 | 30 | 0 | **PASSED** |
+| **Vitest Unit Tests** | Blocks96, currency, qualityGate, stateMachine, csvParser, entitlements, api_contracts, tariffs | Node.js (Vitest v2.1) | 45 | 45 | 0 | **PASSED** |
 | **Tamper-Evident Audit Chaining** | Deterministic genesis, B.prev == A.curr, UPDATE rejection, DELETE rejection, concurrency | Real PostgreSQL 17.6 (Docker) | 5 | 5 | 0 | **PASSED** |
 | **Security Isolation Tests** | Webhook idempotency, subscription uniqueness, billing role boundaries, DSM deduplication | Node.js / Next.js Handlers | 10 | 10 | 0 | **PASSED** |
 | **Real PostgreSQL & Supabase RLS** | Live multi-tenant RLS, privilege-escalation rejection, role boundaries, site isolation, regulatory gates | Real PostgreSQL 17.6 (Docker) | 11 | 11 | 0 | **PASSED** |
-| **Adversarial API & Server Rejection** | 29 security, isolation, approval-gate, analyst-expiry, fail-closed and fail-safe API rejection scenarios | Next.js API route handlers | 29 | 29 | 0 | **PASSED** |
-| **Python Analytics Solvers** | Forecast, DSM, BESS advisory, token auth, physical feasibility | Python 3.11 / FastAPI (Docker/Local) | 7 | 7 | 0 | **PASSED** |
-| **Playwright E2E Suite** | Real auth, onboarding, persistence journey, registration journey, platform workflows | Chromium Headless | 14 | 14 | 0 | **PASSED** |
+| **Adversarial API & Server Rejection** | 34 security, isolation, approval-gate, analyst-expiry, fail-closed, BESS/DSM report, and server rejection scenarios | Next.js API route handlers | 34 | 34 | 0 | **PASSED** |
+| **Python Analytics Solvers** | Forecast, DSM, BESS advisory, token hygiene, physical feasibility | Python 3.12 / FastAPI (Docker/Local) | 7 | 7 | 0 | **PASSED** |
+| **Playwright Non-Demo Suite** | Real auth, non-demo site, CSV upload, forecast, BESS, DSM, report generation, download, relogin persistence | Chromium Headless (`--project=non-demo`) | 12 | 12 | 0 | **PASSED** |
+| **Playwright Demo Smoke Suite** | Synthetic demo sites, alert ack, cost explorer, compliance calendar, interactive charts | Chromium Headless (`--project=demo`) | 12 | 12 | 0 | **PASSED** |
 | **TypeScript Type Checking** | Complete codebase type safety | `tsc --noEmit` | N/A | 0 errors | 0 | **PASSED** |
 | **ESLint Static Analysis** | Code quality and linting | `next lint` | N/A | 0 errors | 0 | **PASSED** |
 | **Next.js Production Build** | Static & dynamic routes compilation | Next.js 14.2.35 | 39 routes | 39 | 0 | **PASSED** |
-| **TOTAL AUTOMATED VERIFICATION** | | | **106 tests** | **106 passed** | **0 failed** | **100% PASS RATE** |
+| **TOTAL AUTOMATED VERIFICATION** | | | **136 tests** | **136 passed** | **0 failed** | **100% PASS RATE** |
+

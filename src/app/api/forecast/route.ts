@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     // 1. Fetch site authoritative configuration
     const { data: site, error: siteErr } = await adminClient
       .from('sites')
-      .select('id, name, is_demo, activation_status, contract_demand_value')
+      .select('id, name, state, discom, voltage_category, is_demo, activation_status, contract_demand_value')
       .eq('id', siteId)
       .single();
 
@@ -36,48 +36,70 @@ export async function GET(req: NextRequest) {
     }
 
     // 2. Authoritative Server-side Quality Gate
+    let qualityEval: any = null;
+    let tariff: any = null;
     if (!site.is_demo) {
-      const { data: qualityEval } = await adminClient
+      const { data: qData } = await adminClient
         .from('data_quality_evaluations')
         .select('*')
         .eq('site_id', siteId)
         .order('evaluation_date', { ascending: false })
         .limit(1)
         .maybeSingle();
+      qualityEval = qData;
 
       const completeness = qualityEval ? Number(qualityEval.completeness_pct) : 0;
       const isCalibrated = site.activation_status === 'ACTIVE';
       
       // Allowlist approach: only explicitly publishable states may proceed
-      const publishableStates = ['PUBLISHABLE', 'PASSED'];
+      const publishableStates = ['PUBLISHABLE', 'PUBLISHABLE_WITH_WARNING'];
       const isPublishable = qualityEval && publishableStates.includes(qualityEval.publication_gate_status);
       
-      // Also explicitly evaluate freshness, completeness, activation/calibration, validation, required tariff/config, model status
+      // Authoritatively require conditions for live publication
       const isFresh = qualityEval && qualityEval.freshness_status === 'RECENT';
       const isComplete = completeness >= 95.0;
       const isValidated = qualityEval && qualityEval.validation_status === 'PASSED';
 
-      if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated) {
+      // Check persisted approved tariff configuration
+      const { data: tariffData } = await adminClient
+        .from('discom_tariffs')
+        .select('id, energy_charge_normal_inr_per_kwh, regulatory_source_id')
+        .eq('state', site.state || 'Maharashtra')
+        .eq('discom', site.discom || 'MSEDCL')
+        .order('effective_from', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      tariff = tariffData;
+
+      if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated || !tariff) {
         let suppressionReason = '';
-        if (!isCalibrated) {
+        let gateStatus = qualityEval?.publication_gate_status || 'BLOCKED_MISSING_INPUT';
+
+        if (!tariff) {
+          suppressionReason = 'CONFIGURATION_REQUIRED: No approved DISCOM tariff configuration found for live site.';
+          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
+        } else if (!isCalibrated) {
           suppressionReason = `CALIBRATING: Site activation status is ${site.activation_status}; active calibration baseline required.`;
         } else if (!qualityEval) {
           suppressionReason = 'MISSING_DATA: No telemetry quality evaluation found for live customer site.';
         } else if (!isComplete) {
           suppressionReason = `DATA_GAP: Telemetry completeness (${completeness.toFixed(1)}%) below 95.0% threshold.`;
+          gateStatus = 'BLOCKED_MISSING_INPUT';
         } else if (!isValidated) {
           suppressionReason = `VALIDATION_FAILED: Telemetry validation status is ${qualityEval.validation_status}.`;
+          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
         } else if (!isPublishable) {
-          suppressionReason = `QUALITY_GATE_BLOCKED: Telemetry publication gate status is ${qualityEval.publication_gate_status} (not PUBLISHABLE/PASSED).`;
+          suppressionReason = `QUALITY_GATE_BLOCKED: Telemetry publication gate status is ${qualityEval.publication_gate_status} (not PUBLISHABLE).`;
         } else if (!isFresh) {
           suppressionReason = `STALE_DATA: Telemetry freshness status is ${qualityEval.freshness_status}.`;
+          gateStatus = 'BLOCKED_STALE_DATA';
         }
 
         return NextResponse.json(
           {
             is_suppressed: true,
             suppression_reason: suppressionReason,
-            quality_status: qualityEval?.publication_gate_status || 'BLOCKED_MISSING_EVALUATION',
+            quality_status: gateStatus,
             freshness_status: qualityEval?.freshness_status || 'UNKNOWN',
             completeness_pct: completeness,
             activation_status: site.activation_status,
@@ -133,6 +155,8 @@ export async function GET(req: NextRequest) {
         peak_demand_block: existingRun.peak_demand_block,
         data_quality: existingRun.quality_status,
         freshness: existingRun.freshness_status,
+        tariff_rate_inr_per_kwh: tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null),
+        tariff_version: tariff ? 'APPROVED_DISCOM_TARIFF' : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null),
         blocks: blocks.map((b) => ({
           block_index: b.block_index,
           start_time: b.start_time,
@@ -184,13 +208,13 @@ export async function GET(req: NextRequest) {
         {
           site_id: siteId,
           operating_date: operatingDate,
-          model_version: forecastResult.model_version || 'DEMO_BASELINE_v1.0',
+          model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : (forecastResult.model_version || 'INTERNAL_VALIDATION'),
           model_generation_time: forecastResult.model_generation_time || new Date().toISOString(),
           average_price_inr_per_mwh: Number(forecastResult.average_price_inr_per_mwh),
           peak_demand_kw: Number(forecastResult.peak_demand_kw),
           peak_demand_block: Number(forecastResult.peak_demand_block),
-          quality_status: forecastResult.data_quality || 'PASSED',
-          freshness_status: forecastResult.freshness || 'RECENT',
+          quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : (forecastResult.data_quality || qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN'),
+          freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : (forecastResult.freshness || qualityEval?.freshness_status || 'UNKNOWN'),
         },
         { onConflict: 'site_id,operating_date' }
       )
@@ -231,6 +255,8 @@ export async function GET(req: NextRequest) {
 
     forecastResult.run_id = run.id;
     forecastResult.persisted = true;
+    forecastResult.tariff_rate_inr_per_kwh = tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null);
+    forecastResult.tariff_version = tariff ? 'APPROVED_DISCOM_TARIFF' : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
     return NextResponse.json(forecastResult);
   } catch (err) {
     return NextResponse.json(
@@ -267,7 +293,7 @@ export async function POST(req: NextRequest) {
     // 2. Fetch authoritative site configuration
     const { data: site, error: siteErr } = await adminClient
       .from('sites')
-      .select('id, is_demo, activation_status, contract_demand_value')
+      .select('id, name, state, discom, voltage_category, is_demo, activation_status, contract_demand_value')
       .eq('id', siteId)
       .single();
 
@@ -276,48 +302,70 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Server-authoritative Quality Gate
+    let qualityEval: any = null;
+    let tariff: any = null;
     if (!site.is_demo) {
-      const { data: qualityEval } = await adminClient
+      const { data: qData } = await adminClient
         .from('data_quality_evaluations')
         .select('*')
         .eq('site_id', siteId)
         .order('evaluation_date', { ascending: false })
         .limit(1)
         .maybeSingle();
+      qualityEval = qData;
 
       const completeness = qualityEval ? Number(qualityEval.completeness_pct) : 0;
       const isCalibrated = site.activation_status === 'ACTIVE';
       
       // Allowlist approach: only explicitly publishable states may proceed
-      const publishableStates = ['PUBLISHABLE', 'PASSED'];
+      const publishableStates = ['PUBLISHABLE', 'PUBLISHABLE_WITH_WARNING'];
       const isPublishable = qualityEval && publishableStates.includes(qualityEval.publication_gate_status);
       
-      // Also explicitly evaluate freshness, completeness, activation/calibration, validation
+      // Authoritatively require conditions for live publication
       const isFresh = qualityEval && qualityEval.freshness_status === 'RECENT';
       const isComplete = completeness >= 95.0;
       const isValidated = qualityEval && qualityEval.validation_status === 'PASSED';
 
-      if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated) {
+      // Check persisted approved tariff configuration
+      const { data: tariffData } = await adminClient
+        .from('discom_tariffs')
+        .select('id, energy_charge_normal_inr_per_kwh, regulatory_source_id')
+        .eq('state', site.state || 'Maharashtra')
+        .eq('discom', site.discom || 'MSEDCL')
+        .order('effective_from', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      tariff = tariffData;
+
+      if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated || !tariff) {
         let suppressionReason = '';
-        if (!isCalibrated) {
+        let gateStatus = qualityEval?.publication_gate_status || 'BLOCKED_MISSING_INPUT';
+
+        if (!tariff) {
+          suppressionReason = 'CONFIGURATION_REQUIRED: No approved DISCOM tariff configuration found for live site.';
+          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
+        } else if (!isCalibrated) {
           suppressionReason = `CALIBRATING: Site activation status is ${site.activation_status}; active calibration baseline required.`;
         } else if (!qualityEval) {
           suppressionReason = 'MISSING_DATA: No telemetry quality evaluation found for live customer site.';
         } else if (!isComplete) {
           suppressionReason = `DATA_GAP: Telemetry completeness (${completeness.toFixed(1)}%) below 95.0% threshold.`;
+          gateStatus = 'BLOCKED_MISSING_INPUT';
         } else if (!isValidated) {
           suppressionReason = `VALIDATION_FAILED: Telemetry validation status is ${qualityEval.validation_status}.`;
+          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
         } else if (!isPublishable) {
-          suppressionReason = `QUALITY_GATE_BLOCKED: Telemetry publication gate status is ${qualityEval.publication_gate_status} (not PUBLISHABLE/PASSED).`;
+          suppressionReason = `QUALITY_GATE_BLOCKED: Telemetry publication gate status is ${qualityEval.publication_gate_status} (not PUBLISHABLE).`;
         } else if (!isFresh) {
           suppressionReason = `STALE_DATA: Telemetry freshness status is ${qualityEval.freshness_status}.`;
+          gateStatus = 'BLOCKED_STALE_DATA';
         }
 
         return NextResponse.json(
           {
             is_suppressed: true,
             suppression_reason: suppressionReason,
-            quality_status: qualityEval?.publication_gate_status || 'BLOCKED_MISSING_EVALUATION',
+            quality_status: gateStatus,
             freshness_status: qualityEval?.freshness_status || 'UNKNOWN',
             completeness_pct: completeness,
             activation_status: site.activation_status,
@@ -401,13 +449,13 @@ export async function POST(req: NextRequest) {
           {
             site_id: siteId,
             operating_date: operatingDate,
-            model_version: forecastResult.model_version || 'DEMO_BASELINE_v1.0',
+            model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : (forecastResult.model_version || 'INTERNAL_VALIDATION'),
             model_generation_time: forecastResult.model_generation_time || new Date().toISOString(),
             average_price_inr_per_mwh: Number(forecastResult.average_price_inr_per_mwh),
             peak_demand_kw: Number(forecastResult.peak_demand_kw),
             peak_demand_block: Number(forecastResult.peak_demand_block),
-            quality_status: forecastResult.data_quality || 'PASSED',
-            freshness_status: forecastResult.freshness || 'RECENT',
+            quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : (forecastResult.data_quality || qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN'),
+            freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : (forecastResult.freshness || qualityEval?.freshness_status || 'UNKNOWN'),
           },
           { onConflict: 'site_id,operating_date' }
         )
@@ -442,6 +490,8 @@ export async function POST(req: NextRequest) {
 
       forecastResult.run_id = run.id;
       forecastResult.persisted = true;
+      forecastResult.tariff_rate_inr_per_kwh = tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null);
+      forecastResult.tariff_version = tariff ? 'APPROVED_DISCOM_TARIFF' : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
     } catch (dbErr) {
       console.error('CRITICAL: Forecast persistence failure:', dbErr);
       return NextResponse.json(

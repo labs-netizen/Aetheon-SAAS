@@ -23,3 +23,14 @@ This document catalogues genuine non-local external requirements, provider secre
 - **Electrochemical Engineering Review**: Specialist signoff on linear battery degradation cost formulas (₹/kWh/cycle) across specific lithium chemistries (LFP vs. NMC) before commercial arbitrage signals are automated.
 - **Regulatory & Legal Counsel Signoff**: Legal audit of state-specific Open Access tariff models (MERC, GERC, KERC) regarding Cross Subsidy Surcharges (CSS), Additional Surcharges (AS), and banking settlement rules.
 - **Third-Party Penetration Testing**: Independent security audit verifying JWT forgery resistance, session hijacking defenses, rate limiting, and network boundary integrity.
+
+## 4. Local Engine Ports & Service Architecture
+
+| Service | Port | Security / Protocol | Current Verified State |
+|---|---|---|---|
+| **Supabase Kong Gateway** | `:15431` | HTTP / REST API & GoTrue Auth | Running in Docker; routes PostgREST & Auth. |
+| **Supabase PostgreSQL 17.6** | `:15432` | TCP / PostgreSQL Wire Protocol | Running in Docker; 14 migrations applied, 71 RLS policies active. |
+| **Supabase Inbucket / Mailpit** | `:15434` | HTTP / Local SMTP Web Inspector | Running in Docker; captures transactional invites & alerts. |
+| **Python FastAPI Analytics** | `:8000` | HTTP / Bearer Auth (`ANALYTICS_SERVICE_TOKEN`) | Running background worker; fail-closed token hygiene active. |
+| **Next.js Web Application** | `:3000` | HTTP / React Server & Client Components | Built and verified across demo and non-demo Playwright suites. |
+

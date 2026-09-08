@@ -25,6 +25,7 @@ export interface SiteContextValue {
   switchSite: (siteId: string) => void;
   switchRole: (role: PlatformRole) => void;
   refreshSites: () => Promise<void>;
+  refreshTenancy: () => Promise<void>;
 }
 
 const DEMO_ORG: Organisation = {
@@ -83,8 +84,21 @@ const ALL_PRODUCT_ENTITLEMENTS = [
 
 const SiteContext = createContext<SiteContextValue | undefined>(undefined);
 
-export function SiteProvider({ children }: { children: React.ReactNode }) {
-  const isDemo = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+export function SiteProvider({
+  children,
+  initialDemoMode,
+}: {
+  children: React.ReactNode;
+  initialDemoMode?: boolean;
+}) {
+  const isDemo =
+    initialDemoMode !== undefined
+      ? initialDemoMode
+      : typeof window !== 'undefined'
+      ? document.body?.getAttribute('data-demo-mode') === 'true' ||
+        (window as unknown as { __NEXT_PUBLIC_DEMO_MODE__?: string }).__NEXT_PUBLIC_DEMO_MODE__ === 'true' ||
+        process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
+      : process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
   const [currentOrg, setCurrentOrg] = useState<Organisation | null>(isDemo ? DEMO_ORG : null);
   const [sites, setSites] = useState<Site[]>(isDemo ? DEMO_SITES : []);
@@ -224,7 +238,15 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     loadUserData();
-  }, [loadUserData]);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
+      loadUserData();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [loadUserData, supabase]);
 
   const currentSite = sites.find((s) => s.id === currentSiteId) || sites[0] || null;
 
@@ -260,6 +282,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
         switchSite,
         switchRole,
         refreshSites: loadUserData,
+        refreshTenancy: loadUserData,
       }}
     >
       {children}

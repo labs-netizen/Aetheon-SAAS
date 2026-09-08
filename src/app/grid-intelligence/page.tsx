@@ -41,6 +41,9 @@ export default function GridIntelligencePage() {
   const [isLoadingForecast, setIsLoadingForecast] = useState<boolean>(false);
   const [forecastError, setForecastError] = useState<string | null>(null);
 
+  const isDemo = Boolean(currentSite?.is_demo);
+  const hasValidForecast = Boolean(forecastResult && !forecastResult.is_suppressed && forecastResult.blocks?.length === 96);
+
   // Load backend forecast from /api/forecast
   useEffect(() => {
     if (!currentSite?.id) return;
@@ -132,25 +135,47 @@ export default function GridIntelligencePage() {
   }, [forecastResult, currentSite]);
 
   // Quality gate evaluation
+  // Quality gate evaluation
   const qualityGate = useMemo(() => {
     return evaluateQualityGate({
       sourceTimestamp: forecastResult?.model_generation_time || '2026-09-07T00:00:00Z',
-      sourceType: forecastResult?.persisted ? 'PostgreSQL Persisted Model Forecast' : 'DEMO / INTERNAL_VALIDATION',
-      completenessPct: currentSite?.activation_status === 'ACTIVE' ? 100.0 : 95.0,
+      sourceType: forecastResult?.persisted ? 'PostgreSQL Persisted Model Forecast' : (isDemo ? 'DEMO / SYNTHETIC' : 'INTERNAL_VALIDATION'),
+      completenessPct: currentSite?.activation_status === 'ACTIVE' ? 100.0 : (isDemo ? 95.0 : 0.0),
       totalBlocksExpected: 96,
       totalBlocksReceived: forecastBlocks.length,
-      validationStatus: forecastResult?.data_quality || 'PASSED',
-      freshnessStatus: forecastResult?.freshness || 'RECENT',
-      modelVersion: forecastResult?.model_version || 'DEMO_BASELINE_v1.0',
+      validationStatus: forecastResult?.data_quality || (isDemo ? 'PASSED' : (hasValidForecast ? 'PASSED' : 'FAILED')),
+      freshnessStatus: forecastResult?.freshness || (isDemo ? 'RECENT' : 'UNKNOWN'),
+      modelVersion: forecastResult?.model_version || (isDemo ? 'DEMO_BASELINE_v1.0' : 'INTERNAL_VALIDATION'),
       modelGenerationTime: forecastResult?.model_generation_time || new Date().toISOString(),
-      tariffVersion: 'MSEDCL_HT1_TOD_2024_VALIDATED',
+      tariffVersion: isDemo ? 'MSEDCL_HT1_TOD_DEMO' : (forecastResult?.tariff_version || 'CONFIGURATION_REQUIRED'),
     });
-  }, [forecastResult, currentSite, forecastBlocks.length]);
+  }, [forecastResult, currentSite, forecastBlocks.length, isDemo, hasValidForecast]);
 
-  const isDemo = Boolean(currentSite?.is_demo);
-  const hasValidForecast = Boolean(forecastResult && Array.isArray(forecastResult.blocks) && forecastResult.blocks.length > 0);
+  // Derived highest-cost window and price range from returned 96 blocks
+  const highCostWindow = useMemo(() => {
+    if (forecastBlocks.length === 0) {
+      return isDemo ? { windowText: 'Blocks 72–88 (18:00 - 22:00) [DEMO]', priceRangeText: '₹7,800 - ₹9,600/MWh [DEMO]' } : null;
+    }
+    const highBlocks = forecastBlocks.filter((b) => b.is_high_cost);
+    if (highBlocks.length === 0) {
+      const sorted = [...forecastBlocks].sort((a, b) => (b.price_mwh || 0) - (a.price_mwh || 0));
+      const peak = sorted[0];
+      return {
+        windowText: `Block ${peak.block_index} (${peak.start_time})`,
+        priceRangeText: `₹${(peak.price_mwh || 0).toLocaleString('en-IN')}/MWh`,
+      };
+    }
+    const firstBlock = highBlocks[0];
+    const lastBlock = highBlocks[highBlocks.length - 1];
+    const minPrice = Math.min(...highBlocks.map((b) => b.price_mwh || 0));
+    const maxPrice = Math.max(...highBlocks.map((b) => b.price_mwh || 0));
+    return {
+      windowText: `Blocks ${firstBlock.block_index}–${lastBlock.block_index} (${firstBlock.start_time} - ${getBlockTimes(lastBlock.block_index).endTime})`,
+      priceRangeText: `₹${minPrice.toLocaleString('en-IN')} - ₹${maxPrice.toLocaleString('en-IN')}/MWh`,
+    };
+  }, [forecastBlocks, isDemo]);
 
-  // Cost Explorer calculations based on server-returned blocks
+  // Cost Explorer calculations based on server-returned blocks and persisted approved tariff
   const explorerCalculations = useMemo(() => {
     if (!isDemo && (!hasValidForecast || forecastBlocks.length === 0)) {
       return {
@@ -175,11 +200,29 @@ export default function GridIntelligencePage() {
       avoidedKwh += isDemo ? 1500 : 0;
     }
 
-    const baselineTariff = 7.85;
+    // Resolve tariff from persisted approved data or fail closed with CONFIGURATION REQUIRED
+    const baselineTariff = isDemo
+      ? 7.85
+      : (forecastResult?.tariff_rate_inr_per_kwh ? Number(forecastResult.tariff_rate_inr_per_kwh) : null);
+
+    if (baselineTariff === null || !Number.isFinite(baselineTariff)) {
+      return {
+        totalDailyKwh,
+        baselineCostPaise: 0,
+        scenarioCostPaise: 0,
+        dailyAvoidedPaise: 0,
+        monthlyAvoidedPaise: 0,
+        landedUnitCostInr: 'CONFIGURATION REQUIRED',
+        isDataGap: true,
+      };
+    }
+
     const baselineCostPaise = Math.round(totalDailyKwh * baselineTariff * 100);
 
     const scenarioKwhFromGrid = Math.max(0, totalDailyKwh - avoidedKwh);
-    const gridTariffRate = oaEnabled ? (isDemo ? 5.20 : 5.80) : baselineTariff;
+    const gridTariffRate = oaEnabled
+      ? (isDemo ? 5.20 : Number(forecastResult?.oa_tariff_rate_inr_per_kwh || (baselineTariff * 0.75).toFixed(2)))
+      : baselineTariff;
     const scenarioCostPaise = Math.round(scenarioKwhFromGrid * gridTariffRate * 100);
 
     const dailyAvoidedPaise = Math.max(0, baselineCostPaise - scenarioCostPaise);
@@ -194,7 +237,7 @@ export default function GridIntelligencePage() {
       landedUnitCostInr: totalDailyKwh > 0 ? (scenarioCostPaise / (totalDailyKwh * 100)).toFixed(2) : '0.00',
       isDataGap: false,
     };
-  }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast]);
+  }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast, forecastResult]);
 
   const handleExportCsv = () => {
     const headers = ['block_index', 'start_time', 'forecast_demand_kw', 'forecast_price_inr_per_mwh', 'solar_generation_kw', 'is_high_cost'];
@@ -242,7 +285,7 @@ export default function GridIntelligencePage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div data-testid="quality-status" className="flex flex-wrap items-center gap-2">
             <DataQualityBadge status={qualityGate.qualityMetadata.validationStatus} />
             <FreshnessBadge status={qualityGate.qualityMetadata.freshnessStatus} />
             <Button onClick={handleExportCsv} variant="outline" size="sm" className="gap-1.5 text-xs">
@@ -301,10 +344,10 @@ export default function GridIntelligencePage() {
               <Card variant="industrial">
                 <span className="text-xs text-slate-400 block mb-1">Highest Cost Window</span>
                 <div className="text-xl font-bold font-mono text-rose-400">
-                  {hasValidForecast || isDemo ? 'Blocks 72–88 (18:00 - 22:00)' : 'DATA GAP'}
+                  {highCostWindow ? highCostWindow.windowText : (isDemo ? 'Blocks 72–88 (18:00 - 22:00) [DEMO]' : 'DATA GAP')}
                 </div>
                 <p className="text-xs text-rose-300 mt-1">
-                  Clearing price: <strong>{hasValidForecast || isDemo ? '₹7,800 - ₹9,600/MWh' : 'FORECAST UNAVAILABLE'}</strong>
+                  Clearing price: <strong>{highCostWindow ? highCostWindow.priceRangeText : (isDemo ? '₹7,800 - ₹9,600/MWh [DEMO]' : 'FORECAST UNAVAILABLE')}</strong>
                 </p>
               </Card>
 

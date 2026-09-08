@@ -63,7 +63,8 @@ export async function authorizeApiRequest(
   req: NextRequest,
   options: GuardOptions
 ): Promise<GuardResult> {
-  const isDemoModeEnabled = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  const env = process.env;
+  const isDemoModeEnabled = env['NEXT_PUBLIC_DEMO_MODE'] === 'true' || env['DEMO_MODE'] === 'true';
   const adminClient = createAdminClient();
 
   // 1. Resolve Authenticated User

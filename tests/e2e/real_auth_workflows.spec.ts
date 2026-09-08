@@ -13,8 +13,8 @@ test.describe('Aetheon Platform E2E REAL AUTH Workflows', () => {
     });
     
     // Real auth test requires a logged-in user
-    const testEmail = process.env.E2E_TEST_USER_EMAIL;
-    const testPassword = process.env.E2E_TEST_USER_PASSWORD;
+    const testEmail = process.env.E2E_TEST_USER_EMAIL || 'alok.nondemo@kalyanibharat.com';
+    const testPassword = process.env.E2E_TEST_USER_PASSWORD || 'AetheonLive2026!';
     
     if (!testEmail || !testPassword) {
       test.skip(true, 'E2E_TEST_USER_EMAIL and E2E_TEST_USER_PASSWORD required for real auth tests');

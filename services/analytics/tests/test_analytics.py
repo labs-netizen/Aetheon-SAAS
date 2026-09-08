@@ -11,6 +11,9 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+if not os.getenv("ANALYTICS_SERVICE_TOKEN"):
+    os.environ["ANALYTICS_SERVICE_TOKEN"] = "fixture-test-analytics-token"
+
 from main import app
 from schemas import (
     GridForecastRequest, DSMCalculationRequest,

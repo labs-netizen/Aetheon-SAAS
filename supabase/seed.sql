@@ -191,3 +191,144 @@ VALUES (
     '2024-04-01',
     true
 ) ON CONFLICT (id) DO NOTHING;
+
+-- 8. Authoritative Seeded NON-DEMO Organisation, Site, User & BESS Asset (is_demo = false)
+INSERT INTO organisations (id, name, legal_entity_name, gstin, billing_address, is_active)
+VALUES (
+    'a0000000-0000-0000-0000-000000000002',
+    'Kalyani Bharat Forgings Ltd',
+    'Kalyani Bharat Forgings Private Limited',
+    '27AABCK9876F1Z2',
+    '{"address_line": "Mundhwa Industrial Area", "city": "Pune", "state": "Maharashtra", "pincode": "411036"}'::jsonb,
+    true
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO sites (
+    id, organisation_id, name, state, discom, voltage_category, 
+    contract_demand_value, contract_demand_unit, metering_point, 
+    load_class, activation_status, activation_reason, is_demo
+)
+VALUES (
+    'b0000000-0000-0000-0000-000000000010',
+    'a0000000-0000-0000-0000-000000000002',
+    'Kalyani Pune Heavy Forge Unit 1',
+    'Maharashtra',
+    'MSEDCL',
+    '33kV',
+    3000.0,
+    'kVA',
+    '33kV Main Incomer 1',
+    'Continuous Heavy Forge',
+    'AWAITING_DATA',
+    'Awaiting initial 15-minute AMR load upload',
+    false
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO user_profiles (id, full_name, email, phone, is_platform_admin, mfa_enabled)
+VALUES
+('c0000000-0000-0000-0000-000000000010', 'Alok Kulkarni (VP Energy & Infrastructure)', 'alok.nondemo@kalyanibharat.com', '+919820055443', false, true)
+ON CONFLICT (id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  email = EXCLUDED.email;
+
+INSERT INTO memberships (organisation_id, user_id, role, is_active, expires_at)
+VALUES
+('a0000000-0000-0000-0000-000000000002', 'c0000000-0000-0000-0000-000000000010', 'ORGANISATION_ADMIN', true, null)
+ON CONFLICT (organisation_id, user_id) DO NOTHING;
+
+INSERT INTO site_access (site_id, user_id, granted_by)
+VALUES
+('b0000000-0000-0000-0000-000000000010', 'c0000000-0000-0000-0000-000000000010', 'c0000000-0000-0000-0000-000000000010')
+ON CONFLICT (site_id, user_id) DO NOTHING;
+
+INSERT INTO subscriptions (id, organisation_id, status, current_period_start, current_period_end, cancel_at_period_end, billing_provider, billing_provider_ref)
+VALUES (
+    'd0000000-0000-0000-0000-000000000002',
+    'a0000000-0000-0000-0000-000000000002',
+    'ACTIVE',
+    now() - interval '5 days',
+    now() + interval '25 days',
+    false,
+    'RAZORPAY',
+    'sub_kalyani_live'
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO entitlements (organisation_id, product_id, site_id, is_active)
+VALUES
+('a0000000-0000-0000-0000-000000000002', 'GRID_INTELLIGENCE', 'b0000000-0000-0000-0000-000000000010', true),
+('a0000000-0000-0000-0000-000000000002', 'DSM_RISK', 'b0000000-0000-0000-0000-000000000010', true),
+('a0000000-0000-0000-0000-000000000002', 'BESS_ARBITRAGE', 'b0000000-0000-0000-0000-000000000010', true)
+ON CONFLICT (organisation_id, product_id, site_id) DO UPDATE SET is_active = EXCLUDED.is_active;
+
+INSERT INTO bess_assets (
+    id, site_id, name, usable_capacity_kwh, power_rating_kw, 
+    current_soc_pct, min_soc_pct, max_soc_pct, 
+    charge_efficiency, discharge_efficiency, degradation_cost_per_cycle_inr, 
+    maintenance_lock, is_active, last_telemetry_at
+)
+VALUES (
+    'e0000000-0000-0000-0000-000000000010',
+    'b0000000-0000-0000-0000-000000000010',
+    'Kalyani 1MW/2MWh BESS System',
+    2000.0,
+    1000.0,
+    65.0,
+    10.0,
+    90.0,
+    0.92,
+    0.92,
+    1800.0,
+    false,
+    true,
+    now()
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO regulatory_sources (
+    id, jurisdiction, state, discom, document_title, 
+    document_date, effective_date, version, status, is_demo
+)
+VALUES (
+    '10000000-0000-0000-0000-000000000002',
+    'MERC',
+    'Maharashtra',
+    'MSEDCL',
+    'MSEDCL Approved Multi-Year Tariff Order',
+    '2024-04-01',
+    '2024-04-01',
+    'MERC_MYT_2024_APPROVED',
+    'APPROVED',
+    false
+),
+(
+    '10000000-0000-0000-0000-000000000003',
+    'CERC',
+    'National',
+    'Grid-India',
+    'CERC DSM Approved Regulations 2024',
+    '2024-04-01',
+    '2024-04-01',
+    'CERC_DSM_2024_APPROVED',
+    'APPROVED',
+    false
+) ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO discom_tariffs (
+    state, discom, voltage_category, category_name, 
+    fixed_charge_inr_per_kva_month, energy_charge_normal_inr_per_kwh, 
+    tod_peak_surcharge_pct, tod_off_peak_rebate_pct, 
+    regulatory_source_id, effective_from, is_demo
+)
+VALUES (
+    'Maharashtra',
+    'MSEDCL',
+    '33kV',
+    'HT-1 Continuous Industry (Approved)',
+    525.0,
+    7.85,
+    20.0,
+    15.0,
+    '10000000-0000-0000-0000-000000000002',
+    '2024-04-01',
+    false
+) ON CONFLICT (id) DO NOTHING;
+

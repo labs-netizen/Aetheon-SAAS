@@ -6,15 +6,23 @@
 - **Auth/Entitlement**: Requires `ENERGY_MANAGER` or `ORGANISATION_ADMIN` role and `has_site_access(siteId)`.
 - **Reads**: Multipart raw CSV stream.
 - **Writes**: `ingestion_runs`, `interval_data_96`, `sites`, `site_activation_history`, `audit_logs`.
-- **RPCs**: `commit_ingestion_transaction` (canonical 8-arg signature: `site_id`, `filename`, `checksum_sha256`, `uploaded_by`, `rows`, `freshness_status`, `actor_role`, `org_id`).
+- **RPCs**: `commit_ingestion_transaction` (Migration 14 canonical 8-arg signature: `site_id`, `filename`, `checksum_sha256`, `uploaded_by`, `rows`, `freshness_status`, `actor_role`, `org_id`).
 - **External Service**: None (PostgreSQL transactional RPC).
-- **Quality Gate**: Validates exactly 96 contiguously indexed 15-minute intervals per operating date. Completeness $< 95\%$ or stale data marks run `BLOCKED_INCOMPLETE` / `BLOCKED_STALE`.
-- **Fail-Closed Conditions**: Computes SHA-256 server-side on raw stream; returns HTTP 409 `DUPLICATE_FILE` on duplicate hash. Returns HTTP 400 on malformed columns or non-numeric load values. Client-controlled JSON bypass has been removed.
+- **Authoritative V1 Contract**:
+  - **ONE CSV = ONE operating_date = EXACTLY 96 rows = block_index 1–96 exactly once.**
+  - Both HTTP API parser (`src/features/ingestion/csvParser.ts`) and PostgreSQL RPC (`commit_ingestion_transaction`) strictly enforce:
+    - Rejection of 95, 97, 192 rows.
+    - Rejection of multiple operating dates in a single CSV.
+    - Rejection of duplicate blocks or missing blocks in range 1–96.
+    - Rejection of impossible calendar dates (e.g. `2026-02-31`) via real calendar day validation beyond regex.
+    - Rejection of client JSON bypass; raw CSV payload with server-side SHA-256 is required.
+    - Invariant guarantee: It is impossible for `validation_status = 'FAILED' AND publication_gate_status = 'PUBLISHABLE'`.
+- **Fail-Closed Conditions**: Computes SHA-256 server-side on raw stream; returns HTTP 409 `DUPLICATE_FILE` on duplicate hash. Returns HTTP 400 on malformed columns, non-numeric values, or contract violations.
 - **Provenance**: Records original filename, SHA-256 hash, uploaded_by UUID, row count, and activation transition in `audit_logs`.
 - **Reports**: Ingestion run summary with validation metrics.
-- **Alerts**: Dispatches `INGESTION_FAILURE` on parse or contiguity failure.
+- **Alerts**: Alerts hub records state; automated dispatch is `NOT_IMPLEMENTED` in V1.
 - **Demo Behavior**: Provides deterministic 96-block sample CSV template download.
-- **Live Behavior**: Persists 96 intervals per date into `interval_data_96`; transitions site status (`CALIBRATING` $\to$ `ACTIVE` upon accumulating 7 days of contiguous data).
-- **Tests**: `tests/unit/csvParser.test.ts`, `tests/integration/adversarial_api.test.ts` (Test 8, 9), `tests/e2e/persistence_journey.spec.ts`, `tests/e2e/demo_smoke.spec.ts` (Test 5).
+- **Live Behavior**: Persists exactly 96 intervals per date into `interval_data_96`; transitions site status (`CALIBRATING` $\to$ `ACTIVE` upon accumulating contiguous data).
+- **Tests**: `tests/unit/csvParser.test.ts` (exhaustive contract tests for 95, 97, 192 rows, duplicate/missing blocks, impossible calendar dates), `tests/integration/adversarial_api.test.ts` (Test 8, 9), `tests/e2e/persistence_journey.spec.ts`, `tests/e2e/demo_smoke.spec.ts` (Test 5), `tests/e2e/real_auth_workflows.spec.ts` (Test 4, 5).
 - **External Requirements**: Live AMR meter SFTP/API connectors when available.
-- **Known Limitations**: V1 supports 96-block CSV files only; Excel (.xlsx) support intentionally removed for security and schema rigor.
+- **Known Limitations**: V1 supports 96-block CSV files only; Excel (.xlsx) support intentionally excluded for schema rigor.

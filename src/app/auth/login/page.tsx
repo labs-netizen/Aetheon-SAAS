@@ -9,9 +9,12 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { createClient } from '@/lib/supabase/client';
 
+import { useSite } from '@/components/layout/SiteContext';
+
 export default function LoginPage() {
   const router = useRouter();
   const supabase = createClient();
+  const { refreshTenancy } = useSite();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -35,6 +38,7 @@ export default function LoginPage() {
         return;
       }
 
+      await refreshTenancy();
       router.push('/');
       router.refresh();
     } catch (err) {

@@ -769,14 +769,18 @@ describe('Adversarial API & Server Rejection Suite', () => {
 
   // 19. Webhook Unmapped Provider Reference Hardening
   it('19. Webhook Hardening: Unmapped provider reference is rejected even with valid signature', async () => {
+    const unmappedEventId = `evt_unmapped_${Date.now()}`;
+    const unmappedPayId = `pay_unmapped_${Date.now()}`;
+    const unmappedOrderId = `order_nonexistent_${Date.now()}`;
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_aetheon';
     const rawPayload = JSON.stringify({
+      id: unmappedEventId,
       event: 'order.paid',
       payload: {
         payment: {
           entity: {
-            id: 'pay_unmapped_test_999',
-            order_id: 'order_nonexistent_reference_123',
+            id: unmappedPayId,
+            order_id: unmappedOrderId,
             amount: 2490000,
             status: 'captured',
             notes: { org_id: orgAId, site_id: siteAId, product_id: 'DSM_RISK' },
@@ -797,10 +801,23 @@ describe('Adversarial API & Server Rejection Suite', () => {
     });
 
     const res = await webhookPost(req);
-    expect(res.status).toBe(500);
+    expect([422, 500]).toContain(res.status);
     const json = await res.json();
-    expect(json.error).toBe('DATABASE_TRANSACTION_FAILED');
-    expect(json.details).toContain('Unknown provider reference');
+    if (res.status === 422) {
+      expect(json.error).toBe('UNMAPPED_BILLING_REFERENCE');
+      expect(json.status).toBe('quarantined');
+    } else {
+      expect(json.error).toBe('DATABASE_TRANSACTION_FAILED');
+      expect(json.details).toContain('Unknown provider reference');
+    }
+
+    // Verify durable QUARANTINED event exists without entitlement
+    const { data: qEvt } = await adminClient
+      .from('processed_webhook_events')
+      .select('status')
+      .eq('id', unmappedEventId)
+      .maybeSingle();
+    expect(qEvt?.status).toBe('QUARANTINED');
   });
 
   // 20. Grid Forecast Run -> Report with exact 96 blocks via run_id

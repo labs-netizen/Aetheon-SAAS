@@ -141,6 +141,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Public authentication routes should render directly without AppShell tenancy interceptor
+  if (pathname?.startsWith('/auth')) {
+    return <>{children}</>;
+  }
+
   // 1. Loading State
   if (tenancyStatus === 'LOADING') {
     return (
@@ -442,7 +447,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {currentOrg && (
             <div className="hidden lg:flex items-center gap-2 ml-4 pl-4 border-l border-slate-800">
               <Building2 className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-xs font-medium text-slate-300">{currentOrg.name}</span>
+              <span data-testid="org-name" className="text-xs font-medium text-slate-300">{currentOrg.name}</span>
             </div>
           )}
         </div>

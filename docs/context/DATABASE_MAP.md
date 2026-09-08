@@ -2,7 +2,7 @@
 
 This map documents the PostgreSQL 17.6 database schema, migration lineage, table purposes, and Security Definer RPCs.
 
-## 1. Migration Chain (13 Applied Migrations)
+## 1. Migration Chain (14 Applied Migrations)
 
 1. `20260907000001_core_tenancy.sql`: Organisations, user profiles, memberships, sites, site access.
 2. `20260907000002_catalog_subscriptions.sql`: Products, subscriptions, subscription items, invoices.
@@ -17,6 +17,9 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 11. `20260907000011_pre_astra_blockers.sql`: Advisory lock on audit chaining, dynamic compliance obligations.
 12. `20260907000012_final_rls_and_pipeline_consistency.sql`: Canonical 8-arg ingestion RPC, legacy RLS purge, CEA emission factor seed, FAILED billing status, unique indexes.
 13. `20260907000013_atomic_acknowledgement_audit.sql`: Atomic alert & DSM incident acknowledgment RPCs with transactional audit logging.
+14. `20260907000014_surgical_fixes_and_dsm_runs.sql`: Creates `dsm_evaluation_runs` table, updates `commit_ingestion_transaction` with exact 96-row, single date, contiguous block 1–96, and real calendar date validation; updates `process_razorpay_webhook_atomic` to insert canonical `billing_provider_ref` and provide durable quarantine without transaction rollback.
+
+---
 
 ## 2. Table Catalog
 
@@ -28,15 +31,17 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 | `sites` | `id` (UUID) | `organisation_id` | Physical C&I facilities. RLS: filtered by `has_site_access()`. |
 | `site_access` | `(user_id, site_id)` | `user_id`, `site_id` | Granular user-to-site grants. Only Org Admins can manage. |
 | `site_activation_history` | `id` (UUID) | `site_id`, `changed_by` | Audit trail of site status changes. Server-only write. |
-| `subscriptions` | `id` (UUID) | `organisation_id` | Paid tenant plans. RLS: Org Admins & Finance Viewers only. |
+| `subscriptions` | `id` (UUID) | `organisation_id` | Paid tenant plans. RLS: Org Admins & Finance Viewers only. Uses canonical `billing_provider_ref`. |
 | `subscription_items` | `id` (UUID) | `subscription_id`, `site_id` | Active product entitlements. Unique index prevents duplicate items. |
 | `invoices` | `id` (UUID) | `organisation_id`, `subscription_id` | Billing invoices with paise integer amounts. Supports `FAILED` status. |
 | `billing_checkout_sessions` | `id` (UUID) | `organisation_id`, `site_id` | Authoritative commercial binding before payment provider redirection. |
+| `processed_webhook_events` | `event_id` (Text) | None | Deduplication & durable quarantine of provider webhooks. Server-only write. |
 | `data_sources` | `id` (UUID) | `site_id` | Metering connection config (CSV upload, AMR, SFTP). |
 | `ingestion_runs` | `id` (UUID) | `site_id`, `data_sources(id)` | Records file metadata and SHA-256 checksums. Server-only write. |
 | `interval_data_96` | `(site_id, operating_date, block_index)` | `site_id`, `ingestion_run_id` | Core 15-minute AMR telemetry (96 blocks/day). Server-only write. |
 | `grid_forecast_runs` | `id` (UUID) | `site_id` | Model execution headers. Server-only write. |
 | `grid_forecast_blocks` | `(run_id, block_index)` | `grid_forecast_runs(id)` | 96-block day-ahead demand/price forecast. Canonical FK is `run_id`. Server-only write. |
+| `dsm_evaluation_runs` | `id` (UUID) | `site_id` | Persisted proof of DSM calculation execution even with 0 incidents. Server-only write. |
 | `dsm_incidents` | `id` (UUID) | `site_id` | Grouped grid frequency/deviation violations. Unique window index prevents duplicates. |
 | `bess_assets` | `id` (UUID) | `site_id` | Battery physical specifications and SOC parameters. |
 | `bess_signal_runs` | `id` (UUID) | `bess_assets(id)` | Advisory charge/discharge schedule output. Server-only write. |
@@ -49,15 +54,25 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 | `report_records` | `id` (UUID) | `site_id`, `organisation_id` | Unified report metadata and storage paths. Server-only write. |
 | `audit_logs` | `id` (UUID) | `organisation_id`, `site_id` | Cryptographically chained append-only audit trail. Immutable trigger. |
 
+---
+
 ## 3. Authoritative PostgreSQL RPCs
 
 ### `commit_ingestion_transaction`
-- **Purpose**: Atomically validates SHA-256 checksum, inserts ingestion run, upserts 96 interval blocks, evaluates 7-day calibration status, and writes audit record.
+- **Purpose**: Atomically validates exact V1 CSV contract (1 operating date, exactly 96 contiguous rows 1–96, real calendar dates), checks SHA-256 idempotency, creates ingestion run, upserts 96 intervals, transitions site calibration state, and appends audit log.
 - **Security Definer**: YES (`SECURITY DEFINER SET search_path = public`).
 - **Caller**: Server backend (`src/app/api/ingestion/commit/route.ts`).
 - **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
 - **Tables Touched**: `ingestion_runs`, `interval_data_96`, `sites`, `site_activation_history`, `audit_logs`.
-- **Proving Tests**: `tests/integration/adversarial_api.test.ts` (Test 8, 9), `tests/e2e/persistence_journey.spec.ts`.
+- **Proving Tests**: `tests/unit/csvParser.test.ts`, `tests/integration/adversarial_api.test.ts` (Test 8), `tests/e2e/persistence_journey.spec.ts`.
+
+### `process_razorpay_webhook_atomic`
+- **Purpose**: Atomically processes payment provider webhook events (`payment.captured`, `order.paid`). Verifies checkout session, creates subscription with canonical `billing_provider_ref` (handling brand-new organisations without prior subscriptions), adds subscription item, grants entitlements, records invoice, and deduplicates events. Durably stores unknown provider events as `QUARANTINED` in `processed_webhook_events` without transaction rollback.
+- **Security Definer**: YES (`SECURITY DEFINER SET search_path = public`).
+- **Caller**: Server backend (`src/app/api/webhooks/razorpay/route.ts`).
+- **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
+- **Tables Touched**: `billing_checkout_sessions`, `subscriptions`, `subscription_items`, `entitlements`, `invoices`, `processed_webhook_events`, `audit_logs`.
+- **Proving Tests**: `tests/integration/adversarial_api.test.ts` (Test 18 [first-payment new org], Test 19 [durable quarantine]).
 
 ### `acknowledge_alert_atomic`
 - **Purpose**: Atomically marks an alert as `ACKNOWLEDGED` and appends an `ALERT_ACKNOWLEDGED` record to `audit_logs`.
@@ -65,7 +80,7 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 - **Caller**: Server backend (`src/app/api/alerts/[id]/acknowledge/route.ts`).
 - **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
 - **Tables Touched**: `alerts`, `audit_logs`.
-- **Proving Tests**: `tests/integration/adversarial_api.test.ts` (Test 20), `tests/e2e/demo_smoke.spec.ts`.
+- **Proving Tests**: `tests/integration/adversarial_api.test.ts` (Test 21), `tests/e2e/demo_smoke.spec.ts` (Test 8).
 
 ### `acknowledge_dsm_incident_atomic`
 - **Purpose**: Atomically marks a DSM incident as acknowledged and appends a `DSM_INCIDENT_ACKNOWLEDGED` record to `audit_logs`.

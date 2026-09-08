@@ -10,7 +10,8 @@ export async function middleware(request: NextRequest) {
 
   // Demo mode may be enabled ONLY by trusted server configuration.
   // Browser headers (x-demo-mode) or cookies (aetheon_demo) must NEVER bypass authentication.
-  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  const env = process.env;
+  const isDemoMode = env['NEXT_PUBLIC_DEMO_MODE'] === 'true' || env['DEMO_MODE'] === 'true';
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://mock-aetheon.supabase.co';
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'mock-anon-key-placeholder';

@@ -65,6 +65,8 @@ export async function PATCH(
     if (contract_demand_value !== undefined) updates.contract_demand_value = Number(contract_demand_value);
     if (metering_point !== undefined) updates.metering_point = metering_point;
     if (load_class !== undefined) updates.load_class = load_class;
+    if (body.activation_status !== undefined) updates.activation_status = body.activation_status;
+    if (body.activation_reason !== undefined) updates.activation_reason = body.activation_reason;
 
     const adminClient = createAdminClient();
     const { data: updatedSite, error: updateError } = await adminClient

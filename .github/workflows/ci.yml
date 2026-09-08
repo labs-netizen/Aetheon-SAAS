@@ -46,6 +46,9 @@ jobs:
           echo "SUPABASE_SERVICE_ROLE_KEY=${SERVICE_ROLE_KEY}" >> $GITHUB_ENV
           echo "DATABASE_URL=${DB_URL}" >> $GITHUB_ENV
 
+      - name: Seed Authentication Users
+        run: node scripts/seed_auth_users.mjs
+
       - name: Run Unit, RLS & Adversarial API Tests
         run: npm test
 
@@ -73,17 +76,25 @@ jobs:
             sleep 1
           done
         env:
-          ANALYTICS_SERVICE_TOKEN: aetheon-dev-analytics-secret-2026
+          ANALYTICS_SERVICE_TOKEN: fixture-ci-analytics-token
 
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright E2E Tests
-        run: npx playwright test
+      - name: Run Playwright E2E Tests (Non-Demo / Production-like)
+        run: npx playwright test --project=non-demo
         env:
           NEXT_PUBLIC_APP_URL: http://localhost:3000
           ANALYTICS_SERVICE_URL: http://127.0.0.1:8000
-          ANALYTICS_SERVICE_TOKEN: aetheon-dev-analytics-secret-2026
+          ANALYTICS_SERVICE_TOKEN: fixture-ci-analytics-token
+
+      - name: Run Playwright E2E Tests (Demo Mode)
+        run: npx playwright test --project=demo
+        env:
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          ANALYTICS_SERVICE_URL: http://127.0.0.1:8000
+          ANALYTICS_SERVICE_TOKEN: fixture-ci-analytics-token
+          NEXT_PUBLIC_DEMO_MODE: 'true'
 
   validate-analytics:
     name: Python Analytics Microservice Validation
@@ -105,3 +116,5 @@ jobs:
         run: |
           cd services/analytics
           pytest tests/ -v
+        env:
+          ANALYTICS_SERVICE_TOKEN: fixture-ci-analytics-token

@@ -44,8 +44,25 @@ export interface ParseResult {
   }>;
 }
 
+export const COMPLETENESS_THRESHOLD = 95.0;
+
 // In-memory set of already processed checksums for local demo duplicate prevention
 const PROCESSED_CHECKSUMS = new Set<string>();
+
+export function isValidCalendarDate(dateStr: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const parts = dateStr.split('-');
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const dateObj = new Date(Date.UTC(year, month - 1, day));
+  return (
+    dateObj.getUTCFullYear() === year &&
+    dateObj.getUTCMonth() === month - 1 &&
+    dateObj.getUTCDate() === day
+  );
+}
 
 export function computeFileChecksum(content: string): string {
   return CryptoJS.SHA256(content).toString();
@@ -79,16 +96,35 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
   const errors: RowError[] = [];
   const acceptedData: ParseResult['parsedData'] = [];
 
+  // V1 Contract Enforcement: Exactly 96 rows required
+  if (rows.length !== 96) {
+    errors.push({
+      rowNumber: 0,
+      reason: `V1_CONTRACT_EXACT_96_ROWS: Ingestion file must contain exactly 96 interval blocks (received ${rows.length}).`,
+    });
+  }
+
+  // V1 Contract Enforcement: Exactly ONE operating date permitted per CSV
+  const rawDates = rows.map((r) => r.operating_date).filter(Boolean);
+  const distinctDates = Array.from(new Set(rawDates));
+  if (distinctDates.length > 1) {
+    errors.push({
+      rowNumber: 0,
+      column: 'operating_date',
+      reason: `V1_CONTRACT_SINGLE_DATE: V1 contract strictly permits only ONE operating date per CSV (found ${distinctDates.length}: ${distinctDates.join(', ')}).`,
+    });
+  }
+
   rows.forEach((row, idx) => {
     const rowNum = idx + 2; // +1 for 1-based index, +1 for header row
 
-    // 1. Validate operating date (YYYY-MM-DD)
-    if (!row.operating_date || !/^\d{4}-\d{2}-\d{2}$/.test(row.operating_date)) {
+    // 1. Validate operating date calendar integrity (reject impossible calendar dates like 2026-02-31)
+    if (!row.operating_date || !isValidCalendarDate(row.operating_date)) {
       errors.push({
         rowNumber: rowNum,
         column: 'operating_date',
         value: row.operating_date,
-        reason: 'Invalid or missing date format. Expected YYYY-MM-DD.',
+        reason: 'INVALID_CALENDAR_DATE: Invalid calendar date format or impossible date (e.g. 2026-02-31). Expected existing calendar YYYY-MM-DD.',
       });
       return;
     }
@@ -155,6 +191,24 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
     }
   });
 
+  // Check for missing blocks when single operating date is present
+  if (distinctDates.length === 1 && rows.length === 96) {
+    const seen = blockMap.get(distinctDates[0]) || new Set();
+    const missing: number[] = [];
+    for (let b = 1; b <= 96; b++) {
+      if (!seen.has(b)) {
+        missing.push(b);
+      }
+    }
+    if (missing.length > 0) {
+      errors.push({
+        rowNumber: 0,
+        column: 'block_index',
+        reason: `MISSING_BLOCK: Operating date ${distinctDates[0]} is missing block(s): ${missing.join(', ')}. Contract requires blocks 1 to 96 exactly once.`,
+      });
+    }
+  }
+
   // If no errors, record checksum as processed
   if (errors.length === 0 && acceptedData.length > 0) {
     PROCESSED_CHECKSUMS.add(`${siteId}:${checksum}`);
@@ -181,6 +235,10 @@ export function validate96BlockContiguity(data: ParseResult['parsedData']): {
   const dates = [...new Set(data.map((d) => d.operating_date))];
   const missing: Record<string, number[]> = {};
   let allContiguous = true;
+
+  if (dates.length !== 1 || data.length !== 96) {
+    allContiguous = false;
+  }
 
   for (const date of dates) {
     const presentBlocks = new Set(data.filter((d) => d.operating_date === date).map((d) => d.block_index));

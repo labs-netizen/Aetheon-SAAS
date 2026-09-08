@@ -17,7 +17,7 @@ export const PRODUCTS = {
     basePricePaise: 1490000, // ₹14,900
     displayPrice: '₹14,900/state/site/month',
     description: 'Statutory compliance tracking, DISCOM charges (CSS, AS, Wheeling), and SLDC calendar.',
-    availabilityStatus: 'DEMO',
+    availabilityStatus: 'SPECIALIST_REVIEW_REQUIRED',
   },
   DSM_RISK: {
     id: 'DSM_RISK',
@@ -25,7 +25,7 @@ export const PRODUCTS = {
     basePricePaise: 2990000, // ₹29,900
     displayPrice: '₹29,900/site/month',
     description: '15-minute deviation monitoring, risk bands, and penalty exposure under CERC/SERC DSM.',
-    availabilityStatus: 'DEMO',
+    availabilityStatus: 'INTERNAL_VALIDATION',
   },
   BESS_ARBITRAGE: {
     id: 'BESS_ARBITRAGE',
@@ -33,7 +33,7 @@ export const PRODUCTS = {
     basePricePaise: 4990000, // ₹49,900
     displayPrice: '₹49,900/site/month',
     description: 'Advisory charge/discharge opportunity window recommendations for C&I batteries.',
-    availabilityStatus: 'DEMO',
+    availabilityStatus: 'SPECIALIST_REVIEW_REQUIRED',
   },
   RENEWABLE_PORTFOLIO: {
     id: 'RENEWABLE_PORTFOLIO',

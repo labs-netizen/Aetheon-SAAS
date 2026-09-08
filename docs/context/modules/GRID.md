@@ -7,14 +7,17 @@
 - **Reads**: `sites`, `interval_data_96` (96-block meter load), `discom_tariffs`.
 - **Writes**: `grid_forecast_runs`, `grid_forecast_blocks` (canonical FK: `run_id`). Client writes blocked by RLS.
 - **RPCs**: `has_site_access` (authorization check).
-- **External Service**: Python FastAPI microservice (`POST /forecast` on port 8000).
-- **Quality Gate**: Evaluates `QualityGate.evaluateTelemetry()` on interval data. Requires $\ge 95\%$ completeness and freshness $< 24$ hours for `PUBLISHABLE`.
-- **Fail-Closed Conditions**: If site status is not `ACTIVE` (e.g. `AWAITING_DATA` or uncalibrated), returns `DATA GAP` / `BLOCKED_MISSING_INPUT` with zeroed avoided cost. Never fabricates `Math.sin()` curves in live mode.
+- **External Service**: Python FastAPI microservice (`POST /analytics/forecast` on port 8000).
+- **Quality Gate**: Evaluates `QualityGate.evaluateTelemetry()` on interval data. Requires $\ge 95.0\%$ completeness, `RECENT` freshness ($< 24$ hours), and `PASSED` validation for `PUBLISHABLE`.
+- **Fail-Closed Conditions**:
+  - In `/api/forecast`: Requires approved tariff and publishable quality for live publication. Never defaults live solver metadata to PASSED or RECENT when missing. Missing quality or model provenance results in suppression with `DATA_GAP` or `QUALITY_UNKNOWN`.
+  - In `grid-intelligence/page.tsx`: For live sites, dynamically derives peak windows and min/max prices from returned 96 blocks. Resolves approved tariffs; displays `CONFIGURATION REQUIRED` if tariff/config is missing. Never defaults live validation/freshness or hardcodes MSEDCL tariff provenance.
+  - In `/api/reports/generate`: Grid reports fail closed. Requires an applicable persisted forecast run, exactly 96 unique blocks 1–96, publishable quality evidence (`PUBLISHABLE` or `PUBLISHABLE_WITH_WARNING`), `RECENT` freshness, and `PASSED` validation. Missing or blocked quality returns HTTP 422 `REPORT_NOT_PUBLISHABLE` or `DATA_GAP`.
 - **Provenance**: Displays active model version, discom tariff order reference, and execution timestamp in `ProvenanceFooter`.
-- **Reports**: `GRID_FORECAST_REPORT` (96-block CSV export via `/api/reports/generate`).
-- **Alerts**: Dispatches `PEAK_DEMAND_WARNING` when predicted demand exceeds 90% sanctioned contract demand.
-- **Demo Behavior**: Loads deterministic 96-block Maharashtra profile flagged with `DEMO DATA / UNVERIFIED`.
-- **Live Behavior**: Strictly derived from persisted 15-minute AMR meter telemetry in `interval_data_96`.
-- **Tests**: `services/analytics/tests/test_analytics.py` (`test_grid_forecast_96_blocks`), `tests/integration/adversarial_api.test.ts` (Test 1, 20, 34), `tests/e2e/demo_smoke.spec.ts` (Test 3, 4).
+- **Reports**: `GRID_FORECAST_REPORT` / `GRID_DAILY_BRIEF` (Generated via `/api/reports/generate` with strict 96-block and quality gate checks).
+- **Alerts**: Manual acknowledgment verified local. Automated `PEAK_DEMAND_WARNING` dispatch is `NOT_IMPLEMENTED` in V1.
+- **Demo Behavior**: Loads deterministic 96-block profile explicitly flagged with `DEMO DATA / UNVERIFIED`.
+- **Live Behavior**: Strictly derived from persisted 15-minute AMR meter telemetry in `interval_data_96` and server-authoritative forecast runs.
+- **Tests**: `services/analytics/tests/test_analytics.py` (`test_grid_forecast_96_blocks`), `tests/integration/adversarial_api.test.ts` (Test 1, 4, 5, 20), `tests/e2e/demo_smoke.spec.ts` (Test 3, 4), `tests/e2e/real_auth_workflows.spec.ts` (Test 3), `tests/e2e/persistence_journey.spec.ts`.
 - **External Requirements**: Live IEX DAM price clearing feed connector and state-specific weather forecasting calibration.
 - **Known Limitations**: Day-ahead forecast uses baseline model until 30 days of AMR load history are accumulated.

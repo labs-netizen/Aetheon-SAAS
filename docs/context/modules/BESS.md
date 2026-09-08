@@ -4,17 +4,17 @@
 - **Authoritative UI**: `src/app/bess/page.tsx`
 - **Authoritative API**: `src/app/api/bess/route.ts`
 - **Auth/Entitlement**: Requires valid session, `has_site_access(siteId)`, and `BESS_ARBITRAGE` entitlement.
-- **Reads**: `bess_assets` (capacity_kwh, max_c_rate, charge_efficiency, degradation_cost_per_cycle_inr), day-ahead discom tariffs.
-- **Writes**: `bess_signal_runs` (service-role write).
+- **Reads**: `bess_assets` (capacity_kwh, max_power_kw, roundtrip_efficiency, min_soc_percent, max_soc_percent, is_active), `interval_data_96` (for latest telemetry / initial SOC), `grid_forecast_blocks` (for authoritative 96-block day-ahead tariff curve).
+- **Writes**: `bess_signal_runs` (service-role write with solver inputs, recommended 96-block charge/discharge schedule, and net arbitrage economics).
 - **RPCs**: `has_site_access` (authorization check).
-- **External Service**: Python FastAPI microservice (`POST /bess/optimize`).
-- **Quality Gate**: Demands valid physical battery parameters and non-stale telemetry ($< 15$ minutes).
-- **Fail-Closed Conditions**: Backend returns `is_suppressed: true` with `suppression_reason: 'SAFETY_INTERLOCK'` if battery SOC $< 10\%$ or $> 90\%$, if maintenance lock is set, or if telemetry is stale.
-- **Provenance**: Displays cell chemistry, cycle count, degradation cost rate, and optimization solver version.
-- **Reports**: `BESS_ARBITRAGE_REPORT` (CSV export of recommended 96-block power schedule and net daily arbitrage profit).
-- **Alerts**: Dispatches `BESS_SAFETY_LOCKOUT` if thermal threshold or critical SOC boundaries are breached.
-- **Demo Behavior**: Allows simulated SOC slider inputs; clearly watermarked with `DEMO DATA / UNVERIFIED`.
-- **Live Behavior**: Strictly server-authoritative; queries configured `bess_assets` and rejects fabricated client SOC.
-- **Tests**: `services/analytics/tests/test_analytics.py` (`test_bess_advisory_physical_feasibility`), `tests/integration/adversarial_api.test.ts` (Test 7), `tests/e2e/demo_smoke.spec.ts` (Test 11).
-- **External Requirements**: Electrochemical engineer signoff on battery degradation cost curve (₹/cycle) and live BMS Modbus connector.
-- **Known Limitations**: Outputs are strictly advisory operating recommendations; no direct SCADA inverter actuation in V1.
+- **External Service**: Python FastAPI microservice (`POST /analytics/bess/schedule`).
+- **Quality Gate**: Requires active `bess_assets` record, valid non-stale interval telemetry, and published 96-block price curve. Rejects client-fabricated prices or missing price curve.
+- **Fail-Closed Conditions**: Returns 422 with `is_suppressed: true` and `suppression_reason: 'CONFIGURATION_REQUIRED'` if no active BESS asset is configured, or `'DATA_GAP'` if telemetry/price curve is absent or if initial SOC is out of bounds (< min_soc_percent or > max_soc_percent).
+- **Provenance**: Records `solver_version: 'aetheon-bess-v1.0'`, battery asset constraints (`capacity_kwh`, `max_power_kw`, `roundtrip_efficiency`), and optimization objective.
+- **Reports**: `BESS_PERFORMANCE_REPORT` (Generated via `POST /api/reports/generate` from persisted `bess_signal_runs` and `bess_assets` schema).
+- **Alerts**: Manual acknowledgement/retrieval verified local (`alerts` table); automated `BESS_SAFETY_LOCKOUT` dispatch is `NOT_IMPLEMENTED` in V1.
+- **Demo Behavior**: Interactive simulation mode with client sliders for initial SOC and test price curves, clearly badged `DEMO DATA / UNVERIFIED`.
+- **Live Behavior**: Strictly server-authoritative; pulls persisted `bess_assets`, reads telemetry from `interval_data_96`, fetches forecast prices from `grid_forecast_blocks`, persists to `bess_signal_runs`.
+- **Tests**: `tests/integration/adversarial_api.test.ts` (Test 7: negative SOC validation; Test 22: live BESS solver execution, run persistence, and `BESS_PERFORMANCE_REPORT` generation), `services/analytics/tests/test_analytics.py` (`test_bess_advisory_physical_feasibility`), `tests/e2e/demo_smoke.spec.ts` (Test 11), `tests/e2e/real_auth_workflows.spec.ts` (Test 8).
+- **External Requirements**: Specialist electrochemical signoff on degradation modeling and hardware BMS telemetry integration.
+- **Known Limitations**: Recommendations are purely advisory operational signals; no automated direct SCADA inverter actuation.

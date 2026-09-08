@@ -5,16 +5,19 @@
 - **Authoritative API**: `src/app/api/dsm/route.ts`
 - **Auth/Entitlement**: Requires valid session, `has_site_access(siteId)`, and `DSM_RISK` entitlement.
 - **Reads**: `interval_data_96` (scheduled vs actual drawal), `sites.contract_demand_value`.
-- **Writes**: `dsm_incidents` (service-role write with unique window index `idx_dsm_incidents_unique_window`).
-- **RPCs**: `acknowledge_dsm_incident_atomic(incident_id, site_id, user_id, role, org_id)` (atomic update + audit log).
-- **External Service**: Python FastAPI microservice (`POST /dsm`).
-- **Quality Gate**: Demands 96 valid numeric interval blocks. Missing or null values trigger `BLOCKED_MISSING_INPUT`.
-- **Fail-Closed Conditions**: If scheduled or actual drawal contains missing/null/non-finite values, returns HTTP 200 with `is_suppressed: true`, `suppression_reason: 'MISSING_DATA'`, and zeroed penalty INR.
+- **Writes**: `dsm_evaluation_runs` (persists evaluation stamp even with zero incidents), `dsm_incidents` (service-role write with unique window index `idx_dsm_incidents_unique_window`).
+- **RPCs**: `acknowledge_dsm_incident_atomic(incident_id, site_id, user_id, role, org_id)` (Migration 13 atomic update + audit log).
+- **External Service**: Python FastAPI microservice (`POST /analytics/dsm/evaluate`).
+- **Quality Gate**: Demands 96 valid numeric interval blocks. Missing, null, or non-numeric values trigger fail-closed suppression.
+- **Fail-Closed Conditions**:
+  - Missing data: returns `is_suppressed: true`, `suppression_reason: 'MISSING_DATA'`, and zeroed penalty.
+  - Live monetary exposure: live solver technical deviation bands are evaluated, but monetary exposure is suppressed to 0 with `monetary_exposure_status: 'REGULATORY_CONFIGURATION_REQUIRED'` until approved regulatory fee schedule parameters are configured in production. Demo rates are never surfaced as authoritative live monetary liability.
+- **Evaluation-Run Proof**: Every evaluation stamps `dsm_evaluation_runs`. `DSM_MONTHLY_REVIEW` reports use this record to distinguish valid run with zero incidents (`NO_MATERIAL_INCIDENTS`) from no calculation occurred (`REPORT_DATA_GAP`).
 - **Provenance**: Displays CERC/SERC DSM 2nd Amendment regulatory reference.
-- **Reports**: `DSM_INCIDENT_SUMMARY` (CSV export of incident windows, excess kWh, and estimated exposure).
-- **Alerts**: Dispatches `DSM_HIGH_RISK_DEVIATION` when deviation exceeds 12% in continuous process operations. Respects quiet hours (22:00–06:00 IST).
-- **Demo Behavior**: Interactive 96-block sliders and simulation controls; incident acknowledgment mutates local state only after HTTP 200.
-- **Live Behavior**: Strictly loads persisted 96-block schedules and actual AMR meter draws from `interval_data_96`.
-- **Tests**: `services/analytics/tests/test_analytics.py` (`test_dsm_deviation_calculation`), `tests/integration/adversarial_api.test.ts` (Test 6, 29, 30), `tests/e2e/demo_smoke.spec.ts` (Test 12).
+- **Reports**: `DSM_INCIDENT_SUMMARY`, `DSM_MONTHLY_REVIEW` (Generated via `POST /api/reports/generate`).
+- **Alerts**: Manual incident acknowledgment verified local via `acknowledge_dsm_incident_atomic`. Automated dispatch is `NOT_IMPLEMENTED` in V1.
+- **Demo Behavior**: Interactive 96-block sliders and simulation controls; clearly marked `DEMO DATA / UNVERIFIED`.
+- **Live Behavior**: Strictly loads persisted 96-block schedules and actual AMR meter draws from `interval_data_96`; records `dsm_evaluation_runs`.
+- **Tests**: `services/analytics/tests/test_analytics.py` (`test_dsm_deviation_calculation`), `tests/integration/adversarial_api.test.ts` (Test 6, 23, 29, 30), `tests/e2e/demo_smoke.spec.ts` (Test 12), `tests/e2e/real_auth_workflows.spec.ts` (Test 9).
 - **External Requirements**: Live SLDC frequency feed and state-specific deviation pricing multiplier tables.
-- **Known Limitations**: Penalty calculations are advisory estimates based on published grid frequency bands.
+- **Known Limitations**: Penalty calculations are advisory estimates based on published grid frequency bands; monetary calculation suppressed until regulatory rates approved.

@@ -15,6 +15,6 @@
 - **Alerts**: Dispatches `COMPLIANCE_DEADLINE_WARNING` 7 days and 24 hours prior to statutory OA filing dates.
 - **Demo Behavior**: Interactive view of Maharashtra and Gujarat open access tariffs and sample filing schedule.
 - **Live Behavior**: Strictly bound to active site state, DISCOM, voltage class, and dynamic `compliance_obligations`.
-- **Tests**: `tests/unit/tariffs.test.ts`, `tests/integration/adversarial_api.test.ts` (Test 18, 33), `tests/e2e/demo_smoke.spec.ts` (Test 10).
+- **Tests**: `tests/unit/tariffs.test.ts`, `tests/integration/adversarial_api.test.ts` (Test 13, 14), `tests/e2e/demo_smoke.spec.ts` (Test 10), `tests/e2e/real_auth_workflows.spec.ts` (Test 7).
 - **External Requirements**: Legal & regulatory specialist review of state-specific Open Access surcharge algorithms.
 - **Known Limitations**: Information provided is regulatory decision support, not certified legal counsel.

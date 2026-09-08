@@ -108,6 +108,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (rpcResult?.status === 'QUARANTINED' || rpcResult?.quarantined === true) {
+      recordProcessedWebhook(effectiveEventId);
+      return NextResponse.json(
+        {
+          error: 'UNMAPPED_BILLING_REFERENCE',
+          received: true,
+          status: 'quarantined',
+          message: rpcResult.message || 'Webhook quarantined due to unknown provider reference.',
+          rpcResult,
+        },
+        { status: 422 }
+      );
+    }
+
     recordProcessedWebhook(effectiveEventId);
 
     return NextResponse.json({ received: true, status: 'processed', rpcResult }, { status: 200 });

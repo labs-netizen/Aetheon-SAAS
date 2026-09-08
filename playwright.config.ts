@@ -41,14 +41,25 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'non-demo',
+      testIgnore: /demo_smoke\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'demo',
+      testMatch: /demo_smoke\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
   ],
   webServer: {
     command: 'npm run start',
     url: 'http://localhost:3000',
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 60 * 1000,
+    env: {
+      ...process.env,
+      NEXT_PUBLIC_DEMO_MODE: process.env.NEXT_PUBLIC_DEMO_MODE || 'false',
+      DEMO_MODE: process.env.NEXT_PUBLIC_DEMO_MODE || process.env.DEMO_MODE || 'false',
+    },
   },
 });

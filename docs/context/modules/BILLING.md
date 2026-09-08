@@ -1,20 +1,29 @@
 # MODULE: Product Catalogue & Razorpay Billing
 
-- **Status**: `PRODUCTION_CONFIG_REQUIRED` (Logic Verified Locally).
+- **Status**: `PRODUCTION_CONFIG_REQUIRED` (Schema and webhook state machine verified locally; merchant keys required for production).
 - **Authoritative UI**: `src/app/settings/page.tsx` (Billing & Plan Selection).
 - **Authoritative API**: `src/app/api/billing/checkout/route.ts`, `src/app/api/billing/cancel/route.ts`, `src/app/api/webhooks/razorpay/route.ts`.
-- **Auth/Entitlement**: Checkout & Cancel require `ORGANISATION_ADMIN` role. Webhook is unauthenticated and verified via HMAC-SHA256.
-- **Reads**: `products`, `subscriptions`, `subscription_items`, `billing_checkout_sessions`.
-- **Writes**: `subscriptions`, `subscription_items`, `invoices`, `billing_checkout_sessions`, `audit_logs`.
-- **RPCs**: `has_org_role` for checkout access control.
-- **External Service**: Razorpay payment gateway API (segregated modes: `MOCK_DEVELOPMENT`, `RAZORPAY_TEST`, `RAZORPAY_LIVE`).
-- **Quality Gate**: Commercial price integrity: all amounts stored as integer paise (₹19,900 = 1,990,000 paise).
-- **Fail-Closed Conditions**: Checkout requires existing organisation binding. Webhook rejects invalid HMAC signatures (400) and quarantines unmapped provider reference notes without granting entitlements.
+- **Auth/Entitlement**: Checkout & Cancel require `ORGANISATION_ADMIN` role. Webhook endpoint is verified via HMAC-SHA256 signature using `RAZORPAY_WEBHOOK_SECRET`.
+- **Reads**: `products`, `subscriptions`, `subscription_items`, `billing_checkout_sessions`, `billing_customers`.
+- **Writes**: `subscriptions`, `subscription_items`, `entitlements`, `invoices`, `billing_checkout_sessions`, `processed_webhook_events`, `audit_logs`.
+- **RPCs**: `process_razorpay_webhook_atomic` (Migration 14 atomic processing of payment events and durable quarantine).
+- **External Service**: Razorpay payment gateway API (`PRODUCTION_CONFIG_REQUIRED`).
+- **Canonical Reference Model (Item 8)**:
+  - Subscriptions schema uses `billing_provider_ref` (corrected from non-existent `provider_subscription_id`).
+  - Proved first-payment flow for a brand-new organisation without any prior subscription: checkout session $\to$ webhook `payment.captured` / `order.paid` $\to$ creates new `subscriptions` row with `billing_provider_ref` $\to$ creates `subscription_items` $\to$ grants `entitlements` $\to$ records `invoices`.
+- **Durable Quarantine Model (Item 9)**:
+  - Unmapped or unknown provider references insert a durable event into `processed_webhook_events` with `status: 'QUARANTINED'`.
+  - RPC completes without `RAISE EXCEPTION` rollback, returning HTTP 422 `UNMAPPED_BILLING_REFERENCE`.
+  - Grants NO subscription or entitlement while preserving the durable quarantine record for operational auditing.
+- **Fail-Closed Conditions**:
+  - Invalid webhook HMAC signature returns HTTP 400.
+  - Replay events detected via `processed_webhook_events` return HTTP 200 idempotently.
+  - Non-existent checkout session or unmapped reference quarantines without granting access.
 - **Provenance**: Records billing transaction IDs, invoice references, and role-authorized cancellations in `audit_logs`.
-- **Reports**: Tax invoice downloads.
-- **Alerts**: Dispatches `SUBSCRIPTION_PAYMENT_FAILED` on failed recurring charges.
+- **Reports**: Invoices view and download.
+- **Alerts**: Alerts hub records state; automated dispatch is `NOT_IMPLEMENTED` in V1.
 - **Demo Behavior**: Full plan builder with simulated checkout in `MOCK_DEVELOPMENT` mode.
-- **Live Behavior**: Unique index `idx_subscription_items_unique` on `(subscription_id, product_id, site_id)` prevents duplicate entitlement rows. Supports `FAILED` status in invoices and checkout sessions.
-- **Tests**: `tests/unit/currency.test.ts`, `tests/unit/entitlements.test.ts`, `tests/integration/adversarial_api.test.ts` (Test 9, 10, 16), `tests/integration/security_isolation.test.ts`.
+- **Live Behavior**: Real database mutations in `subscriptions`, `entitlements`, and `invoices` via atomic RPC.
+- **Tests**: `tests/unit/currency.test.ts`, `tests/unit/entitlements.test.ts`, `tests/integration/adversarial_api.test.ts` (Test 9, 10, 16, 18 [first-payment brand-new org], 19 [durable quarantine]), `tests/integration/security_isolation.test.ts`.
 - **External Requirements**: Live Razorpay merchant KYC, live API keys, and production webhook secret in vault.
 - **Known Limitations**: Offline bank transfers (NEFT/RTGS) require manual administrative provisioning.

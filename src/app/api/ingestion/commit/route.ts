@@ -107,13 +107,13 @@ export async function POST(req: NextRequest) {
 
     const rowsToIngest = parseResult.parsedData;
 
-    // 4. Server-Side 96-Block Contiguity Validation
+    // 4. Server-Side 96-Block Contiguity Validation (Exact 96 blocks required)
     const contiguity = validate96BlockContiguity(rowsToIngest);
-    if (!contiguity.isContiguous || rowsToIngest.length < 96) {
+    if (!contiguity.isContiguous || rowsToIngest.length !== 96) {
       return NextResponse.json(
         {
           error: 'NON_CONTIGUOUS_BLOCKS',
-          message: 'The submitted file does not form a complete 1-96 contiguous block set.',
+          message: 'The submitted file does not form a complete 1-96 contiguous block set (exactly 96 blocks required).',
           missingBlocksByDate: contiguity.missingBlocksByDate,
           receivedBlocks: rowsToIngest.length,
         },
@@ -209,7 +209,7 @@ export async function POST(req: NextRequest) {
       totalBlocks: formattedRows.length,
       serverChecksum,
       freshnessStatus,
-      publicationGateStatus: rpcResult?.publication_gate_status || 'BLOCKED_INCOMPLETE',
+      publicationGateStatus: rpcResult?.publication_gate_status || 'BLOCKED_MISSING_INPUT',
     });
   } catch (err) {
     console.error('Ingestion commit error:', err);

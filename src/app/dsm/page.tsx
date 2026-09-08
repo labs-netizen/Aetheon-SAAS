@@ -89,7 +89,7 @@ export default function DSMPage() {
     return () => {
       isMounted = false;
     };
-  }, [currentSite?.id]);
+  }, [currentSite?.id, currentSite?.is_demo, currentSite?.contract_demand_value]);
 
   // Use backend incidents if available, or fallback ONLY in demo mode
   const incidents = useMemo(() => {
