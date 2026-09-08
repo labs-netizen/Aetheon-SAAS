@@ -266,7 +266,13 @@ export default function DSMPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Badge variant="success">Rule Engine: CERC_DSM_2024</Badge>
+            {dsmData?.rule_version ? (
+              <Badge variant="success">Rule Engine: {dsmData.rule_version}</Badge>
+            ) : dsmData?.rule_status === 'REGULATORY_CONFIGURATION_REQUIRED' || !currentSite?.is_demo ? (
+              <Badge variant="warning">REGULATORY CONFIGURATION REQUIRED</Badge>
+            ) : (
+              <Badge variant="success">Rule Engine: CERC_DSM_2024</Badge>
+            )}
           </div>
         </div>
 
@@ -461,8 +467,8 @@ export default function DSMPage() {
           freshnessStatus="RECENT"
           validationStatus="PASSED"
           completenessPct={100}
-          modelVersion="DSM_ALGORITHM_v1.0"
-          tariffVersion="CERC_DSM_2024"
+          modelVersion={dsmData?.model_version || (currentSite?.is_demo ? "DSM_ALGORITHM_v1.0" : "DSM_INTERNAL_VALIDATION_v1.0")}
+          tariffVersion={dsmData?.rule_version || (currentSite?.is_demo ? "CERC_DSM_2024_DEMO" : "REGULATORY CONFIGURATION REQUIRED")}
         />
       </div>
     </ModuleGate>

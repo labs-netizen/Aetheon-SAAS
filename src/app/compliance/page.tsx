@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/Button';
 import { useSite } from '@/components/layout/SiteContext';
 import { ProvenanceFooter } from '@/components/shared/ProvenanceFooter';
 import { ModuleGate } from '@/components/shared/ModuleGate';
+import { PRODUCTS } from '@/lib/constants';
 
 export default function CompliancePage() {
   const { currentSite, isEntitled } = useSite();
@@ -150,7 +151,7 @@ export default function CompliancePage() {
                 <ShieldCheck className="w-5 h-5 text-sky-400" />
                 Open Access Compliance Sentinel
               </h1>
-              <Badge variant="warning">INTERNAL_VALIDATION</Badge>
+              <Badge variant="warning">{PRODUCTS.OA_COMPLIANCE.availabilityStatus}</Badge>
               {complianceData?.hasApprovedData && (
                 <Badge variant="success">APPROVED RECORDS LOADED</Badge>
               )}

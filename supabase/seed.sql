@@ -6,11 +6,11 @@
 INSERT INTO products (id, name, description, base_price_paise, billing_interval, availability_status)
 VALUES
 ('GRID_INTELLIGENCE', 'Grid Intelligence Monitor', '96-block price/demand forecast, Daily Grid Brief, and peak cost avoidance.', 1990000, 'MONTHLY', 'INTERNAL_VALIDATION'),
-('OA_COMPLIANCE', 'Open Access Compliance Sentinel', 'Statutory compliance tracking, DISCOM charge calculation (CSS/AS), and SLDC calendar.', 1490000, 'MONTHLY', 'DEMO'),
-('DSM_RISK', 'DSM Risk Monitor', 'Continuous 15-minute deviation tracking and regulatory exposure calculation under CERC rules.', 2990000, 'MONTHLY', 'DEMO'),
-('BESS_ARBITRAGE', 'BESS Arbitrage Signals', 'Advisory charge/discharge opportunity window recommendations for C&I batteries.', 4990000, 'MONTHLY', 'DEMO'),
+('OA_COMPLIANCE', 'Open Access Compliance Sentinel', 'Statutory compliance tracking, DISCOM charge calculation (CSS/AS), and SLDC calendar.', 1490000, 'MONTHLY', 'SPECIALIST_REVIEW_REQUIRED'),
+('DSM_RISK', 'DSM Risk Monitor', 'Continuous 15-minute deviation tracking and regulatory exposure calculation under CERC rules.', 2990000, 'MONTHLY', 'INTERNAL_VALIDATION'),
+('BESS_ARBITRAGE', 'BESS Arbitrage Signals', 'Advisory charge/discharge opportunity window recommendations for C&I batteries.', 4990000, 'MONTHLY', 'SPECIALIST_REVIEW_REQUIRED'),
 ('RENEWABLE_PORTFOLIO', 'Renewable Portfolio Monitor', 'Generation reconciliation (measured/modelled/estimated) and carbon avoidance ledger.', 2490000, 'MONTHLY', 'DEMO')
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET availability_status = EXCLUDED.availability_status;
 
 -- 2. Notification Templates
 INSERT INTO notification_templates (id, title_template, body_template)
@@ -219,10 +219,59 @@ VALUES (
     'kVA',
     '33kV Main Incomer 1',
     'Continuous Heavy Forge',
-    'AWAITING_DATA',
-    'Awaiting initial 15-minute AMR load upload',
+    'CALIBRATING',
+    'Calibration in progress. 6/7 valid days accumulated.',
     false
-) ON CONFLICT (id) DO NOTHING;
+) ON CONFLICT (id) DO UPDATE SET
+    activation_status = EXCLUDED.activation_status,
+    activation_reason = EXCLUDED.activation_reason;
+
+-- 6 historical days of 96-block interval data and quality evaluations for non-demo site calibration
+INSERT INTO site_activation_history (
+    site_id, previous_status, new_status, reason, changed_by, created_at
+)
+VALUES (
+    'b0000000-0000-0000-0000-000000000010',
+    'AWAITING_DATA',
+    'CALIBRATING',
+    'Commenced baseline calibration with first 96-block meter upload.',
+    NULL,
+    now() - interval '6 days'
+);
+
+INSERT INTO data_quality_evaluations (
+    site_id, evaluation_date, completeness_pct, missing_blocks_count, freshness_status, validation_status, publication_gate_status, evaluated_at
+)
+SELECT 
+    'b0000000-0000-0000-0000-000000000010',
+    (CURRENT_DATE - (d || ' days')::interval)::date,
+    100.0,
+    0,
+    'RECENT',
+    'PASSED',
+    'PUBLISHABLE',
+    now() - (d || ' days')::interval
+FROM generate_series(1, 6) AS d
+ON CONFLICT (site_id, evaluation_date) DO UPDATE SET
+    completeness_pct = EXCLUDED.completeness_pct,
+    publication_gate_status = EXCLUDED.publication_gate_status;
+
+INSERT INTO interval_data_96 (
+    site_id, operating_date, block_index, timestamp_utc, load_kw, actual_drawal_kw, scheduled_drawal_kw, generation_solar_kw, data_quality
+)
+SELECT
+    'b0000000-0000-0000-0000-000000000010',
+    (CURRENT_DATE - (d || ' days')::interval)::date,
+    b,
+    ((CURRENT_DATE - (d || ' days')::interval)::date + (b - 1) * INTERVAL '15 minutes') AT TIME ZONE 'Asia/Kolkata',
+    2400.0 + sin(b) * 150.0,
+    2420.0,
+    2400.0,
+    120.0,
+    'PASSED'
+FROM generate_series(1, 6) AS d
+CROSS JOIN generate_series(1, 96) AS b
+ON CONFLICT (site_id, operating_date, block_index) DO NOTHING;
 
 INSERT INTO user_profiles (id, full_name, email, phone, is_platform_admin, mfa_enabled)
 VALUES

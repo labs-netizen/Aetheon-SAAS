@@ -43,7 +43,7 @@ export default function DashboardPage() {
             <h1 className="text-xl font-bold tracking-tight text-slate-100">
               {currentSite.name}
             </h1>
-            <Badge variant={isMonitoringActive ? 'success' : 'warning'}>
+            <Badge data-testid="site-status" variant={isMonitoringActive ? 'success' : 'warning'}>
               {currentSite.activation_status}
             </Badge>
           </div>

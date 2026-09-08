@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
               total_deviation_kwh: 0,
               estimated_penalty_inr: 0,
               high_risk_blocks_count: 0,
-              quality_status: 'BLOCKED_MISSING_DATA',
+              quality_status: 'BLOCKED_MISSING_INPUT',
             },
             blocks: [],
             incidents: [],
@@ -255,36 +255,46 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. DSM Rule Approval Gate & Exposure Authority
-    let ruleVersion = 'UNKNOWN';
-    let ruleStatus = 'UNKNOWN';
-    let ruleEffectiveDate = null;
+    let ruleVersion: string | null = null;
+    let ruleStatus = 'REGULATORY_CONFIGURATION_REQUIRED';
+    let ruleEffectiveDate: string | null = null;
     
     if (!isDemo) {
       // In live customer mode, check approved regulatory rule effective on operatingDate
-      const { data: rule } = await adminClient
+      const { data: rule, error: ruleErr } = await adminClient
         .from('regulatory_sources')
-        .select('version, status, effective_date')
-        .eq('jurisdiction', 'CERC')
-        .eq('category', 'DSM')
-        .eq('status', 'APPROVED')
+        .select('version, status, effective_date, expiry_date')
+        .eq('regulatory_domain', 'DSM')
+        .in('status', ['APPROVED', 'PUBLISHED'])
         .lte('effective_date', operatingDate)
+        .or(`expiry_date.is.null,expiry_date.gte.${operatingDate}`)
         .order('effective_date', { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (ruleErr) {
+        console.error('[DSM] Regulatory rule resolution error:', ruleErr);
+      }
       
-      ruleVersion = rule ? rule.version : 'NO_APPROVED_RULE';
-      ruleStatus = rule ? rule.status : 'REGULATORY_CONFIGURATION_REQUIRED';
-      ruleEffectiveDate = rule ? rule.effective_date : null;
+      if (rule && (rule.status === 'APPROVED' || rule.status === 'PUBLISHED')) {
+        ruleVersion = rule.version;
+        ruleStatus = rule.status;
+        ruleEffectiveDate = rule.effective_date;
+      } else {
+        ruleVersion = null;
+        ruleStatus = 'REGULATORY_CONFIGURATION_REQUIRED';
+        ruleEffectiveDate = null;
+      }
+      const hasApprovedRule = Boolean(ruleVersion);
       
       calculationResult.rule_version = ruleVersion;
       calculationResult.rule_status = ruleStatus;
       calculationResult.rule_effective_date = ruleEffectiveDate;
-      calculationResult.product_status = 'SPECIALIST_REVIEW_REQUIRED';
+      calculationResult.product_status = 'INTERNAL_VALIDATION';
 
-      // Item 7: Live monetary exposure must not become authoritative merely because approved regulatory_sources row exists.
-      // Option B: Continue technical deviation/risk calculation, suppress live monetary exposure,
-      // and label SPECIALIST_REVIEW_REQUIRED / REGULATORY_CONFIGURATION_REQUIRED.
-      const exposureStatus = ruleStatus === 'APPROVED'
+      // Live monetary exposure must not become authoritative without an approved rule.
+      // Technical DSM deviation continues, monetary exposure remains suppressed.
+      const exposureStatus = hasApprovedRule
         ? 'SPECIALIST_REVIEW_REQUIRED'
         : 'REGULATORY_CONFIGURATION_REQUIRED';
 
@@ -355,9 +365,9 @@ export async function POST(req: NextRequest) {
             calculation_timestamp: new Date().toISOString(),
             input_completeness: 100.0,
             validation_status: 'PASSED',
-            rule_version: calculationResult.rule_version || 'CERC_DSM_2024',
-            rule_status: calculationResult.rule_status || 'APPROVED',
-            model_version: calculationResult.model_version || 'DSM_SOLVER_v1.0',
+            rule_version: calculationResult.rule_version || null,
+            rule_status: calculationResult.rule_status || 'REGULATORY_CONFIGURATION_REQUIRED',
+            model_version: isDemo ? (calculationResult.model_version || 'DSM_SOLVER_v1.0') : 'DSM_INTERNAL_VALIDATION_v1.0',
             result_status: runResultStatus,
           },
           { onConflict: 'site_id,operating_date' }

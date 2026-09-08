@@ -1,35 +1,63 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { recordAuditEvent } from '@/lib/audit';
 
 export async function POST(request: Request) {
   try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // The `setAll` method was called from a Server Component.
-            }
-          },
-        },
-      }
-    );
+    let user: any = null;
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
+    // Check for Authorization header Bearer token first (for API and integration test clients)
+    const authHeader = request.headers.get('authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const tokenClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { auth: { persistSession: false, autoRefreshToken: false } }
+      );
+      const { data: authData } = await tokenClient.auth.getUser(token);
+      if (authData?.user) {
+        user = authData.user;
+      }
+    }
+
+    // Fallback to cookie-based session for browser clients
+    if (!user) {
+      try {
+        const cookieStore = await cookies();
+        const supabase = createServerClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          {
+            cookies: {
+              getAll() {
+                return cookieStore.getAll();
+              },
+              setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+                try {
+                  cookiesToSet.forEach(({ name, value, options }) =>
+                    cookieStore.set(name, value, options)
+                  );
+                } catch {
+                  // The `setAll` method was called from a Server Component.
+                }
+              },
+            },
+          }
+        );
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user) {
+          user = authData.user;
+        }
+      } catch {
+        // No cookies available
+      }
+    }
+
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -121,28 +149,6 @@ export async function POST(request: Request) {
         granted_by: user.id,
       });
 
-    // Create default entitlements for the new organisation (GRID_INTELLIGENCE and OA_COMPLIANCE)
-    const { error: entError } = await adminClient
-      .from('entitlements')
-      .insert([
-        {
-          organisation_id: org.id,
-          product_id: 'GRID_INTELLIGENCE',
-          site_id: site.id,
-          is_active: true,
-        },
-        {
-          organisation_id: org.id,
-          product_id: 'OA_COMPLIANCE',
-          site_id: site.id,
-          is_active: true,
-        },
-      ]);
-
-    if (entError) {
-      console.warn('Initial entitlement grant warning:', entError.message);
-    }
-
     // Record audit event
     const auditRes = await recordAuditEvent(adminClient, {
       organisation_id: org.id,
@@ -161,13 +167,19 @@ export async function POST(request: Request) {
 
     if (!auditRes.success) {
       console.error('Organisation creation audit recording failure:', auditRes.error);
+      return NextResponse.json(
+        { error: 'AUDIT_RECORDING_FAILED', message: 'Organisation created but audit recording failed.' },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
       success: true,
+      organisationId: org.id,
+      siteId: site.id,
       organisation: org,
       site,
-    });
+    }, { status: 201 });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal server error' },

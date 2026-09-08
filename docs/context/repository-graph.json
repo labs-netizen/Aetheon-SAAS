@@ -54,6 +54,7 @@
     { "id": "test.adversarial", "type": "test_suite", "path": "tests/integration/adversarial_api.test.ts" },
     { "id": "test.rls", "type": "test_suite", "path": "tests/integration/supabase_rls.test.ts" },
     { "id": "test.audit", "type": "test_suite", "path": "tests/integration/audit_chaining.test.ts" },
+    { "id": "test.authority_audit", "type": "test_suite", "path": "tests/integration/authority_and_auditability.test.ts" },
     { "id": "test.persistence", "type": "test_suite", "path": "tests/e2e/persistence_journey.spec.ts" },
     { "id": "test.demo_smoke", "type": "test_suite", "path": "tests/e2e/demo_smoke.spec.ts" }
   ],

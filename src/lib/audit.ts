@@ -34,9 +34,6 @@ export async function recordAuditEvent(
         actor_id: params.actor_id || null,
         actor_role: params.actor_role || 'SYSTEM',
         details: params.details || {},
-        // Backwards compatibility columns
-        event_type: params.action,
-        event_payload: params.details || {},
         ip_address: params.ip_address || null,
         user_agent: params.user_agent || null,
       });

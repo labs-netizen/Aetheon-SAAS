@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { recordAuditEvent } from '@/lib/audit';
 import crypto from 'crypto';
 
 const ALLOWED_INVITE_ROLES = [
@@ -72,18 +73,29 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Record audit log
-    await adminClient.from('audit_logs').insert({
+    const auditRes = await recordAuditEvent(adminClient, {
       actor_id: authResult.user.id,
       actor_role: authResult.role,
       organisation_id: organisationId,
-      event_type: 'INVITATION_CREATED',
-      event_payload: {
+      site_id: siteId || undefined,
+      action: 'INVITATION_CREATED',
+      entity_type: 'INVITATION',
+      entity_id: invitation.id,
+      details: {
         invitationId: invitation.id,
         recipientEmail: email,
         intendedRole: role,
         siteId: siteId || null,
       },
     });
+
+    if (!auditRes.success) {
+      console.error('Failed to record invitation audit log:', auditRes.error);
+      return NextResponse.json(
+        { error: 'AUDIT_RECORDING_FAILED', message: 'Invitation created but audit log failed.' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,

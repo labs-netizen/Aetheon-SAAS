@@ -143,7 +143,7 @@ export default function GridIntelligencePage() {
       completenessPct: currentSite?.activation_status === 'ACTIVE' ? 100.0 : (isDemo ? 95.0 : 0.0),
       totalBlocksExpected: 96,
       totalBlocksReceived: forecastBlocks.length,
-      validationStatus: forecastResult?.data_quality || (isDemo ? 'PASSED' : (hasValidForecast ? 'PASSED' : 'FAILED')),
+      validationStatus: forecastResult?.data_quality || (isDemo ? 'PASSED' : (hasValidForecast ? (forecastResult?.data_quality || 'UNKNOWN') : 'FAILED')),
       freshnessStatus: forecastResult?.freshness || (isDemo ? 'RECENT' : 'UNKNOWN'),
       modelVersion: forecastResult?.model_version || (isDemo ? 'DEMO_BASELINE_v1.0' : 'INTERNAL_VALIDATION'),
       modelGenerationTime: forecastResult?.model_generation_time || new Date().toISOString(),
@@ -218,11 +218,27 @@ export default function GridIntelligencePage() {
     }
 
     const baselineCostPaise = Math.round(totalDailyKwh * baselineTariff * 100);
-
     const scenarioKwhFromGrid = Math.max(0, totalDailyKwh - avoidedKwh);
-    const gridTariffRate = oaEnabled
-      ? (isDemo ? 5.20 : Number(forecastResult?.oa_tariff_rate_inr_per_kwh || (baselineTariff * 0.75).toFixed(2)))
-      : baselineTariff;
+
+    let gridTariffRate: number | null = baselineTariff;
+    if (oaEnabled) {
+      if (isDemo) {
+        gridTariffRate = 5.20;
+      } else if (forecastResult?.oa_tariff_rate_inr_per_kwh) {
+        gridTariffRate = Number(forecastResult.oa_tariff_rate_inr_per_kwh);
+      } else {
+        // In live mode, never guess baselineTariff * 0.75 without authoritative persisted OA tariff
+        return {
+          totalDailyKwh,
+          baselineCostPaise,
+          scenarioCostPaise: 0,
+          dailyAvoidedPaise: 0,
+          monthlyAvoidedPaise: 0,
+          landedUnitCostInr: 'CONFIGURATION REQUIRED',
+          isDataGap: true,
+        };
+      }
+    }
     const scenarioCostPaise = Math.round(scenarioKwhFromGrid * gridTariffRate * 100);
 
     const dailyAvoidedPaise = Math.max(0, baselineCostPaise - scenarioCostPaise);
@@ -477,7 +493,9 @@ export default function GridIntelligencePage() {
                       <div className="flex items-center justify-between p-3 rounded bg-slate-950 border border-slate-800">
                         <div>
                           <div className="font-semibold text-slate-200">Rooftop Solar Integration</div>
-                          <div className="text-[11px] text-slate-400">900 kWp installed PV generation</div>
+                          <div className="text-[11px] text-slate-400">
+                            {isDemo ? '900 kWp installed PV generation [DEMO]' : 'Measured solar generation from 96 intervals'}
+                          </div>
                         </div>
                         <input
                           type="checkbox"
@@ -490,7 +508,9 @@ export default function GridIntelligencePage() {
                       <div className="flex items-center justify-between p-3 rounded bg-slate-950 border border-slate-800">
                         <div>
                           <div className="font-semibold text-slate-200">BESS Peak Shaving</div>
-                          <div className="text-[11px] text-slate-400">500 kW / 1000 kWh battery storage</div>
+                          <div className="text-[11px] text-slate-400">
+                            {isDemo ? '500 kW / 1000 kWh battery storage [DEMO]' : 'NOT CONFIGURED (Asset binding required)'}
+                          </div>
                         </div>
                         <input
                           type="checkbox"
@@ -503,7 +523,9 @@ export default function GridIntelligencePage() {
                       <div className="flex items-center justify-between p-3 rounded bg-slate-950 border border-slate-800">
                         <div>
                           <div className="font-semibold text-slate-200">Landed Open Access Sourcing</div>
-                          <div className="text-[11px] text-slate-400">₹5.20 landed vs ₹7.85 utility tariff</div>
+                          <div className="text-[11px] text-slate-400">
+                            {isDemo ? '₹5.20 landed vs ₹7.85 utility tariff [DEMO]' : (forecastResult?.oa_tariff_rate_inr_per_kwh ? `₹${Number(forecastResult.oa_tariff_rate_inr_per_kwh).toFixed(2)} landed rate` : 'CONFIGURATION REQUIRED (Open Access tariff pending)')}
+                          </div>
                         </div>
                         <input
                           type="checkbox"
@@ -535,7 +557,13 @@ export default function GridIntelligencePage() {
                             {explorerCalculations.isDataGap ? 'CONFIGURATION REQUIRED' : formatPaiseToInr(explorerCalculations.baselineCostPaise * 30)}
                           </div>
                           <span className="text-[10px] text-slate-500 block mt-1">
-                            {explorerCalculations.isDataGap ? 'DATA GAP / INSUFFICIENT TELEMETRY' : '100% DISCOM sourcing @ ₹7.85/kWh'}
+                            {explorerCalculations.isDataGap
+                              ? 'DATA GAP / INSUFFICIENT TELEMETRY'
+                              : isDemo
+                              ? '100% DISCOM sourcing @ ₹7.85/kWh [DEMO]'
+                              : (forecastResult?.tariff_rate_inr_per_kwh
+                              ? `100% DISCOM sourcing @ ₹${Number(forecastResult.tariff_rate_inr_per_kwh).toFixed(2)}/kWh`
+                              : 'DISCOM Tariff: CONFIGURATION REQUIRED')}
                           </span>
                         </div>
 

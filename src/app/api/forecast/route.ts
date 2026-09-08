@@ -39,12 +39,12 @@ export async function GET(req: NextRequest) {
     let qualityEval: any = null;
     let tariff: any = null;
     if (!site.is_demo) {
+      // Authoritatively require telemetry quality evaluation for the exact requested operatingDate
       const { data: qData } = await adminClient
         .from('data_quality_evaluations')
         .select('*')
         .eq('site_id', siteId)
-        .order('evaluation_date', { ascending: false })
-        .limit(1)
+        .eq('evaluation_date', operatingDate)
         .maybeSingle();
       qualityEval = qData;
 
@@ -60,15 +60,37 @@ export async function GET(req: NextRequest) {
       const isComplete = completeness >= 95.0;
       const isValidated = qualityEval && qualityEval.validation_status === 'PASSED';
 
-      // Check persisted approved tariff configuration
-      const { data: tariffData } = await adminClient
+      // Check persisted approved tariff configuration: requires matching state, discom, exact voltage category, date applicability, and approved regulatory source
+      const { data: tariffData, error: tariffErr } = await adminClient
         .from('discom_tariffs')
-        .select('id, energy_charge_normal_inr_per_kwh, regulatory_source_id')
+        .select(`
+          id, 
+          energy_charge_normal_inr_per_kwh, 
+          regulatory_source_id,
+          state,
+          discom,
+          voltage_category,
+          effective_from,
+          effective_until,
+          regulatory_sources!inner (
+            id,
+            status,
+            version
+          )
+        `)
         .eq('state', site.state || 'Maharashtra')
         .eq('discom', site.discom || 'MSEDCL')
+        .eq('voltage_category', site.voltage_category || '33kV')
+        .lte('effective_from', operatingDate)
+        .or(`effective_until.is.null,effective_until.gte.${operatingDate}`)
+        .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
         .order('effective_from', { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (tariffErr) {
+        console.error('Error resolving authoritative tariff:', tariffErr);
+      }
       tariff = tariffData;
 
       if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated || !tariff) {
@@ -76,12 +98,13 @@ export async function GET(req: NextRequest) {
         let gateStatus = qualityEval?.publication_gate_status || 'BLOCKED_MISSING_INPUT';
 
         if (!tariff) {
-          suppressionReason = 'CONFIGURATION_REQUIRED: No approved DISCOM tariff configuration found for live site.';
+          suppressionReason = 'CONFIGURATION_REQUIRED: No approved, applicable DISCOM tariff found for site voltage category and operating date.';
           gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
         } else if (!isCalibrated) {
           suppressionReason = `CALIBRATING: Site activation status is ${site.activation_status}; active calibration baseline required.`;
         } else if (!qualityEval) {
-          suppressionReason = 'MISSING_DATA: No telemetry quality evaluation found for live customer site.';
+          suppressionReason = `QUALITY_GATE_NOT_MET: No telemetry quality evaluation found for site on operating date ${operatingDate}.`;
+          gateStatus = 'BLOCKED_MISSING_INPUT';
         } else if (!isComplete) {
           suppressionReason = `DATA_GAP: Telemetry completeness (${completeness.toFixed(1)}%) below 95.0% threshold.`;
           gateStatus = 'BLOCKED_MISSING_INPUT';
@@ -202,19 +225,25 @@ export async function GET(req: NextRequest) {
     }
 
     // 5. Persist run & blocks fail-closed
+    const liveModelVersion = forecastResult.model_version && !forecastResult.model_version.includes('DEMO')
+      ? forecastResult.model_version
+      : 'GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0';
+    const liveQualityStatus = qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN';
+    const liveFreshnessStatus = qualityEval?.freshness_status || 'UNKNOWN';
+
     const { data: run, error: runError } = await adminClient
       .from('grid_forecast_runs')
       .upsert(
         {
           site_id: siteId,
           operating_date: operatingDate,
-          model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : (forecastResult.model_version || 'INTERNAL_VALIDATION'),
+          model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : liveModelVersion,
           model_generation_time: forecastResult.model_generation_time || new Date().toISOString(),
           average_price_inr_per_mwh: Number(forecastResult.average_price_inr_per_mwh),
           peak_demand_kw: Number(forecastResult.peak_demand_kw),
           peak_demand_block: Number(forecastResult.peak_demand_block),
-          quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : (forecastResult.data_quality || qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN'),
-          freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : (forecastResult.freshness || qualityEval?.freshness_status || 'UNKNOWN'),
+          quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : liveQualityStatus,
+          freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : liveFreshnessStatus,
         },
         { onConflict: 'site_id,operating_date' }
       )
@@ -255,8 +284,11 @@ export async function GET(req: NextRequest) {
 
     forecastResult.run_id = run.id;
     forecastResult.persisted = true;
+    forecastResult.model_version = site.is_demo ? forecastResult.model_version : liveModelVersion;
+    forecastResult.data_quality = site.is_demo ? forecastResult.data_quality : liveQualityStatus;
+    forecastResult.freshness = site.is_demo ? forecastResult.freshness : liveFreshnessStatus;
     forecastResult.tariff_rate_inr_per_kwh = tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null);
-    forecastResult.tariff_version = tariff ? 'APPROVED_DISCOM_TARIFF' : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
+    forecastResult.tariff_version = tariff ? `APPROVED_DISCOM_TARIFF_${tariff.regulatory_sources?.version || 'v1.0'}` : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
     return NextResponse.json(forecastResult);
   } catch (err) {
     return NextResponse.json(
@@ -309,8 +341,7 @@ export async function POST(req: NextRequest) {
         .from('data_quality_evaluations')
         .select('*')
         .eq('site_id', siteId)
-        .order('evaluation_date', { ascending: false })
-        .limit(1)
+        .eq('evaluation_date', operatingDate)
         .maybeSingle();
       qualityEval = qData;
 
@@ -326,15 +357,37 @@ export async function POST(req: NextRequest) {
       const isComplete = completeness >= 95.0;
       const isValidated = qualityEval && qualityEval.validation_status === 'PASSED';
 
-      // Check persisted approved tariff configuration
-      const { data: tariffData } = await adminClient
+      // Check persisted approved tariff configuration: requires matching state, discom, exact voltage category, date applicability, and approved regulatory source
+      const { data: tariffData, error: tariffErr } = await adminClient
         .from('discom_tariffs')
-        .select('id, energy_charge_normal_inr_per_kwh, regulatory_source_id')
+        .select(`
+          id, 
+          energy_charge_normal_inr_per_kwh, 
+          regulatory_source_id,
+          state,
+          discom,
+          voltage_category,
+          effective_from,
+          effective_until,
+          regulatory_sources!inner (
+            id,
+            status,
+            version
+          )
+        `)
         .eq('state', site.state || 'Maharashtra')
         .eq('discom', site.discom || 'MSEDCL')
+        .eq('voltage_category', site.voltage_category || '33kV')
+        .lte('effective_from', operatingDate)
+        .or(`effective_until.is.null,effective_until.gte.${operatingDate}`)
+        .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
         .order('effective_from', { ascending: false })
         .limit(1)
         .maybeSingle();
+
+      if (tariffErr) {
+        console.error('Error resolving authoritative tariff in POST:', tariffErr);
+      }
       tariff = tariffData;
 
       if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated || !tariff) {
@@ -342,12 +395,13 @@ export async function POST(req: NextRequest) {
         let gateStatus = qualityEval?.publication_gate_status || 'BLOCKED_MISSING_INPUT';
 
         if (!tariff) {
-          suppressionReason = 'CONFIGURATION_REQUIRED: No approved DISCOM tariff configuration found for live site.';
+          suppressionReason = 'CONFIGURATION_REQUIRED: No approved, applicable DISCOM tariff found for site voltage category and operating date.';
           gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
         } else if (!isCalibrated) {
           suppressionReason = `CALIBRATING: Site activation status is ${site.activation_status}; active calibration baseline required.`;
         } else if (!qualityEval) {
-          suppressionReason = 'MISSING_DATA: No telemetry quality evaluation found for live customer site.';
+          suppressionReason = `QUALITY_GATE_NOT_MET: No telemetry quality evaluation found for site on operating date ${operatingDate}.`;
+          gateStatus = 'BLOCKED_MISSING_INPUT';
         } else if (!isComplete) {
           suppressionReason = `DATA_GAP: Telemetry completeness (${completeness.toFixed(1)}%) below 95.0% threshold.`;
           gateStatus = 'BLOCKED_MISSING_INPUT';

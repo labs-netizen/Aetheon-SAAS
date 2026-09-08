@@ -9,7 +9,7 @@
 - **RPCs**: `has_site_access`.
 - **External Service**: Supabase Storage private bucket `tenant-reports`.
 - **Fail-Closed Gate Rules (Item 5 & Item 6)**:
-  - **Grid Reports (`GRID_DAILY_BRIEF`, `GRID_FORECAST_REPORT`)**: Require applicable persisted forecast run, exactly 96 unique blocks 1–96, publishable quality evidence (`PUBLISHABLE` or `PUBLISHABLE_WITH_WARNING`), `RECENT` freshness, and `PASSED` validation. 95 blocks, missing quality, or blocked quality return HTTP 422 `REPORT_NOT_PUBLISHABLE` or `DATA_GAP`.
+  - **Grid Reports (`GRID_DAILY_BRIEF`, `GRID_MONTHLY_REPORT`)**: Require applicable persisted forecast run, exactly 96 unique blocks 1–96, publishable quality evidence (`PUBLISHABLE` or `PUBLISHABLE_WITH_WARNING`), `RECENT` freshness, and `PASSED` validation. 95 blocks, missing quality, or blocked quality return HTTP 422 `REPORT_NOT_PUBLISHABLE` or `DATA_GAP`.
   - **DSM Reports (`DSM_MONTHLY_REVIEW`)**: Queries canonical `dsm_evaluation_runs` table to distinguish valid run with zero incidents (`NO_MATERIAL_INCIDENTS`) from no calculation occurred (`REPORT_DATA_GAP`).
   - **BESS Reports (`BESS_PERFORMANCE_REPORT`)**: Generates from persisted `bess_signal_runs` and `bess_assets` schema. Suppresses safely on missing asset or telemetry.
   - **Download Route**: Rejects unauthorized access with HTTP 403; returns HTTP 404 `REPORT_FILE_UNAVAILABLE` on missing storage objects without leaking internal paths.

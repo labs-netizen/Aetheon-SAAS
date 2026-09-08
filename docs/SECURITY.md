@@ -11,7 +11,7 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (136/136 passing):
+A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (152/152 passing):
 
 ### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
 1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
@@ -23,7 +23,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 7. **Role Boundary Enforcement**: Trigger `trg_enforce_membership_role_boundary` prevents customer `ORGANISATION_ADMIN`s from assigning internal Aetheon roles (`AETHEON_ANALYST`, `AETHEON_REGULATORY_REVIEWER`).
 8. **Site-Level Access Isolation**: Function `has_site_access()` verifies that a user assigned to Site 1 receives zero rows when querying Site 2 telemetry, even if both sites belong to the same organisation.
 9. **Regulatory Visibility Gate**: Unapproved regulatory rules (`REVIEW_PENDING`, `CHANGE_DETECTED`, `EXTRACTED`, `CAPTURED`) are strictly hidden from customer sessions; only `APPROVED` and `PUBLISHED` rules are visible.
-10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`forecast_runs`, `grid_forecast_blocks`, `bess_signal_runs`, `dsm_evaluation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
+10. **Server-Only Operational Outputs**: Client attempts to directly INSERT rows into trusted operational tables (`grid_forecast_runs`, `grid_forecast_blocks`, `bess_signal_runs`, `dsm_evaluation_runs`) are rejected by RLS; writes are restricted exclusively to `service_role`.
 11. **Server-Generated Data Protection**: Customer accounts cannot forge or directly insert forecast runs.
 
 ### 2.2 Live Tamper-Evident Audit Chaining (`tests/integration/audit_chaining.test.ts` - 5/5 Passing)
@@ -33,7 +33,15 @@ A comprehensive automated security test suite has been implemented across Vitest
 4. **DELETE Immutability**: Database trigger rejects any DELETE operation on `audit_logs`.
 5. **Concurrency Safety**: Enforces `pg_advisory_xact_lock(hashtext('audit_logs_hash_chain'))` to guarantee zero chain forks under concurrent inserts.
 
-### 2.3 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 34/34 Passing)
+### 2.3 Authority & Auditability Suite (`tests/integration/authority_and_auditability.test.ts` - 16/16 Passing)
+1. **Customer Activation Bypass Blocked**: Org Admins and Energy Managers receive HTTP 400 when attempting to set `activation_status`, `activation_reason`, or `last_status_change`. Normal site electrical parameters update successfully.
+2. **Atomic Ingestion Activation History**: `commit_ingestion_transaction` transitions site state and atomically records a row in `site_activation_history` without duplicate history on unchanged status.
+3. **Canonical Audit Write Contract**: `recordAuditEvent()` emits only real schema columns (`action`, `entity_type`, `entity_id`, `details`, etc.); legacy fake columns dropped; hash chain trigger operates cleanly.
+4. **Zero Free Paid Entitlements**: New non-demo organisations start with zero active paid entitlements. Calling paid modules returns 403. Paid webhook capture activates only purchased product.
+5. **Grid Server Authority**: Quality gate evaluation matches requested `operatingDate` exactly; wrong-date quality cannot authorize forecast; authoritative tariff requires voltage match and approved regulatory source; live solver provenance emitted.
+6. **BESS Live Safety Authority**: Browser `initialSocPct` ignored; DB SOC bounded by `min_soc_pct <= current_soc_pct <= max_soc_pct`; violation triggers `SAFETY_INTERLOCK`.
+
+### 2.4 Adversarial API Test Suite (`tests/integration/adversarial_api.test.ts` - 34/34 Passing)
 1. **Unauthenticated Request Rejection**: Unauthenticated requests to `/api/forecast` return 401 Unauthorized.
 2. **Cross-Tenant Site Isolation**: Attempting to query an operational endpoint for a site belonging to a foreign organisation returns 403 Forbidden.
 3. **Site Boundary Isolation**: A user without an active `site_access` grant for a specific site is rejected with 403 Forbidden.

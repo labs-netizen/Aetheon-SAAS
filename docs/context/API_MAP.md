@@ -21,7 +21,7 @@ This map documents the core Next.js API route handlers and Python FastAPI analyt
 - **Entitlement**: `GRID_INTELLIGENCE`.
 - **Major Reads**: `sites`, `interval_data_96` (96-block meter load), `discom_tariffs` (approved status verified).
 - **Major Writes**: Service-role inserts into `grid_forecast_runs` and `grid_forecast_blocks` (canonical FK: `run_id`).
-- **Service Calls**: Python FastAPI (`POST /forecast` on port 8000 with `ANALYTICS_SERVICE_TOKEN`).
+- **Service Calls**: Python FastAPI (`POST /v1/grid/forecast` on port 8000 with `ANALYTICS_SERVICE_TOKEN`).
 - **Fail-Closed Conditions**: If telemetry is stale, site is uncalibrated (`CALIBRATING` / `AWAITING_DATA`), or approved tariff missing, returns `DATA_GAP` / `QUALITY_UNKNOWN` / `BLOCKED_MISSING_INPUT` with zeroed exposure; never defaults solver metadata to PASSED/RECENT; never falls back to `Math.sin()` in live mode.
 - **Proving Test**: `tests/integration/adversarial_api.test.ts` (Test 1, 3, 20, 34), `tests/e2e/persistence_journey.spec.ts`.
 
@@ -31,7 +31,7 @@ This map documents the core Next.js API route handlers and Python FastAPI analyt
 - **Entitlement**: `DSM_RISK`.
 - **Major Reads**: Authoritative 96-block drawal from `interval_data_96` (live mode) or validated demo arrays.
 - **Major Writes**: Service-role upserts into `dsm_incidents` (idempotent window index); writes atomic evaluation run to `dsm_evaluation_runs` even when zero material incidents are detected.
-- **Service Calls**: Python FastAPI (`POST /dsm`).
+- **Service Calls**: Python FastAPI (`POST /v1/dsm/deviation`).
 - **Fail-Closed Conditions**: Returns `is_suppressed: true` (`MISSING_DATA`) if scheduled or actual drawal contains nulls, non-finite values, or <96 blocks. Technical risk classification continues while monetary exposure is suppressed to 0 with `monetary_exposure_status: 'REGULATORY_CONFIGURATION_REQUIRED'`.
 - **Proving Test**: `tests/integration/adversarial_api.test.ts` (Test 6, 23, 29, 30).
 
@@ -41,7 +41,7 @@ This map documents the core Next.js API route handlers and Python FastAPI analyt
 - **Entitlement**: `BESS_ARBITRAGE`.
 - **Major Reads**: `bess_assets` (capacity, efficiency, degradation cost), site approved tariffs, battery telemetry.
 - **Major Writes**: Service-role inserts into `bess_signal_runs`.
-- **Service Calls**: Python FastAPI (`POST /bess/optimize`).
+- **Service Calls**: Python FastAPI (`POST /v1/bess/optimise-demo`).
 - **Fail-Closed Conditions**: Returns `SAFETY_INTERLOCK` if battery SOC is negative, $>100\%$, below minimum reserve (<10%), or maintenance lock is engaged.
 - **Proving Test**: `tests/integration/adversarial_api.test.ts` (Test 7, 22).
 
@@ -60,6 +60,7 @@ This map documents the core Next.js API route handlers and Python FastAPI analyt
 - **Entitlement**: `RENEWABLE_PORTFOLIO`.
 - **Major Reads**: `renewable_assets`, 96-block solar generation from `interval_data_96`, `emission_factors` (CEA v19).
 - **Major Writes**: None.
+- **Service Calls**: Python FastAPI (`POST /v1/renewables/reconcile`).
 - **Fail-Closed Conditions**: Live mode rejects scalar generation synthesis and demands 96-block measured intervals.
 - **Proving Test**: `tests/integration/adversarial_api.test.ts` (Test 19).
 
@@ -70,7 +71,7 @@ This map documents the core Next.js API route handlers and Python FastAPI analyt
 - **Major Reads**: Resolves underlying operational runs (`grid_forecast_runs`, `bess_signal_runs`, `dsm_evaluation_runs`, `dsm_incidents`).
 - **Major Writes**: Generates CSV, uploads to private storage bucket `tenant-reports`, records entry in `report_records`.
 - **Fail-Closed Conditions**: 
-  - `GRID_COST_SAVINGS_REPORT`: Aborts with 422 `REPORT_NOT_PUBLISHABLE` or `DATA_GAP` if forecast run missing, quality not publishable (`PUBLISHABLE` or `PUBLISHABLE_WITH_WARNING`), freshness not `RECENT`, or validation not `PASSED`.
+  - `GRID_DAILY_BRIEF` / `GRID_MONTHLY_REPORT`: Aborts with 422 `REPORT_NOT_PUBLISHABLE` or `DATA_GAP` if forecast run missing, quality not publishable (`PUBLISHABLE` or `PUBLISHABLE_WITH_WARNING`), freshness not `RECENT`, or validation not `PASSED`.
   - `BESS_PERFORMANCE_REPORT`: Aborts with 422 `NO_BESS_RUNS` if no optimization run exists for date.
   - `DSM_MONTHLY_REVIEW`: Queries `dsm_evaluation_runs`; if an evaluation run occurred but 0 incidents were flagged, generates report indicating `NO_MATERIAL_INCIDENTS`; returns 422 `REPORT_DATA_GAP` only if no evaluation runs exist.
 - **Proving Test**: `tests/integration/adversarial_api.test.ts` (Test 20, 22, 23, 32).
@@ -110,9 +111,10 @@ This map documents the core Next.js API route handlers and Python FastAPI analyt
 
 ## 2. Python FastAPI Analytics Microservice Endpoints (Port 8000)
 
-- `POST /forecast`: Computes 96-block day-ahead demand profile and baseline landed cost from 96-block meter inputs.
-- `POST /dsm`: Evaluates 96-block actual vs scheduled drawals, flags incident windows, applies frequency penalties.
-- `POST /bess/optimize`: Evaluates charge/discharge arbitrage schedule respecting battery capacity, C-rate, and degradation cost.
-- `POST /renewables/reconcile`: Reconciles measured vs modeled vs estimated generation and calculates avoided emissions using CEA factors.
+- `GET /health`: Health and readiness probe returning service status and microservice version.
+- `POST /v1/grid/forecast`: Computes 96-block day-ahead demand profile and baseline landed cost from 96-block meter inputs.
+- `POST /v1/dsm/deviation`: Evaluates 96-block actual vs scheduled drawals, flags incident windows, applies frequency penalties.
+- `POST /v1/bess/optimise-demo`: Evaluates charge/discharge arbitrage schedule respecting battery capacity, C-rate, and degradation cost.
+- `POST /v1/renewables/reconcile`: Reconciles measured vs modeled vs estimated generation and calculates avoided emissions using CEA factors.
 - **Security & Hygiene**: Requires `Authorization: Bearer <ANALYTICS_SERVICE_TOKEN>`. Fails closed if token is missing or mismatched in production, staging, and local environments. Tested in `services/analytics/tests/test_analytics.py`.
 

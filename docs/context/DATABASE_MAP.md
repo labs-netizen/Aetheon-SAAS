@@ -2,7 +2,7 @@
 
 This map documents the PostgreSQL 17.6 database schema, migration lineage, table purposes, and Security Definer RPCs.
 
-## 1. Migration Chain (14 Applied Migrations)
+## 1. Migration Chain (15 Applied Migrations)
 
 1. `20260907000001_core_tenancy.sql`: Organisations, user profiles, memberships, sites, site access.
 2. `20260907000002_catalog_subscriptions.sql`: Products, subscriptions, subscription items, invoices.
@@ -18,6 +18,7 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 12. `20260907000012_final_rls_and_pipeline_consistency.sql`: Canonical 8-arg ingestion RPC, legacy RLS purge, CEA emission factor seed, FAILED billing status, unique indexes.
 13. `20260907000013_atomic_acknowledgement_audit.sql`: Atomic alert & DSM incident acknowledgment RPCs with transactional audit logging.
 14. `20260907000014_surgical_fixes_and_dsm_runs.sql`: Creates `dsm_evaluation_runs` table, updates `commit_ingestion_transaction` with exact 96-row, single date, contiguous block 1–96, and real calendar date validation; updates `process_razorpay_webhook_atomic` to insert canonical `billing_provider_ref` and provide durable quarantine without transaction rollback.
+15. `20260907000015_authority_and_auditability.sql`: Adds `regulatory_domain` on `regulatory_sources`, fixes `products_availability_status_check` constraint, restores atomic activation history to `commit_ingestion_transaction` with deduplication on unchanged status, drops legacy `event_type`/`event_payload` columns from `audit_logs`, updates `chain_audit_log` with standard `encode(sha256(computed_payload::bytea), 'hex')`.
 
 ---
 
@@ -35,7 +36,7 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 | `subscription_items` | `id` (UUID) | `subscription_id`, `site_id` | Active product entitlements. Unique index prevents duplicate items. |
 | `invoices` | `id` (UUID) | `organisation_id`, `subscription_id` | Billing invoices with paise integer amounts. Supports `FAILED` status. |
 | `billing_checkout_sessions` | `id` (UUID) | `organisation_id`, `site_id` | Authoritative commercial binding before payment provider redirection. |
-| `processed_webhook_events` | `event_id` (Text) | None | Deduplication & durable quarantine of provider webhooks. Server-only write. |
+| `processed_webhook_events` | `id` (VARCHAR(255)) | None | Deduplication & durable quarantine of provider webhooks. Server-only write. |
 | `data_sources` | `id` (UUID) | `site_id` | Metering connection config (CSV upload, AMR, SFTP). |
 | `ingestion_runs` | `id` (UUID) | `site_id`, `data_sources(id)` | Records file metadata and SHA-256 checksums. Server-only write. |
 | `interval_data_96` | `(site_id, operating_date, block_index)` | `site_id`, `ingestion_run_id` | Core 15-minute AMR telemetry (96 blocks/day). Server-only write. |
@@ -43,7 +44,7 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 | `grid_forecast_blocks` | `(run_id, block_index)` | `grid_forecast_runs(id)` | 96-block day-ahead demand/price forecast. Canonical FK is `run_id`. Server-only write. |
 | `dsm_evaluation_runs` | `id` (UUID) | `site_id` | Persisted proof of DSM calculation execution even with 0 incidents. Server-only write. |
 | `dsm_incidents` | `id` (UUID) | `site_id` | Grouped grid frequency/deviation violations. Unique window index prevents duplicates. |
-| `bess_assets` | `id` (UUID) | `site_id` | Battery physical specifications and SOC parameters. |
+| `bess_assets` | `id` (UUID) | `site_id` | Battery physical specifications and operational SOC boundaries (`usable_capacity_kwh`, `power_rating_kw`, `min_soc_pct`, `max_soc_pct`, `current_soc_pct`). |
 | `bess_signal_runs` | `id` (UUID) | `bess_assets(id)` | Advisory charge/discharge schedule output. Server-only write. |
 | `renewable_assets` | `id` (UUID) | `site_id` | On-site solar / wind installation parameters. |
 | `emission_factors` | `id` (UUID) | None | CEA grid emission factors. Seeded with CEA v19 (0.716 tCO₂e/MWh). |

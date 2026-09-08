@@ -99,9 +99,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Record audit event
-    await recordAuditEvent(adminClient, {
+    const auditRes = await recordAuditEvent(adminClient, {
       organisation_id: membership.organisation_id,
       actor_id: user.id,
+      actor_role: membership.role || 'ORGANISATION_ADMIN',
       action: 'SUBSCRIPTION_CANCELLED',
       entity_type: 'SUBSCRIPTION',
       entity_id: sub.id,
@@ -111,6 +112,14 @@ export async function POST(request: NextRequest) {
         provider_mode: cancelResult.mode,
       },
     });
+
+    if (!auditRes.success) {
+      console.error('Failed to record subscription cancellation audit:', auditRes.error);
+      return NextResponse.json(
+        { error: 'AUDIT_RECORDING_FAILED', message: 'Subscription cancelled but audit log failed.' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,

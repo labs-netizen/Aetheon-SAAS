@@ -1170,6 +1170,13 @@ describe('Adversarial API & Server Rejection Suite', () => {
       user_id: 'c0000000-0000-0000-0000-000000000001',
     });
 
+    await adminClient.from('entitlements').insert({
+      organisation_id: orgAId,
+      site_id: uncalibratedSite.id,
+      product_id: 'GRID_INTELLIGENCE',
+      is_active: true,
+    });
+
     const req = new NextRequest(`http://localhost:3000/api/forecast?siteId=${uncalibratedSite.id}&operatingDate=2026-09-05`, {
       method: 'GET',
       headers: {

@@ -149,10 +149,12 @@ export async function POST(req: NextRequest) {
     let isInterconnectionRestricted = false;
 
     if (isLiveMode && actualAsset) {
-      // Current SOC from telemetry
-      soc = actualAsset.current_soc_pct ?? null;
+      // Current SOC strictly from trusted persisted asset telemetry
+      soc = actualAsset.current_soc_pct !== null && actualAsset.current_soc_pct !== undefined
+        ? Number(actualAsset.current_soc_pct)
+        : null;
       
-      // Maintenance lock from asset
+      // Maintenance lock strictly from persisted asset
       isMaintenance = Boolean(actualAsset.maintenance_lock);
       
       // Telemetry freshness check
@@ -163,33 +165,65 @@ export async function POST(req: NextRequest) {
         isTelemetryStale = true; // No telemetry = stale
       }
       
-      // Interconnection restriction - would come from asset config or external system
-      // For now, check if asset has interconnection constraint flag
-      isInterconnectionRestricted = Boolean(actualAsset.interconnection_restricted);
+      // Interconnection restriction is NOT implemented as a column on bess_assets
+      // Documented as NOT_IMPLEMENTED / EXTERNAL_CONFIGURATION_REQUIRED
+      isInterconnectionRestricted = false;
     } else {
       // Demo mode: use browser values (with validation)
-      soc = initialSocPct !== undefined && initialSocPct !== null ? initialSocPct : actualAsset?.current_soc_pct ?? null;
+      soc = initialSocPct !== undefined && initialSocPct !== null ? initialSocPct : (actualAsset?.current_soc_pct ?? null);
       isMaintenance = maintenanceLockActive !== undefined ? maintenanceLockActive : Boolean(actualAsset?.maintenance_lock);
       isTelemetryStale = telemetryStale ?? false;
       isInterconnectionRestricted = interconnectionRestricted ?? false;
     }
 
     // 2. Section 12: Backend Safety Interlock & Suppression Enforcement (Evaluated First)
-    if (
-      soc === null || soc === undefined || soc < 0 || soc > 100 ||
-      (initialSocPct !== undefined && initialSocPct !== null && (initialSocPct < 0 || initialSocPct > 100))
-    ) {
-      return NextResponse.json({
-        battery_id: effectiveBatteryId,
-        operating_date: operatingDate,
-        is_suppressed: true,
-        suppression_reason: 'SAFETY_INTERLOCK: State of Charge (SOC) unknown or invalid. Advisory signals hard-inhibited.',
-        gross_arbitrage_inr: 0,
-        degradation_cost_inr: 0,
-        net_opportunity_inr: 0,
-        equivalent_cycles: 0,
-        schedule_blocks: [],
-      });
+    if (!isLiveMode) {
+      if (
+        soc === null || soc === undefined || !Number.isFinite(Number(soc)) || soc < 0 || soc > 100 ||
+        (initialSocPct !== undefined && initialSocPct !== null && (initialSocPct < 0 || initialSocPct > 100))
+      ) {
+        return NextResponse.json({
+          battery_id: effectiveBatteryId,
+          operating_date: operatingDate,
+          is_suppressed: true,
+          suppression_reason: 'SAFETY_INTERLOCK: State of Charge (SOC) unknown or invalid. Advisory signals hard-inhibited.',
+          gross_arbitrage_inr: 0,
+          degradation_cost_inr: 0,
+          net_opportunity_inr: 0,
+          equivalent_cycles: 0,
+          schedule_blocks: [],
+        });
+      }
+    } else {
+      // Live mode: validate trusted persisted SOC against [minSoc, maxSoc]
+      // Completely ignore request.initialSocPct (even if -999 or malformed)
+      if (soc === null || soc === undefined || !Number.isFinite(Number(soc))) {
+        return NextResponse.json({
+          battery_id: effectiveBatteryId,
+          operating_date: operatingDate,
+          is_suppressed: true,
+          suppression_reason: 'SAFETY_INTERLOCK: State of Charge (SOC) unknown or invalid in telemetry. Advisory signals hard-inhibited.',
+          gross_arbitrage_inr: 0,
+          degradation_cost_inr: 0,
+          net_opportunity_inr: 0,
+          equivalent_cycles: 0,
+          schedule_blocks: [],
+        });
+      }
+
+      if (soc < minSoc || soc > maxSoc) {
+        return NextResponse.json({
+          battery_id: effectiveBatteryId,
+          operating_date: operatingDate,
+          is_suppressed: true,
+          suppression_reason: `SAFETY_INTERLOCK: Battery SOC (${soc}%) is outside operational limits [${minSoc}%, ${maxSoc}%]. Advisory signals hard-inhibited.`,
+          gross_arbitrage_inr: 0,
+          degradation_cost_inr: 0,
+          net_opportunity_inr: 0,
+          equivalent_cycles: 0,
+          schedule_blocks: [],
+        });
+      }
     }
 
     if (isMaintenance === true) {
@@ -311,6 +345,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const effectiveSolverVersion = isLiveMode
+      ? 'BESS_ARBITRAGE_INTERNAL_VALIDATION_v1.0'
+      : (advisoryResult.solver_version || 'BESS_ADVISORY_HEURISTIC_DEMO_v1.0');
+    advisoryResult.solver_version = effectiveSolverVersion;
+
     // 4. Persist to bess_signal_runs safely via service client if real UUID exists
     if (effectiveBatteryId && /^[0-9a-fA-F-]{36}$/.test(effectiveBatteryId)) {
       try {
@@ -325,7 +364,7 @@ export async function POST(req: NextRequest) {
             {
               battery_id: effectiveBatteryId,
               operating_date: operatingDate,
-              solver_version: advisoryResult.solver_version || 'BESS_ADVISORY_SOLVER_v1.0',
+              solver_version: effectiveSolverVersion,
               gross_arbitrage_inr: grossArbitrage,
               degradation_cost_inr: degradationCost,
               net_opportunity_inr: netOpportunity,

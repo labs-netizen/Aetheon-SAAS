@@ -12,6 +12,7 @@ This map details the automated test suites, testing targets, and exact requireme
 | **SECURITY ISOLATION** | Vitest v2.1 | Next.js API Handlers + Live DB | 1 file | 10 tests | 100% passed (10/10) |
 | **ADVERSARIAL API** | Vitest v2.1 | Next.js Handlers + Live DB + Analytics | 1 file | 24 tests | 100% passed (24/24) |
 | **BESS LIVE PATH** | Vitest v2.1 | Live DB + BESS Signal Engine | 1 file | 13 tests | 100% passed (13/13) |
+| **AUTHORITY & AUDITABILITY** | Vitest v2.1 | Next.js Handlers + Live DB + Webhook | 1 file | 16 tests | 100% passed (16/16) |
 | **PYTHON ANALYTICS** | Pytest 9.1 | Python 3.12 / FastAPI microservice | 1 file | 7 tests | 100% passed (7/7) |
 | **PLAYWRIGHT NON-DEMO** | Playwright | Chromium Headless (`:3000`) | 3 files | 12 tests | 100% passed (12/12) |
 | • `persistence_journey.spec.ts` | Playwright | Chromium + Local Supabase Auth/DB | 1 journey | 1 test | 100% passed (1/1) |
@@ -19,7 +20,7 @@ This map details the automated test suites, testing targets, and exact requireme
 | • `registration_journey.spec.ts` | Playwright | Chromium + GoTrue Registration | 1 journey | 1 test | 100% passed (1/1) |
 | **PLAYWRIGHT DEMO** | Playwright | Chromium Headless (`:3000`) | 1 file | 12 tests | 100% passed (12/12) |
 | • `demo_smoke.spec.ts` | Playwright | Explicit `NEXT_PUBLIC_DEMO_MODE=true` | 12 tests | 12 tests | 100% passed (12/12) |
-| **TOTAL VERIFIED** | | | **17 files** | **136 tests** | **100% (136/136)** |
+| **TOTAL VERIFIED** | | | **18 files** | **152 tests** | **100% (152/152)** |
 
 ---
 

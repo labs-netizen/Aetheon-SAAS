@@ -214,7 +214,7 @@ export default function BESSPage() {
                 <BatteryCharging className="w-5 h-5 text-purple-400" />
                 BESS Arbitrage Signals (Battery Energy Storage)
               </h1>
-              <Badge variant="warning">INTERNAL_VALIDATION</Badge>
+              <Badge variant="warning">{PRODUCTS.BESS_ARBITRAGE.availabilityStatus}</Badge>
               {bessData?.persisted && (
                 <Badge variant="success">DB PERSISTED RUN</Badge>
               )}
