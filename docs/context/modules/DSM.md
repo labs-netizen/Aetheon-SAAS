@@ -7,14 +7,14 @@
 - **Reads**: `interval_data_96` (scheduled vs actual drawal), `sites.contract_demand_value`.
 - **Writes**: `dsm_evaluation_runs` (persists evaluation stamp even with zero incidents), `dsm_incidents` (service-role write with unique window index `idx_dsm_incidents_unique_window`).
 - **RPCs**: `acknowledge_dsm_incident_atomic(incident_id, site_id, user_id, role, org_id)` (Migration 13 atomic update + audit log).
-- **External Service**: Python FastAPI microservice (`POST /analytics/dsm/evaluate`).
+- **External Service**: Python FastAPI microservice (`POST /v1/dsm/deviation`).
 - **Quality Gate**: Demands 96 valid numeric interval blocks. Missing, null, or non-numeric values trigger fail-closed suppression.
 - **Fail-Closed Conditions**:
   - Missing data: returns `is_suppressed: true`, `suppression_reason: 'MISSING_DATA'`, and zeroed penalty.
   - Live monetary exposure: live solver technical deviation bands are evaluated, but monetary exposure is suppressed to 0 with `monetary_exposure_status: 'REGULATORY_CONFIGURATION_REQUIRED'` until approved regulatory fee schedule parameters are configured in production. Demo rates are never surfaced as authoritative live monetary liability.
 - **Evaluation-Run Proof**: Every evaluation stamps `dsm_evaluation_runs`. `DSM_MONTHLY_REVIEW` reports use this record to distinguish valid run with zero incidents (`NO_MATERIAL_INCIDENTS`) from no calculation occurred (`REPORT_DATA_GAP`).
 - **Provenance**: Displays CERC/SERC DSM 2nd Amendment regulatory reference.
-- **Reports**: `DSM_INCIDENT_SUMMARY`, `DSM_MONTHLY_REVIEW` (Generated via `POST /api/reports/generate`).
+- **Reports**: `DSM_MONTHLY_REVIEW` (Generated via `POST /api/reports/generate`).
 - **Alerts**: Manual incident acknowledgment verified local via `acknowledge_dsm_incident_atomic`. Automated dispatch is `NOT_IMPLEMENTED` in V1.
 - **Demo Behavior**: Interactive 96-block sliders and simulation controls; clearly marked `DEMO DATA / UNVERIFIED`.
 - **Live Behavior**: Strictly loads persisted 96-block schedules and actual AMR meter draws from `interval_data_96`; records `dsm_evaluation_runs`.

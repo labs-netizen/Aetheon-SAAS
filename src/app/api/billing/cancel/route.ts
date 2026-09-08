@@ -85,38 +85,20 @@ export async function POST(request: NextRequest) {
     // Call provider cancellation
     const cancelResult = await billingProvider.cancelSubscription(sub.billing_provider_ref || sub.id);
 
-    // Update subscription in database: set cancel_at_period_end = true
-    const { error: updateError } = await adminClient
-      .from('subscriptions')
-      .update({
-        cancel_at_period_end: true,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', sub.id);
-
-    if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 500 });
-    }
-
-    // Record audit event
-    const auditRes = await recordAuditEvent(adminClient, {
-      organisation_id: membership.organisation_id,
-      actor_id: user.id,
-      actor_role: membership.role || 'ORGANISATION_ADMIN',
-      action: 'SUBSCRIPTION_CANCELLED',
-      entity_type: 'SUBSCRIPTION',
-      entity_id: sub.id,
-      details: {
-        product_id: sub.product_id,
-        cancel_at_period_end: true,
-        provider_mode: cancelResult.mode,
-      },
+    // Atomically update subscription and record audit log
+    const { data: updatedSub, error: rpcError } = await adminClient.rpc('cancel_subscription_atomic', {
+      p_subscription_id: sub.id,
+      p_org_id: membership.organisation_id,
+      p_actor_id: user.id,
+      p_actor_role: membership.role || 'ORGANISATION_ADMIN',
+      p_provider_mode: cancelResult.mode,
+      p_product_id: sub.product_id,
     });
 
-    if (!auditRes.success) {
-      console.error('Failed to record subscription cancellation audit:', auditRes.error);
+    if (rpcError || !updatedSub) {
+      console.error('Failed to atomically cancel subscription and record audit:', rpcError);
       return NextResponse.json(
-        { error: 'AUDIT_RECORDING_FAILED', message: 'Subscription cancelled but audit log failed.' },
+        { error: 'DATABASE_ERROR', message: rpcError?.message || 'Failed to cancel subscription.' },
         { status: 500 }
       );
     }

@@ -114,6 +114,27 @@ describe('Authority & Auditability Integration Suite', () => {
       expect(data.success).toBe(true);
       expect(data.site.contract_demand_value).toBe(3250.0);
     });
+
+    it('denies authenticated Org Admin direct Supabase update of activation_status and leaves DB value unchanged', async () => {
+      const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        global: { headers: { Authorization: `Bearer ${nonDemoUserToken}` } },
+        auth: { persistSession: false },
+      });
+
+      const { data: beforeSite } = await adminClient.from('sites').select('activation_status').eq('id', nonDemoSiteId).single();
+      const currentStatus = beforeSite.activation_status;
+
+      const { data: updateData } = await userClient
+        .from('sites')
+        .update({ activation_status: 'ACTIVE' })
+        .eq('id', nonDemoSiteId)
+        .select();
+
+      expect(updateData).toHaveLength(0);
+
+      const { data: afterSite } = await adminClient.from('sites').select('activation_status').eq('id', nonDemoSiteId).single();
+      expect(afterSite.activation_status).toBe(currentStatus);
+    });
   });
 
   // =========================================================================
@@ -495,8 +516,31 @@ describe('Authority & Auditability Integration Suite', () => {
     });
 
     it('proves live forecast persists non-demo internal validation model provenance', async () => {
-      // Request forecast for a valid date
-      const validDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().substring(0, 10);
+      const validDate = '2026-09-07';
+
+      // 1. Construct valid ACTIVE non-demo site prerequisites
+      await adminClient.from('sites').update({
+        activation_status: 'ACTIVE',
+        state: 'Maharashtra',
+        discom: 'MSEDCL',
+        voltage_category: '33kV',
+        contract_demand_value: 3200,
+      }).eq('id', nonDemoSiteId);
+
+      // 2. Seed authoritative quality evaluation for the exact operating date
+      await adminClient.from('data_quality_evaluations').upsert({
+        site_id: nonDemoSiteId,
+        evaluation_date: validDate,
+        completeness_pct: 100.0,
+        validation_status: 'PASSED',
+        freshness_status: 'RECENT',
+        publication_gate_status: 'PUBLISHABLE',
+      }, { onConflict: 'site_id,evaluation_date' });
+
+      // 3. Clean any existing run for clean execution
+      await adminClient.from('grid_forecast_runs').delete().eq('site_id', nonDemoSiteId).eq('operating_date', validDate);
+
+      // 4. Request forecast with browser seed (which must be ignored for non-demo live mode)
       const req = new NextRequest('http://localhost:3000/api/forecast', {
         method: 'POST',
         headers: {
@@ -506,29 +550,34 @@ describe('Authority & Auditability Integration Suite', () => {
         body: JSON.stringify({
           siteId: nonDemoSiteId,
           operatingDate: validDate,
-          contractDemandKw: 3000,
+          contractDemandKw: 3200,
+          seed: 42,
         }),
       });
 
       const res = await forecastPost(req);
+      expect(res.status).toBe(200);
       const data = await res.json();
 
-      if (!data.is_suppressed) {
-        expect(data.model_version).not.toContain('DEMO_BASELINE_v1.0');
-        expect(data.model_version).toBe('GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0');
+      // Assert forecast actually executed and was not suppressed
+      expect(Boolean(data.is_suppressed)).toBe(false);
+      expect(data.persisted).toBe(true);
+      expect(data.model_version).toBe('GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0');
+      expect(data.data_quality).toBe('PUBLISHABLE');
+      expect(data.freshness).toBe('RECENT');
 
-        // Check persisted run in database
-        const { data: run } = await adminClient
-          .from('grid_forecast_runs')
-          .select('model_version')
-          .eq('site_id', nonDemoSiteId)
-          .eq('operating_date', validDate)
-          .single();
+      // Assert persisted DB provenance in grid_forecast_runs
+      const { data: run, error: runErr } = await adminClient
+        .from('grid_forecast_runs')
+        .select('model_version, quality_status, freshness_status')
+        .eq('site_id', nonDemoSiteId)
+        .eq('operating_date', validDate)
+        .single();
 
-        if (run) {
-          expect(run.model_version).not.toContain('DEMO_BASELINE_v1.0');
-        }
-      }
+      expect(runErr).toBeNull();
+      expect(run!.model_version).toBe('GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0');
+      expect(run!.quality_status).toBe('PUBLISHABLE');
+      expect(run!.freshness_status).toBe('RECENT');
     });
 
     it('proves wrong voltage, expired, future, and unapproved tariffs are blocked', async () => {

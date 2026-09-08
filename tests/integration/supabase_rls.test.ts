@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { NextRequest } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { PATCH as sitePatch } from '@/app/api/sites/[id]/route';
 
 describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
   let SUPABASE_URL: string;
@@ -395,5 +397,139 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
 
     // RLS policy requires service-role/admin; customer insert must be denied
     expect(error).not.toBeNull();
+  });
+
+  it('12. Direct Site Update Bypass: Authenticated Org Admin direct Supabase update is denied, DB value unchanged, and /api/sites/[id] normal config update succeeds', async () => {
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    // 1. Direct Supabase update attempt on activation_status
+    const { data: updateData } = await clientB
+      .from('sites')
+      .update({ activation_status: 'ACTIVE' })
+      .eq('id', siteB2Id)
+      .select();
+
+    // Denied under RLS: 0 rows returned
+    expect(updateData).toHaveLength(0);
+
+    // Verify DB value remains unchanged
+    const { data: dbSite } = await adminClient.from('sites').select('activation_status').eq('id', siteB2Id).single();
+    expect(dbSite!.activation_status).toBe('AWAITING_DATA');
+
+    // 2. Normal site config update via /api/sites/[id] continues to work with server authority
+    const req = new NextRequest(`http://localhost:3000/api/sites/${siteB1Id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${userBToken}`,
+      },
+      body: JSON.stringify({
+        contract_demand_value: 3500.0,
+      }),
+    });
+
+    const res = await sitePatch(req, { params: { id: siteB1Id } });
+    expect(res.status).toBe(200);
+    const resData = await res.json();
+    expect(resData.success).toBe(true);
+    expect(resData.site.contract_demand_value).toBe(3500.0);
+  });
+
+  it('13. Direct Interval Insert Bypass: Authenticated customer direct INSERT to interval_data_96 is denied, canonical ingestion RPC succeeds', async () => {
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    // 1. Direct customer INSERT to interval_data_96 must be denied by RLS
+    const { error: insertErr } = await clientB.from('interval_data_96').insert({
+      site_id: siteB1Id,
+      operating_date: '2026-09-02',
+      block_index: 2,
+      timestamp_utc: '2026-09-02T00:15:00Z',
+      load_kw: 1100,
+      actual_drawal_kw: 1100,
+      scheduled_drawal_kw: 1100,
+      data_quality: 'PASSED',
+    });
+    expect(insertErr).not.toBeNull();
+
+    // 2. Canonical ingestion RPC via service role succeeds
+    const rows96: any[] = [];
+    for (let b = 1; b <= 96; b++) {
+      rows96.push({
+        block_index: b,
+        operating_date: '2026-09-02',
+        load_kw: 500.0,
+        solar_generation_kw: 0.0,
+        actual_drawal_kw: 500.0,
+        scheduled_drawal_kw: 500.0,
+      });
+    }
+
+    const { data: rpcRes, error: rpcErr } = await adminClient.rpc('commit_ingestion_transaction', {
+      p_site_id: siteB1Id,
+      p_filename: 'ingestion_canonical_test.csv',
+      p_checksum_sha256: 'sha256_canonical_' + Date.now(),
+      p_uploaded_by: userBId,
+      p_rows: rows96,
+      p_freshness_status: 'RECENT',
+      p_actor_role: 'ORGANISATION_ADMIN',
+      p_org_id: orgBId,
+    });
+    expect(rpcErr).toBeNull();
+    expect(rpcRes.success).toBe(true);
+  });
+
+  it('14. BESS Trusted State: Authenticated customer cannot directly alter BESS state fields, but retains permitted SELECT', async () => {
+    const clientB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${userBToken}` } },
+      auth: { persistSession: false },
+    });
+
+    // Create BESS asset for siteB1Id via service role adminClient
+    const { data: bessAsset, error: bessErr } = await adminClient.from('bess_assets').insert({
+      site_id: siteB1Id,
+      name: 'Org B Hardened Battery',
+      usable_capacity_kwh: 1000,
+      power_rating_kw: 250,
+      current_soc_pct: 50.0,
+      min_soc_pct: 10.0,
+      max_soc_pct: 90.0,
+      maintenance_lock: false,
+      last_telemetry_at: new Date().toISOString(),
+    }).select().single();
+    expect(bessErr).toBeNull();
+
+    // 1. Direct alter attempt on current_soc_pct
+    const { data: d1 } = await clientB.from('bess_assets').update({ current_soc_pct: 99.0 }).eq('id', bessAsset!.id).select();
+    expect(d1).toHaveLength(0);
+
+    // 2. Direct alter attempt on maintenance_lock
+    const { data: d2 } = await clientB.from('bess_assets').update({ maintenance_lock: true }).eq('id', bessAsset!.id).select();
+    expect(d2).toHaveLength(0);
+
+    // 3. Direct alter attempt on last_telemetry_at
+    const { data: d3 } = await clientB.from('bess_assets').update({ last_telemetry_at: '2020-01-01T00:00:00Z' }).eq('id', bessAsset!.id).select();
+    expect(d3).toHaveLength(0);
+
+    // 4. Direct alter attempt on min_soc_pct / max_soc_pct
+    const { data: d4 } = await clientB.from('bess_assets').update({ min_soc_pct: 5.0, max_soc_pct: 95.0 }).eq('id', bessAsset!.id).select();
+    expect(d4).toHaveLength(0);
+
+    // 5. Verify DB state remains unchanged
+    const { data: freshBess } = await adminClient.from('bess_assets').select('*').eq('id', bessAsset!.id).single();
+    expect(freshBess!.current_soc_pct).toBe(50.0);
+    expect(freshBess!.maintenance_lock).toBe(false);
+    expect(freshBess!.min_soc_pct).toBe(10.0);
+    expect(freshBess!.max_soc_pct).toBe(90.0);
+
+    // 6. Verify permitted customer SELECT works
+    const { data: customerBess, error: selectErr } = await clientB.from('bess_assets').select('*').eq('id', bessAsset!.id).single();
+    expect(selectErr).toBeNull();
+    expect(customerBess!.id).toBe(bessAsset!.id);
   });
 });

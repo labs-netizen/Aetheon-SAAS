@@ -11,7 +11,7 @@
 - **Quality Gate**: Regulatory resolver strictly requires approval status (`APPROVED` or `PUBLISHED`) and exact voltage level match.
 - **Fail-Closed Conditions**: Unapproved tariff orders (`REVIEW_PENDING`, `DRAFT`, `EXTRACTED`) are strictly filtered from customer view. Missing voltage-matched tariff returns `DATA GAP`.
 - **Provenance**: Displays regulatory authority (e.g. MERC, GERC), order number, publication date, and non-legal advice disclaimer.
-- **Reports**: `COMPLIANCE_AUDIT_DOSSIER` (regulatory obligations, filing deadlines, and approved surcharges).
+- **Reports**: `COMPLIANCE_AUDIT` (regulatory obligations, filing deadlines, and approved surcharges).
 - **Alerts**: Dispatches `COMPLIANCE_DEADLINE_WARNING` 7 days and 24 hours prior to statutory OA filing dates.
 - **Demo Behavior**: Interactive view of Maharashtra and Gujarat open access tariffs and sample filing schedule.
 - **Live Behavior**: Strictly bound to active site state, DISCOM, voltage class, and dynamic `compliance_obligations`.

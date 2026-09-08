@@ -6,13 +6,14 @@ This map details the automated test suites, testing targets, and exact requireme
 
 | Category | Framework | Execution Engine | Test Files | Total Tests | Status |
 |---|---|---|---|---|---|
-| **UNIT (Core Logic & Parsers)** | Vitest v2.1 | Node.js (in-memory) | 7 files | 42 tests | 100% passed (42/42) |
-| **DATABASE / RLS** | Vitest v2.1 | Live Docker PostgreSQL 17 (`:15432`) | 1 file | 11 tests | 100% passed (11/11) |
+| **UNIT (Core Logic & Parsers)** | Vitest v2.1 | Node.js (in-memory) | 7 files | 34 tests | 100% passed (34/34) |
+| **DATABASE / RLS** | Vitest v2.1 | Live Docker PostgreSQL 17 (`:15432`) | 1 file | 14 tests | 100% passed (14/14) |
 | **AUDIT CHAINING** | Vitest v2.1 | Live Docker PostgreSQL 17 (`:15432`) | 1 file | 5 tests | 100% passed (5/5) |
 | **SECURITY ISOLATION** | Vitest v2.1 | Next.js API Handlers + Live DB | 1 file | 10 tests | 100% passed (10/10) |
-| **ADVERSARIAL API** | Vitest v2.1 | Next.js Handlers + Live DB + Analytics | 1 file | 24 tests | 100% passed (24/24) |
-| **BESS LIVE PATH** | Vitest v2.1 | Live DB + BESS Signal Engine | 1 file | 13 tests | 100% passed (13/13) |
-| **AUTHORITY & AUDITABILITY** | Vitest v2.1 | Next.js Handlers + Live DB + Webhook | 1 file | 16 tests | 100% passed (16/16) |
+| **ADVERSARIAL API** | Vitest v2.1 | Next.js Handlers + Live DB + Analytics | 1 file | 29 tests | 100% passed (29/29) |
+| **SURGICAL FIXES & BESS** | Vitest v2.1 | Live DB + BESS Signal Engine | 1 file | 16 tests | 100% passed (16/16) |
+| **AUTHORITY & AUDITABILITY** | Vitest v2.1 | Next.js Handlers + Live DB + Webhook | 1 file | 17 tests | 100% passed (17/17) |
+| **AUDIT & ONBOARDING TRUTH** | Vitest v2.1 | Next.js Handlers + Live DB + RPCs | 1 file | 11 tests | 100% passed (11/11) |
 | **PYTHON ANALYTICS** | Pytest 9.1 | Python 3.12 / FastAPI microservice | 1 file | 7 tests | 100% passed (7/7) |
 | **PLAYWRIGHT NON-DEMO** | Playwright | Chromium Headless (`:3000`) | 3 files | 12 tests | 100% passed (12/12) |
 | • `persistence_journey.spec.ts` | Playwright | Chromium + Local Supabase Auth/DB | 1 journey | 1 test | 100% passed (1/1) |
@@ -20,7 +21,7 @@ This map details the automated test suites, testing targets, and exact requireme
 | • `registration_journey.spec.ts` | Playwright | Chromium + GoTrue Registration | 1 journey | 1 test | 100% passed (1/1) |
 | **PLAYWRIGHT DEMO** | Playwright | Chromium Headless (`:3000`) | 1 file | 12 tests | 100% passed (12/12) |
 | • `demo_smoke.spec.ts` | Playwright | Explicit `NEXT_PUBLIC_DEMO_MODE=true` | 12 tests | 12 tests | 100% passed (12/12) |
-| **TOTAL VERIFIED** | | | **18 files** | **152 tests** | **100% (152/152)** |
+| **TOTAL VERIFIED** | | | **19 files** | **167 tests** | **100% (167/167)** |
 
 ---
 
@@ -93,7 +94,7 @@ This map details the automated test suites, testing targets, and exact requireme
 
 ### 14. Product Readiness Reconciliation (Item 14)
 - **Requirement**: Grid Intelligence = `INTERNAL_VALIDATION`, DSM Risk = `INTERNAL_VALIDATION`, OA Compliance = `SPECIALIST_REVIEW_REQUIRED`, BESS Arbitrage = `SPECIALIST_REVIEW_REQUIRED`, Renewable Portfolio = `DEMO`, Billing = `PRODUCTION_CONFIG_REQUIRED`.
-- **Proving Test**: `src/lib/constants/products.ts`, `tests/integration/adversarial_api.test.ts`.
+- **Proving Test**: `src/lib/constants/index.ts`, `tests/integration/adversarial_api.test.ts`.
 - **Target**: Product catalog constants and context documentation.
 
 ### 15. BESS Live Database & Report Path (Item 16)

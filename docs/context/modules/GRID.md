@@ -7,14 +7,14 @@
 - **Reads**: `sites`, `interval_data_96` (96-block meter load), `discom_tariffs`.
 - **Writes**: `grid_forecast_runs`, `grid_forecast_blocks` (canonical FK: `run_id`). Client writes blocked by RLS.
 - **RPCs**: `has_site_access` (authorization check).
-- **External Service**: Python FastAPI microservice (`POST /analytics/forecast` on port 8000).
+- **External Service**: Python FastAPI microservice (`POST /v1/grid/forecast` on port 8000).
 - **Quality Gate**: Evaluates `QualityGate.evaluateTelemetry()` on interval data. Requires $\ge 95.0\%$ completeness, `RECENT` freshness ($< 24$ hours), and `PASSED` validation for `PUBLISHABLE`.
 - **Fail-Closed Conditions**:
   - In `/api/forecast`: Requires approved tariff and publishable quality for live publication. Never defaults live solver metadata to PASSED or RECENT when missing. Missing quality or model provenance results in suppression with `DATA_GAP` or `QUALITY_UNKNOWN`.
   - In `grid-intelligence/page.tsx`: For live sites, dynamically derives peak windows and min/max prices from returned 96 blocks. Resolves approved tariffs; displays `CONFIGURATION REQUIRED` if tariff/config is missing. Never defaults live validation/freshness or hardcodes MSEDCL tariff provenance.
   - In `/api/reports/generate`: Grid reports fail closed. Requires an applicable persisted forecast run, exactly 96 unique blocks 1–96, publishable quality evidence (`PUBLISHABLE` or `PUBLISHABLE_WITH_WARNING`), `RECENT` freshness, and `PASSED` validation. Missing or blocked quality returns HTTP 422 `REPORT_NOT_PUBLISHABLE` or `DATA_GAP`.
 - **Provenance**: Displays active model version, discom tariff order reference, and execution timestamp in `ProvenanceFooter`.
-- **Reports**: `GRID_FORECAST_REPORT` / `GRID_DAILY_BRIEF` (Generated via `/api/reports/generate` with strict 96-block and quality gate checks).
+- **Reports**: `GRID_DAILY_BRIEF` / `GRID_MONTHLY_REPORT` (Generated via `/api/reports/generate` with strict 96-block and quality gate checks).
 - **Alerts**: Manual acknowledgment verified local. Automated `PEAK_DEMAND_WARNING` dispatch is `NOT_IMPLEMENTED` in V1.
 - **Demo Behavior**: Loads deterministic 96-block profile explicitly flagged with `DEMO DATA / UNVERIFIED`.
 - **Live Behavior**: Strictly derived from persisted 15-minute AMR meter telemetry in `interval_data_96` and server-authoritative forecast runs.

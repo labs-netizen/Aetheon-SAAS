@@ -458,6 +458,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Call FastAPI analytics microservice
+    const effectiveSeed = site.is_demo ? seed : undefined;
     let forecastResult: any;
     try {
       forecastResult = await fetchGridForecast({
@@ -465,7 +466,7 @@ export async function POST(req: NextRequest) {
         operatingDate,
         contractDemandKw: effectiveContractDemand,
         historicalLoadKw,
-        seed,
+        seed: effectiveSeed,
       });
     } catch (apiErr) {
       return NextResponse.json(
@@ -496,6 +497,10 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Persist run and blocks safely fail-closed
+    const liveModelVersion = 'GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0';
+    const liveQualityStatus = qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN';
+    const liveFreshnessStatus = qualityEval?.freshness_status || 'UNKNOWN';
+
     try {
       const { data: run, error: runError } = await adminClient
         .from('grid_forecast_runs')
@@ -503,13 +508,13 @@ export async function POST(req: NextRequest) {
           {
             site_id: siteId,
             operating_date: operatingDate,
-            model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : (forecastResult.model_version || 'INTERNAL_VALIDATION'),
+            model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : liveModelVersion,
             model_generation_time: forecastResult.model_generation_time || new Date().toISOString(),
             average_price_inr_per_mwh: Number(forecastResult.average_price_inr_per_mwh),
             peak_demand_kw: Number(forecastResult.peak_demand_kw),
             peak_demand_block: Number(forecastResult.peak_demand_block),
-            quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : (forecastResult.data_quality || qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN'),
-            freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : (forecastResult.freshness || qualityEval?.freshness_status || 'UNKNOWN'),
+            quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : liveQualityStatus,
+            freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : liveFreshnessStatus,
           },
           { onConflict: 'site_id,operating_date' }
         )
@@ -544,8 +549,11 @@ export async function POST(req: NextRequest) {
 
       forecastResult.run_id = run.id;
       forecastResult.persisted = true;
+      forecastResult.model_version = site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : liveModelVersion;
+      forecastResult.data_quality = site.is_demo ? (forecastResult.data_quality || 'PASSED') : liveQualityStatus;
+      forecastResult.freshness = site.is_demo ? (forecastResult.freshness || 'RECENT') : liveFreshnessStatus;
       forecastResult.tariff_rate_inr_per_kwh = tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null);
-      forecastResult.tariff_version = tariff ? 'APPROVED_DISCOM_TARIFF' : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
+      forecastResult.tariff_version = tariff ? (tariff.regulatory_sources ? `APPROVED_DISCOM_TARIFF_${tariff.regulatory_sources.version || 'v1.0'}` : 'APPROVED_DISCOM_TARIFF') : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
     } catch (dbErr) {
       console.error('CRITICAL: Forecast persistence failure:', dbErr);
       return NextResponse.json(

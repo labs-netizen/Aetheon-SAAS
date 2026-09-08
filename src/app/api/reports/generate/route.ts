@@ -219,9 +219,13 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Fetch approved DSM rule version
-      let ruleVersion = dsmRuns[0]?.rule_version || 'CERC_DSM_2024';
-      let ruleStatus = dsmRuns[0]?.rule_status || 'APPROVED';
+      // Persisted DSM rule provenance - strictly no fallbacks
+      const runRuleVersion = dsmRuns[0]?.rule_version;
+      const runRuleStatus = dsmRuns[0]?.rule_status;
+
+      const ruleVersion = (runRuleVersion && runRuleVersion !== 'UNKNOWN') ? runRuleVersion : null;
+      const ruleStatus = runRuleStatus || 'REGULATORY_CONFIGURATION_REQUIRED';
+      const isRegulatoryAuthoritative = ruleStatus === 'APPROVED' && Boolean(ruleVersion);
 
       const { data: incidents } = await adminClient
         .from('dsm_incidents')
@@ -233,6 +237,9 @@ export async function POST(req: NextRequest) {
         .order('start_block', { ascending: true });
 
       if (incidents && incidents.length > 0) {
+        if (!isRegulatoryAuthoritative) {
+          csvLines.push(`# REGULATORY AUTHORITY WARNING: Missing approved regulatory rule provenance (rule_status: ${ruleStatus}, rule_version: ${ruleVersion || 'UNKNOWN'}). Monetary exposure is indicative and NOT regulatory-authoritative.`);
+        }
         csvLines.push(`operating_date,start_block,end_block,severity,max_deviation_pct,total_excess_energy_kwh,estimated_exposure_inr,root_cause_tag,acknowledged`);
         for (const inc of incidents) {
           csvLines.push(`${inc.operating_date},${inc.start_block},${inc.end_block},${inc.severity},${inc.max_deviation_pct},${inc.total_excess_energy_kwh},${inc.estimated_exposure_inr},${inc.root_cause_tag},${inc.acknowledged}`);
@@ -242,22 +249,33 @@ export async function POST(req: NextRequest) {
           criticalCount: incidents.filter((i) => i.severity === 'CRITICAL').length,
           totalExcessEnergyKwh: incidents.reduce((acc, i) => acc + Number(i.total_excess_energy_kwh || 0), 0),
           totalEstimatedExposureInr: incidents.reduce((acc, i) => acc + Number(i.estimated_exposure_inr || 0), 0),
-          ruleVersion: ruleVersion,
+          ruleVersion: ruleVersion || 'UNKNOWN',
           ruleStatus: ruleStatus,
-          note: 'Validated DSM calculation with material incidents.',
+          isRegulatoryAuthoritative: isRegulatoryAuthoritative,
+          monetaryExposureAuthoritative: isRegulatoryAuthoritative,
+          note: isRegulatoryAuthoritative
+            ? 'Validated DSM calculation with material incidents.'
+            : 'REGULATORY_CONFIGURATION_REQUIRED: Missing approved rule authority. Monetary exposure is not regulatory-authoritative.',
         };
       } else {
         // Valid calculation exists but zero incidents
+        if (!isRegulatoryAuthoritative) {
+          csvLines.push(`# REGULATORY AUTHORITY WARNING: Missing approved regulatory rule provenance (rule_status: ${ruleStatus}, rule_version: ${ruleVersion || 'UNKNOWN'}). Monetary exposure is indicative and NOT regulatory-authoritative.`);
+        }
         csvLines.push(`# DATA STATUS: Valid DSM calculation exists for period ${pStart} to ${pEnd}. No material deviation incidents recorded.`);
         csvLines.push(`operating_date,status`);
         csvLines.push(`${pStart},NO_MATERIAL_INCIDENTS`);
         summaryData = {
           totalIncidents: 0,
           totalEstimatedExposureInr: 0,
-          ruleVersion: ruleVersion,
+          ruleVersion: ruleVersion || 'UNKNOWN',
           ruleStatus: ruleStatus,
+          isRegulatoryAuthoritative: isRegulatoryAuthoritative,
+          monetaryExposureAuthoritative: isRegulatoryAuthoritative,
           status: 'NO_MATERIAL_INCIDENTS',
-          note: 'Validated DSM calculation: Zero deviations beyond allowable band.',
+          note: isRegulatoryAuthoritative
+            ? 'Validated DSM calculation: Zero deviations beyond allowable band.'
+            : 'REGULATORY_CONFIGURATION_REQUIRED: Missing approved rule authority.',
         };
       }
 

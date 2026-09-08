@@ -2,7 +2,7 @@
 
 This map documents the PostgreSQL 17.6 database schema, migration lineage, table purposes, and Security Definer RPCs.
 
-## 1. Migration Chain (15 Applied Migrations)
+## 1. Migration Chain (18 Applied Migrations)
 
 1. `20260907000001_core_tenancy.sql`: Organisations, user profiles, memberships, sites, site access.
 2. `20260907000002_catalog_subscriptions.sql`: Products, subscriptions, subscription items, invoices.
@@ -19,6 +19,9 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 13. `20260907000013_atomic_acknowledgement_audit.sql`: Atomic alert & DSM incident acknowledgment RPCs with transactional audit logging.
 14. `20260907000014_surgical_fixes_and_dsm_runs.sql`: Creates `dsm_evaluation_runs` table, updates `commit_ingestion_transaction` with exact 96-row, single date, contiguous block 1–96, and real calendar date validation; updates `process_razorpay_webhook_atomic` to insert canonical `billing_provider_ref` and provide durable quarantine without transaction rollback.
 15. `20260907000015_authority_and_auditability.sql`: Adds `regulatory_domain` on `regulatory_sources`, fixes `products_availability_status_check` constraint, restores atomic activation history to `commit_ingestion_transaction` with deduplication on unchanged status, drops legacy `event_type`/`event_payload` columns from `audit_logs`, updates `chain_audit_log` with standard `encode(sha256(computed_payload::bytea), 'hex')`.
+16. `20260907000016_db_authority_lockdown.sql`: Eliminates direct customer UPDATE bypass on `sites` and drops customer direct INSERT policy on `interval_data_96`.
+17. `20260907000017_atomic_audit_and_onboarding_truth.sql`: Atomic RPCs `update_site_config_atomic`, `create_invitation_atomic`, and `cancel_subscription_atomic` with transactional audit rollback; updates `handle_new_user()` to prevent electrical parameter fabrication.
+18. `20260907000018_atomic_org_creation_and_context_truth.sql`: Atomic RPC `create_organisation_atomic` (organisation + membership + site + audit transactional rollback); strict non-demo registration electrical parameter requirement.
 
 ---
 
@@ -98,3 +101,35 @@ This map documents the PostgreSQL 17.6 database schema, migration lineage, table
 - **Grants**: `GRANT TO anon, authenticated, service_role`.
 - **Tables Touched**: `site_access`, `sites`, `memberships`.
 - **Proving Tests**: `tests/integration/supabase_rls.test.ts` (Test 8).
+
+### `update_site_config_atomic`
+- **Purpose**: Atomically updates permitted site configuration fields (`name`, `state`, `discom`, `voltage_category`, `contract_demand_value`, `metering_point`, `load_class`) and appends a `SITE_CONFIGURATION_UPDATED` record to `audit_logs`. Rolls back all changes if audit logging fails.
+- **Security Definer**: YES (`SECURITY DEFINER`).
+- **Caller**: Server backend (`src/app/api/sites/[id]/route.ts`).
+- **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
+- **Tables Touched**: `sites`, `audit_logs`.
+- **Proving Tests**: `tests/integration/audit_and_onboarding_truth.test.ts`.
+
+### `create_invitation_atomic`
+- **Purpose**: Atomically creates an organisation invitation in `organisation_invitations` and appends an `INVITATION_CREATED` record to `audit_logs`. Rolls back on audit logging failure.
+- **Security Definer**: YES (`SECURITY DEFINER`).
+- **Caller**: Server backend (`src/app/api/invitations/send/route.ts`).
+- **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
+- **Tables Touched**: `organisation_invitations`, `audit_logs`.
+- **Proving Tests**: `tests/integration/audit_and_onboarding_truth.test.ts`.
+
+### `cancel_subscription_atomic`
+- **Purpose**: Atomically sets `cancel_at_period_end = true` on `subscriptions` and appends a `SUBSCRIPTION_CANCELLED` record to `audit_logs`. Rolls back on audit logging failure.
+- **Security Definer**: YES (`SECURITY DEFINER`).
+- **Caller**: Server backend (`src/app/api/billing/cancel/route.ts`).
+- **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
+- **Tables Touched**: `subscriptions`, `audit_logs`.
+- **Proving Tests**: `tests/integration/audit_and_onboarding_truth.test.ts`.
+
+### `create_organisation_atomic`
+- **Purpose**: Atomically creates tenant `organisations`, assigns `ORGANISATION_ADMIN` in `memberships`, creates optional configured `sites` and `site_access`, and appends an `ORGANISATION_CREATED` record to `audit_logs`. Rolls back the entire organisation and membership if audit recording fails.
+- **Security Definer**: YES (`SECURITY DEFINER`).
+- **Caller**: Server backend (`src/app/api/organisations/create/route.ts`).
+- **Grants**: `REVOKE FROM PUBLIC, anon, authenticated; GRANT TO service_role`.
+- **Tables Touched**: `organisations`, `memberships`, `sites`, `site_access`, `audit_logs`.
+- **Proving Tests**: `tests/integration/audit_and_onboarding_truth.test.ts`.

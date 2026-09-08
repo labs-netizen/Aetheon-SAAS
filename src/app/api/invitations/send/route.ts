@@ -48,51 +48,22 @@ export async function POST(req: NextRequest) {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // 3. Create invitation record
-    const { data: invitation, error: inviteErr } = await adminClient
-      .from('organisation_invitations')
-      .insert({
-        organisation_id: organisationId,
-        email: email.toLowerCase().trim(),
-        role,
-        site_id: siteId || null,
-        token,
-        invited_by: authResult.user.id,
-        status: 'PENDING',
-        expires_at: expiresAt,
-      })
-      .select()
-      .single();
-
-    if (inviteErr || !invitation) {
-      console.error('Failed to create invitation:', inviteErr);
-      return NextResponse.json(
-        { error: 'DATABASE_ERROR', message: 'Failed to record invitation.' },
-        { status: 500 }
-      );
-    }
-
-    // 4. Record audit log
-    const auditRes = await recordAuditEvent(adminClient, {
-      actor_id: authResult.user.id,
-      actor_role: authResult.role,
-      organisation_id: organisationId,
-      site_id: siteId || undefined,
-      action: 'INVITATION_CREATED',
-      entity_type: 'INVITATION',
-      entity_id: invitation.id,
-      details: {
-        invitationId: invitation.id,
-        recipientEmail: email,
-        intendedRole: role,
-        siteId: siteId || null,
-      },
+    // 3. Atomically create invitation record and audit log
+    const { data: invitation, error: rpcErr } = await adminClient.rpc('create_invitation_atomic', {
+      p_org_id: organisationId,
+      p_email: email.toLowerCase().trim(),
+      p_role: role,
+      p_site_id: siteId || null,
+      p_token: token,
+      p_expires_at: expiresAt,
+      p_invited_by: authResult.user.id,
+      p_actor_role: authResult.role,
     });
 
-    if (!auditRes.success) {
-      console.error('Failed to record invitation audit log:', auditRes.error);
+    if (rpcErr || !invitation) {
+      console.error('Failed to atomically create invitation and audit log:', rpcErr);
       return NextResponse.json(
-        { error: 'AUDIT_RECORDING_FAILED', message: 'Invitation created but audit log failed.' },
+        { error: 'DATABASE_ERROR', message: rpcErr?.message || 'Failed to record invitation.' },
         { status: 500 }
       );
     }

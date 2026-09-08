@@ -90,40 +90,18 @@ export async function PATCH(
     if (load_class !== undefined) updates.load_class = load_class;
 
     const adminClient = createAdminClient();
-    const { data: updatedSite, error: updateError } = await adminClient
-      .from('sites')
-      .update(updates)
-      .eq('id', siteId)
-      .select()
-      .single();
-
-    if (updateError || !updatedSite) {
-      console.error('Failed to update site parameters:', updateError);
-      return NextResponse.json(
-        { error: 'DATABASE_ERROR', message: 'Failed to update site configuration in database.' },
-        { status: 500 }
-      );
-    }
-
-    // Record audit log via canonical schema helper
-    const auditRes = await recordAuditEvent(adminClient, {
-      organisation_id: authResult.organisationId,
-      site_id: siteId,
-      actor_id: authResult.user.id,
-      actor_role: authResult.role,
-      action: 'SITE_CONFIGURATION_UPDATED',
-      entity_type: 'SITE',
-      entity_id: siteId,
-      details: {
-        updates,
-        site_id: siteId,
-      },
+    const { data: updatedSite, error: rpcError } = await adminClient.rpc('update_site_config_atomic', {
+      p_site_id: siteId,
+      p_updates: updates,
+      p_actor_id: authResult.user.id,
+      p_actor_role: authResult.role,
+      p_org_id: authResult.organisationId,
     });
 
-    if (!auditRes.success) {
-      console.error('Failed to record audit log for site update:', auditRes.error);
+    if (rpcError || !updatedSite) {
+      console.error('Failed to atomically update site configuration and audit:', rpcError);
       return NextResponse.json(
-        { error: 'AUDIT_RECORDING_FAILED', message: 'Site configuration updated but audit log failed.' },
+        { error: 'DATABASE_ERROR', message: rpcError?.message || 'Failed to update site configuration in database.' },
         { status: 500 }
       );
     }

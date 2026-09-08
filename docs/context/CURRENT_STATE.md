@@ -4,12 +4,12 @@
 > **Verification Baseline**: Full clean database reset, auth user seeding, linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (13 files, 121 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), and Next.js production build (`npm run build`) executed cleanly.
 
 ## 1. Verified Metrics
-- **Database Migrations**: 15 applied SQL migrations (`20260907000001` through `20260907000015_authority_and_auditability.sql`).
+- **Database Migrations**: 18 applied SQL migrations (`20260907000001` through `20260907000018_atomic_org_creation_and_context_truth.sql`).
 - **Next.js Production Build**: Succeeded (`npm run build`, exit code 0). 39 routes dynamically compiled on demand.
 - **ESLint**: 0 errors (`npm run lint`, exit code 0).
 - **TypeScript (`tsc --noEmit`)**: 0 errors (`npm run typecheck`, exit code 0).
-- **Automated Test Scorecard (152 / 152 passing)**:
-  - **Vitest**: **121 passed** (13 files, 100% pass rate) across unit, integration, live PostgreSQL RLS, audit chaining, adversarial API, BESS live path, and authority & auditability suites.
+- **Automated Test Scorecard (167 / 167 passing)**:
+  - **Vitest**: **136 passed** (14 files, 100% pass rate) across unit, integration, live PostgreSQL RLS, audit chaining, adversarial API, surgical fixes & BESS, authority & auditability, and audit & onboarding truth suites.
   - **Python Pytest**: **7 passed** (1 file: `services/analytics/tests/test_analytics.py`, 100% pass rate) with explicit `ANALYTICS_SERVICE_TOKEN`.
   - **Playwright Non-Demo (Production-like)**: **12 passed** across 3 test files (`persistence_journey.spec.ts`: 1 passed; `real_auth_workflows.spec.ts`: 10 passed; `registration_journey.spec.ts`: 1 passed).
   - **Playwright Demo Mode**: **12 passed** (1 file: `demo_smoke.spec.ts`: 12 passed with `NEXT_PUBLIC_DEMO_MODE=true`).

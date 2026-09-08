@@ -3,7 +3,6 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { recordAuditEvent } from '@/lib/audit';
 
 export async function POST(request: Request) {
   try {
@@ -62,7 +61,26 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { name, legalEntityName, gstin, siteName, state, discom, contractDemandValue } = body;
+    const {
+      name,
+      legalEntityName,
+      gstin,
+      siteName,
+      state,
+      discom,
+      contractDemandValue,
+      contract_demand_value,
+      contractDemandUnit,
+      contract_demand_unit,
+      voltageCategory,
+      voltage_category,
+      meteringPoint,
+      metering_point,
+      loadClass,
+      load_class,
+      isDemo,
+      is_demo,
+    } = body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return NextResponse.json({ error: 'Organisation name is required' }, { status: 400 });
@@ -82,103 +100,93 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'User already belongs to an active organisation' }, { status: 400 });
     }
 
-    // Create organisation
-    const { data: org, error: orgError } = await adminClient
-      .from('organisations')
-      .insert({
-        name: name.trim(),
-        legal_entity_name: legalEntityName?.trim() || name.trim(),
-        gstin: gstin?.trim() || null,
-        is_active: true,
-      })
-      .select()
-      .single();
+    // Membership and organisation creation are executed atomically inside create_organisation_atomic RPC
+    const isDemoFlag = Boolean(isDemo || is_demo);
+    const actualSiteName = siteName?.trim() || `${name.trim()} Main Facility`;
 
-    if (orgError || !org) {
-      return NextResponse.json({ error: 'Failed to create organisation: ' + (orgError?.message || 'Unknown error') }, { status: 500 });
-    }
+    let siteParams: any = null;
 
-    // Create ORGANISATION_ADMIN membership
-    const { data: membership, error: memError } = await adminClient
-      .from('memberships')
-      .insert({
-        organisation_id: org.id,
-        user_id: user.id,
-        role: 'ORGANISATION_ADMIN',
-        is_active: true,
-      })
-      .select()
-      .single();
-
-    if (memError || !membership) {
-      return NextResponse.json({ error: 'Failed to assign organisation admin membership' }, { status: 500 });
-    }
-
-    // Create default site if siteName provided or fallback
-    const actualSiteName = siteName?.trim() || `${org.name} Main Facility`;
-    const { data: site, error: siteError } = await adminClient
-      .from('sites')
-      .insert({
-        organisation_id: org.id,
+    if (isDemoFlag) {
+      // Demo fixtures may retain deterministic defaults
+      siteParams = {
         name: actualSiteName,
         state: state?.trim() || 'Maharashtra',
         discom: discom?.trim() || 'MSEDCL',
-        voltage_category: '33kV',
-        contract_demand_value: contractDemandValue ? Number(contractDemandValue) : 1000,
-        contract_demand_unit: 'kVA',
-        metering_point: 'Main Incomer Feeder',
-        load_class: 'Continuous Process Industrial',
-        timezone: 'Asia/Kolkata',
-        activation_status: 'AWAITING_DATA',
-        activation_reason: 'Newly registered facility awaiting initial AMR interval data upload',
-        is_demo: false,
-      })
-      .select()
-      .single();
+        voltage_category: voltageCategory || voltage_category || '33kV',
+        contract_demand_value: contractDemandValue ? Number(contractDemandValue) : (contract_demand_value ? Number(contract_demand_value) : 1000),
+        contract_demand_unit: contractDemandUnit || contract_demand_unit || 'kVA',
+        metering_point: meteringPoint || metering_point || 'Main Incomer Feeder',
+        load_class: loadClass || load_class || 'Continuous Process Industrial',
+        is_demo: true,
+      };
+    } else {
+      // NON-DEMO: Do NOT invent or default required electrical configuration
+      const effectiveDemand = contractDemandValue !== undefined
+        ? Number(contractDemandValue)
+        : (contract_demand_value !== undefined ? Number(contract_demand_value) : undefined);
+      const effectiveUnit = contractDemandUnit || contract_demand_unit;
+      const effectiveVoltage = voltageCategory || voltage_category;
+      const effectiveMetering = meteringPoint || metering_point;
+      const effectiveState = state?.trim();
+      const effectiveDiscom = discom?.trim();
 
-    if (siteError || !site) {
-      return NextResponse.json({ error: 'Failed to create primary site: ' + (siteError?.message || 'Unknown error') }, { status: 500 });
+      const hasCompleteElectricalConfig = Boolean(
+        effectiveDemand && effectiveDemand > 0 &&
+        effectiveUnit &&
+        effectiveVoltage &&
+        effectiveMetering &&
+        effectiveState &&
+        effectiveDiscom
+      );
+
+      if (hasCompleteElectricalConfig) {
+        siteParams = {
+          name: actualSiteName,
+          state: effectiveState,
+          discom: effectiveDiscom,
+          voltage_category: effectiveVoltage.trim(),
+          contract_demand_value: effectiveDemand,
+          contract_demand_unit: effectiveUnit.trim(),
+          metering_point: effectiveMetering.trim(),
+          load_class: loadClass || load_class || 'Continuous Process Industrial',
+          is_demo: false,
+        };
+      }
     }
 
-    // Grant site_access
-    await adminClient
-      .from('site_access')
-      .insert({
-        site_id: site.id,
-        user_id: user.id,
-        granted_by: user.id,
-      });
-
-    // Record audit event
-    const auditRes = await recordAuditEvent(adminClient, {
-      organisation_id: org.id,
-      site_id: site.id,
-      actor_id: user.id,
-      actor_role: 'ORGANISATION_ADMIN',
-      action: 'ORGANISATION_CREATED',
-      entity_type: 'ORGANISATION',
-      entity_id: org.id,
-      details: {
-        org_name: org.name,
-        site_name: site.name,
-        registered_by: user.email,
-      },
+    const { data: atomicResult, error: atomicErr } = await adminClient.rpc('create_organisation_atomic', {
+      p_user_id: user.id,
+      p_user_email: user.email,
+      p_org_name: name.trim(),
+      p_legal_entity_name: legalEntityName?.trim() || name.trim(),
+      p_gstin: gstin?.trim() || null,
+      p_site_params: siteParams,
+      p_force_audit_failure: Boolean(body.force_audit_failure || body.forceAuditFailure),
     });
 
-    if (!auditRes.success) {
-      console.error('Organisation creation audit recording failure:', auditRes.error);
+    if (atomicErr) {
+      if (atomicErr.message.includes('USER_ALREADY_HAS_ORGANISATION')) {
+        return NextResponse.json({ error: 'User already belongs to an active organisation' }, { status: 400 });
+      }
+      if (atomicErr.message.includes('FORCED_AUDIT_FAILURE_ROLLBACK')) {
+        return NextResponse.json(
+          { error: 'AUDIT_RECORDING_FAILED', message: 'Organisation creation rolled back due to audit recording failure.' },
+          { status: 500 }
+        );
+      }
       return NextResponse.json(
-        { error: 'AUDIT_RECORDING_FAILED', message: 'Organisation created but audit recording failed.' },
+        { error: 'Failed to create organisation: ' + atomicErr.message },
         { status: 500 }
       );
     }
 
     return NextResponse.json({
       success: true,
-      organisationId: org.id,
-      siteId: site.id,
-      organisation: org,
-      site,
+      organisationId: atomicResult.organisation.id,
+      siteId: atomicResult.site?.id || null,
+      organisation: atomicResult.organisation,
+      site: atomicResult.site,
+      configurationStatus: atomicResult.configurationStatus,
     }, { status: 201 });
   } catch (err) {
     return NextResponse.json(
