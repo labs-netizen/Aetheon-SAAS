@@ -79,6 +79,7 @@ export async function POST(req: NextRequest) {
     const authResult = await authorizeApiRequest(req, {
       siteId,
       productId: 'RENEWABLE_PORTFOLIO',
+      requiredRoles: ['ORGANISATION_ADMIN', 'ENERGY_MANAGER'],
     });
 
     if (!authResult.authorized) {

@@ -46,10 +46,10 @@
 
 | Test Suite | Target Engine | Test Files | Passed | Failed | Status |
 |---|---|---:|---:|---:|---|
-| **Vitest unit, integration, RLS, security, domain, and concurrency suites** | Node.js + PostgreSQL 17.6 | 21 | 257 | 0 | **PASSED** |
+| **Vitest unit, integration, RLS, security, domain, and concurrency suites** | Node.js + PostgreSQL 17.6 | 22 | 266 | 0 | **PASSED** |
 | **Python Analytics Solvers** | Python 3.12.10 / FastAPI | 1 | 7 | 0 | **PASSED** |
 | **Playwright Non-Demo Suite** | Chromium Headless | 3 | 12 | 0 | **PASSED** |
 | **Playwright Demo Smoke Suite** | Chromium Headless | 1 | 12 | 0 | **PASSED** |
-| **TOTAL AUTOMATED VERIFICATION** | | **26** | **288** | **0** | **100% PASS RATE** |
+| **TOTAL AUTOMATED VERIFICATION** | | **27** | **297** | **0** | **100% PASS RATE** |
 
-ESLint, TypeScript typecheck, the 39-route Next.js production build, context-map validation, and final database security catalog checks also passed. The database check covered the final 21-migration schema and reported zero violations for the audited RLS, `SECURITY DEFINER` search-path, execution-ACL, and table-grant invariants.
+ESLint, TypeScript typecheck, the 39-route Next.js production build, context-map validation, and final database security catalog checks also passed. The database check covered the final 22-migration schema and reported zero violations for the audited RLS, `SECURITY DEFINER` search-path, execution-ACL, and table-grant invariants.

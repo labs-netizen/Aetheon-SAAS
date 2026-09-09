@@ -90,7 +90,11 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json(), { siteId, operatingDate } = body;
     if (!siteId || !validDate(operatingDate)) return NextResponse.json({ error:'INVALID_SITE_OR_DATE' },{ status:400 });
-    const auth = await authorizeApiRequest(req,{ siteId, productId:'DSM_RISK' });
+    const auth = await authorizeApiRequest(req,{
+      siteId,
+      productId:'DSM_RISK',
+      requiredRoles:['ORGANISATION_ADMIN','ENERGY_MANAGER'],
+    });
     if (!auth.authorized) return auth.response;
     const db = createAdminClient();
     const { data: site, error } = await db.from('sites').select('id,is_demo,contract_demand_value').eq('id',siteId).single();

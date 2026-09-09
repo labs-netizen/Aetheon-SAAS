@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
 
     const rawVoltage = voltageCategory || voltage_category;
     const rawDemand = contractDemandValue !== undefined ? contractDemandValue : contract_demand_value;
+    const rawDemandUnit = contractDemandUnit || contract_demand_unit;
     const rawMetering = meteringPoint || metering_point;
 
     if (!organisationId || !name || !state || !discom) {
@@ -36,11 +37,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!rawVoltage || rawDemand === undefined || rawDemand === null || !rawMetering) {
+    if (!rawVoltage || rawDemand === undefined || rawDemand === null || !rawDemandUnit || !rawMetering) {
       return NextResponse.json(
         {
           error: 'MISSING_ELECTRICAL_FIELDS',
-          message: 'voltage category, contract demand, and metering point are mandatory electrical configuration fields.',
+          message: 'voltage category, contract demand, demand unit, and metering point are mandatory electrical configuration fields.',
         },
         { status: 400 }
       );
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
 
     const effectiveVoltage = String(rawVoltage).trim();
     const effectiveDemand = Number(rawDemand);
-    const effectiveUnit = contractDemandUnit || contract_demand_unit || 'kVA';
+    const effectiveUnit = String(rawDemandUnit).trim();
     const effectiveMetering = String(rawMetering).trim();
     const effectiveLoadClass = (loadClass || load_class || 'Industrial C&I').trim();
 

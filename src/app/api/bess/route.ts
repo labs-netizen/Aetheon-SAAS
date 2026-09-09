@@ -94,6 +94,7 @@ export async function POST(req: NextRequest) {
     const authResult = await authorizeApiRequest(req, {
       siteId,
       productId: 'BESS_ARBITRAGE',
+      requiredRoles: ['ORGANISATION_ADMIN', 'ENERGY_MANAGER'],
     });
 
     if (!authResult.authorized) {

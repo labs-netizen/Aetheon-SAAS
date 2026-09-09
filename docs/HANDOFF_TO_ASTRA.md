@@ -3,7 +3,7 @@
 > **Handoff Status**: Phase 1 Foundation, Final Authority & Auditability Pass, and End-to-End Functional SaaS V1 Verification Complete. Ready for Specialist Astra Takeover.  
 > **Engineering Tag**: `antigravity-authority-v1.4`  
 > **Date**: September 2026  
-> **Verification Status**: Real Local Supabase (PostgreSQL 17.6 + Auth + Storage + Kong) active and healthy; 257 Vitest tests (21 files), 7 Pytest tests (1 file), 12 Playwright Non-Demo tests (3 files), and 12 Playwright Demo tests (1 file) — **288 total automated tests at 100% pass rate**. Lint, typecheck, the 39-route Next.js production build, context-map validator, and final database security catalog checks passed. 21 migrations applied.
+> **Verification Status**: Real Local Supabase (PostgreSQL 17.6 + Auth + Storage + Kong) active and healthy; 266 Vitest tests (22 files), 7 Pytest tests (1 file), 12 Playwright Non-Demo tests (3 files), and 12 Playwright Demo tests (1 file) — **297 total automated tests at 100% pass rate**. Lint, typecheck, the 39-route Next.js production build, context-map validator, and final database security catalog checks passed. 22 migrations applied.
 
 ---
 
@@ -11,7 +11,7 @@
 
 Antigravity has executed the comprehensive final authority, auditability, and functional blocker corrective pass on the Aetheon platform. The application is a genuinely connected, persistent, locally functional SaaS V1 strictly aligned with [docs/PRODUCT_SPECIFICATION.md](docs/PRODUCT_SPECIFICATION.md):
 
-- **Live Local Supabase Architecture**: Running in Docker on Windows (ports mapped to 15431–15437 to bypass Hyper-V exclusions). PostgreSQL 17.6 is fully migrated with 21 migrations (`20260907000001` through `20260909000021_pass3_adversarial_boundaries.sql`) and seeded with tenant organizations, sites, site access grants, tariffs, regulatory records, CEA emission factors, and atomic transactional RPCs.
+- **Live Local Supabase Architecture**: Running in Docker on Windows (ports mapped to 15431–15437 to bypass Hyper-V exclusions). PostgreSQL 17.6 is fully migrated with 22 migrations (`20260907000001` through `20260909000022_operational_mutation_rbac.sql`) and seeded with tenant organizations, sites, site access grants, tariffs, regulatory records, CEA emission factors, and atomic transactional RPCs.
 - **Critical Privilege-Escalation Hardening & Analyst Expiry**:
   - `handle_new_user()` trigger sanitizes metadata and unconditionally creates unprivileged profiles (`is_platform_admin = false`).
   - `trg_protect_user_profile_escalation` blocks user-driven promotion to platform admin.
@@ -66,11 +66,11 @@ The local development and testing environment is configured as follows:
 
 | Test Suite | Engine | Test Files | Passed | Failed | Status |
 |---|---|---:|---:|---:|---|
-| **Vitest unit, integration, RLS, security, domain, and concurrency suites** | Node.js + PostgreSQL 17.6 | 21 | 257 | 0 | **PASSED** |
+| **Vitest unit, integration, RLS, security, domain, and concurrency suites** | Node.js + PostgreSQL 17.6 | 22 | 266 | 0 | **PASSED** |
 | **Python Analytics Solvers** | Python 3.12.10 / FastAPI | 1 | 7 | 0 | **PASSED** |
 | **Playwright Non-Demo** | Chromium Headless | 3 | 12 | 0 | **PASSED** |
 | **Playwright Demo** | Chromium Headless | 1 | 12 | 0 | **PASSED** |
-| **TOTAL AUTOMATED VERIFICATION** | | **26** | **288** | **0** | **100% PASS RATE** |
+| **TOTAL AUTOMATED VERIFICATION** | | **27** | **297** | **0** | **100% PASS RATE** |
 
 Lint, TypeScript typecheck, the 39-route Next.js production build, and context-map validation also passed. Final catalog inspection reported zero disabled RLS tables, non-SELECT audited-table policies, unpinned `SECURITY DEFINER` functions, client-executable mutating definers, or client write grants on the audited tenant tables.
 

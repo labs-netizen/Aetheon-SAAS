@@ -1,16 +1,16 @@
 # CURRENT_STATE.md — Verified Repository State
 
-> **Last Updated**: September 9, 2026 (Astra Passes 1–3 and Final Closure)
-> **Verification Baseline**: Clean database reset and auth user seeding completed before final verification. Linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (21 files, 257 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), Next.js production build (`npm run build`), and context-map validation all executed successfully.
+> **Last Updated**: September 10, 2026 (Astra Passes 1–3 and Final Acceptance Freeze)
+> **Verification Baseline**: Clean database reset and auth user seeding completed before final verification. Linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (22 files, 266 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), Next.js production build (`npm run build`), and context-map validation all executed successfully.
 
 ## 1. Verified Metrics
-- **Database Migrations**: 21 applied SQL migrations (`20260907000001` through `20260909000021_pass3_adversarial_boundaries.sql`).
+- **Database Migrations**: 22 applied SQL migrations (`20260907000001` through `20260909000022_operational_mutation_rbac.sql`).
 - **Next.js Production Build**: Succeeded (`npm run build`, exit code 0). 39 routes dynamically compiled on demand.
 - **ESLint**: 0 errors (`npm run lint`, exit code 0).
 - **TypeScript (`tsc --noEmit`)**: 0 errors (`npm run typecheck`, exit code 0).
 - **Database Security Catalog**: PASS. All nine audited tenant tables have RLS enabled; no non-SELECT policies remain on audited tables; all public `SECURITY DEFINER` functions have the fixed search path; no client execution privilege remains on mutating definers; no client table write grants remain on audited tables.
-- **Automated Test Scorecard (288 / 288 passing)**:
-  - **Vitest**: **257 passed** (21 files, 100% pass rate) across unit, integration, live PostgreSQL RLS, audit chaining, adversarial API, domain-safety, authority, and auditability suites.
+- **Automated Test Scorecard (297 / 297 passing)**:
+  - **Vitest**: **266 passed** (22 files, 100% pass rate) across unit, integration, live PostgreSQL RLS, audit chaining, adversarial API, domain-safety, authority, and auditability suites.
   - **Python Pytest**: **7 passed** (1 file: `services/analytics/tests/test_analytics.py`, 100% pass rate) with explicit `ANALYTICS_SERVICE_TOKEN`.
   - **Playwright Non-Demo (Production-like)**: **12 passed** across 3 test files (`persistence_journey.spec.ts`: 1 passed; `real_auth_workflows.spec.ts`: 10 passed; `registration_journey.spec.ts`: 1 passed).
   - **Playwright Demo Mode**: **12 passed** (1 file: `demo_smoke.spec.ts`: 12 passed with `NEXT_PUBLIC_DEMO_MODE=true`).
