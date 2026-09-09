@@ -159,7 +159,7 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
         p_email: rollbackEmail,
         p_role: 'ENERGY_MANAGER',
         p_site_id: testSiteId,
-        p_token: 'fake_tok_rollback',
+        p_token: 'rollback_token_with_at_least_32_characters',
         p_expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
         p_invited_by: orgAdminUserId,
         p_actor_role: 'ORGANISATION_ADMIN',
@@ -178,13 +178,18 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
     });
 
     it('proves forced audit failure rolls back subscription cancellation', async () => {
+      const { error: intentError } = await adminClient.rpc('prepare_subscription_cancellation', {
+        p_subscription_id: testSubscriptionId, p_org_id: testOrgId,
+        p_actor_id: orgAdminUserId, p_provider_mode: 'MOCK_DEVELOPMENT',
+      });
+      expect(intentError).toBeNull();
       // Invoke cancel_subscription_atomic with forced audit failure
       const { error: rpcErr } = await adminClient.rpc('cancel_subscription_atomic', {
         p_subscription_id: testSubscriptionId,
         p_org_id: testOrgId,
         p_actor_id: orgAdminUserId,
         p_actor_role: 'ORGANISATION_ADMIN',
-        p_provider_mode: 'MOCK',
+        p_provider_mode: 'MOCK_DEVELOPMENT',
         p_product_id: 'DSM_RISK',
         p_force_audit_failure: true,
       });
@@ -345,7 +350,7 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
         p_org_id: testOrgId,
         p_actor_id: orgAdminUserId,
         p_actor_role: 'ORGANISATION_ADMIN',
-        p_provider_mode: 'MOCK',
+        p_provider_mode: 'MOCK_DEVELOPMENT',
         p_product_id: 'DSM_RISK',
       });
       expect(err3?.message).toContain('permission denied for function cancel_subscription_atomic');
@@ -539,11 +544,11 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
   // 3. DSM REPORT RULE FALLBACK
   // =========================================================================
   describe('3. DSM Report Rule Fallback & Provenance Verification', () => {
-    it('proves DSM report reflects unapproved/missing rule authority and denies regulatory authoritativeness', async () => {
+    it('blocks legacy DSM report generation and download without verifiable input provenance', async () => {
       const operatingDate = '2026-09-03';
 
       // 1. Seed dsm_evaluation_runs with missing rule authority (REGULATORY_CONFIGURATION_REQUIRED)
-      await adminClient.from('dsm_evaluation_runs').upsert({
+      const { error: runError } = await adminClient.from('dsm_evaluation_runs').upsert({
         site_id: testSiteId,
         operating_date: operatingDate,
         input_completeness: 100.0,
@@ -553,10 +558,11 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
         model_version: 'DSM_INTERNAL_VALIDATION_v1.0',
         result_status: 'EVALUATED',
       }, { onConflict: 'site_id,operating_date' });
+      expect(runError).toBeNull();
 
       // 2. Seed 1 incident with monetary exposure
       await adminClient.from('dsm_incidents').delete().eq('site_id', testSiteId).eq('operating_date', operatingDate);
-      await adminClient.from('dsm_incidents').insert({
+      const { error: incidentError } = await adminClient.from('dsm_incidents').insert({
         site_id: testSiteId,
         operating_date: operatingDate,
         start_block: 30,
@@ -567,6 +573,7 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
         estimated_exposure_inr: 8500.0,
         root_cause_tag: 'UNSCHEDULED_PEAK',
       });
+      expect(incidentError).toBeNull();
 
       // 3. Request DSM_MONTHLY_REVIEW report
       const req = new NextRequest('http://localhost:3000/api/reports/generate', {
@@ -584,39 +591,23 @@ describe('Pass B: Audit + Onboarding Truth Integration Tests', () => {
       });
 
       const res = await reportGeneratePost(req);
-      expect(res.status).toBe(200);
-      const data = await res.json();
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({ error:'REPORT_NOT_PUBLISHABLE',reason:'REPORT_DATA_GAP' });
+      const { data: created, error: queryError } = await adminClient.from('report_records').select('id').eq('site_id',testSiteId);
+      expect(queryError).toBeNull();expect(created).toHaveLength(0);
 
-      // Assert rule authority provenance
-      expect(data.summary.ruleVersion).toBe('UNKNOWN');
-      expect(data.summary.ruleStatus).toBe('REGULATORY_CONFIGURATION_REQUIRED');
-      expect(data.summary.isRegulatoryAuthoritative).toBe(false);
-      expect(data.summary.monetaryExposureAuthoritative).toBe(false);
-
-      expect(data.summary.note).toContain('REGULATORY_CONFIGURATION_REQUIRED');
-      expect(data.summary.note).toContain('not regulatory-authoritative');
-
-      // Assert persisted DB record in report_records
-      const { data: record, error: recErr } = await adminClient
-        .from('report_records')
-        .select('*')
-        .eq('id', data.reportId)
-        .single();
-
-      expect(recErr).toBeNull();
-      expect(record.summary.ruleStatus).toBe('REGULATORY_CONFIGURATION_REQUIRED');
-      expect(record.summary.isRegulatoryAuthoritative).toBe(false);
-
-      // Assert CSV download contains regulatory authority warning
-      const downloadReq = new NextRequest(`http://localhost:3000/api/reports/${data.reportId}/download`, {
+      // A pre-existing CSV cannot bypass the same evidence check at download time.
+      const { data: legacy, error: legacyError } = await adminClient.from('report_records').insert({
+        organisation_id:testOrgId,site_id:testSiteId,module:'DSM',report_type:'DSM_MONTHLY_REVIEW',
+        period_start:operatingDate,period_end:operatingDate,title:'Legacy unverified report',model_version:'DSM_INTERNAL_VALIDATION_v1.0',
+        quality_status:'QUALITY_UNKNOWN',summary:{ csv_content:'UNVERIFIED_MONETARY_EXPOSURE,8500' }
+      }).select('id').single();
+      expect(legacyError).toBeNull();
+      const downloadReq = new NextRequest(`http://localhost:3000/api/reports/${legacy!.id}/download`, {
         headers: { Authorization: `Bearer ${orgAdminUserToken}` },
       });
-      const dlRes = await reportDownloadGet(downloadReq, { params: { id: data.reportId } });
-      expect(dlRes.status).toBe(200);
-      const csvText = await dlRes.text();
-      expect(csvText).toContain('REGULATORY AUTHORITY WARNING');
-      expect(csvText).toContain('REGULATORY_CONFIGURATION_REQUIRED');
-      expect(csvText).toContain('NOT regulatory-authoritative');
+      const dlRes = await reportDownloadGet(downloadReq, { params: { id: legacy!.id } });
+      expect(dlRes.status).toBe(422);
     });
   });
 });

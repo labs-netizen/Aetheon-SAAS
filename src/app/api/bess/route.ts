@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchBESSAdvisory } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { LIVE_BESS_BLOCK, validDate, operatingToday, finiteNumber, blocks96, validBessParameters, validBessDispatch } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function GET(req: NextRequest) {
@@ -33,7 +34,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: assetErr.message }, { status: 500 });
     }
 
-    const operatingDate = searchParams.get('operatingDate') || new Date().toISOString().substring(0, 10);
+    const operatingDate = searchParams.get('operatingDate') || operatingToday();
+    if (!validDate(operatingDate)) return NextResponse.json({ error: 'INVALID_DATE' }, { status: 400 });
+    const { data: site } = await adminClient.from('sites').select('is_demo').eq('id', siteId).single();
+    if (site?.is_demo !== true) return NextResponse.json({ siteId, asset, run: null, is_suppressed: true, suppression_reason: LIVE_BESS_BLOCK, blocks: [] });
     let run = null;
     if (asset) {
       const { data: runData } = await adminClient
@@ -42,7 +46,7 @@ export async function GET(req: NextRequest) {
         .eq('battery_id', asset.id)
         .eq('operating_date', operatingDate)
         .maybeSingle();
-      run = runData;
+      run = runData?.solver_version === 'BESS_AC_HEURISTIC_DEMO_v2.0' && !runData.is_suppressed ? runData : null;
     }
 
     return NextResponse.json({
@@ -79,7 +83,7 @@ export async function POST(req: NextRequest) {
       interconnectionRestricted,
     } = body;
 
-    if (!siteId || !operatingDate) {
+    if (!siteId || !validDate(operatingDate)) {
       return NextResponse.json(
         { error: 'Missing required BESS optimization parameters (siteId, operatingDate)' },
         { status: 400 }
@@ -134,13 +138,13 @@ export async function POST(req: NextRequest) {
     }
     
     // Server-authoritative safety parameters
-    const capKwh = isLiveMode ? (actualAsset?.usable_capacity_kwh ?? 1000.0) : (usableCapacityKwh || actualAsset?.usable_capacity_kwh || 1000.0);
-    const pRating = isLiveMode ? (actualAsset?.power_rating_kw ?? 500.0) : (powerRatingKw || actualAsset?.power_rating_kw || 500.0);
-    const minSoc = isLiveMode ? (actualAsset?.min_soc_pct ?? 10.0) : (minSocPct || actualAsset?.min_soc_pct || 10.0);
-    const maxSoc = isLiveMode ? (actualAsset?.max_soc_pct ?? 90.0) : (maxSocPct || actualAsset?.max_soc_pct || 90.0);
-    const cEff = isLiveMode ? (actualAsset?.charge_efficiency ?? 0.92) : (chargeEfficiency || actualAsset?.charge_efficiency || 0.92);
-    const dEff = isLiveMode ? (actualAsset?.discharge_efficiency ?? 0.92) : (dischargeEfficiency || actualAsset?.discharge_efficiency || 0.92);
-    const degCost = isLiveMode ? (actualAsset?.degradation_cost_per_cycle_inr ?? 1500.0) : (degradationCostPerCycleInr || actualAsset?.degradation_cost_per_cycle_inr || 1500.0);
+    const capKwh = isLiveMode ? (actualAsset?.usable_capacity_kwh ?? 1000.0) : (usableCapacityKwh ?? actualAsset?.usable_capacity_kwh ?? 1000.0);
+    const pRating = isLiveMode ? (actualAsset?.power_rating_kw ?? 500.0) : (powerRatingKw ?? actualAsset?.power_rating_kw ?? 500.0);
+    const minSoc = isLiveMode ? (actualAsset?.min_soc_pct ?? 10.0) : (minSocPct ?? actualAsset?.min_soc_pct ?? 10.0);
+    const maxSoc = isLiveMode ? (actualAsset?.max_soc_pct ?? 90.0) : (maxSocPct ?? actualAsset?.max_soc_pct ?? 90.0);
+    const cEff = isLiveMode ? (actualAsset?.charge_efficiency ?? 0.92) : (chargeEfficiency ?? actualAsset?.charge_efficiency ?? 0.92);
+    const dEff = isLiveMode ? (actualAsset?.discharge_efficiency ?? 0.92) : (dischargeEfficiency ?? actualAsset?.discharge_efficiency ?? 0.92);
+    const degCost = isLiveMode ? (actualAsset?.degradation_cost_per_cycle_inr ?? 1500.0) : (degradationCostPerCycleInr ?? actualAsset?.degradation_cost_per_cycle_inr ?? 1500.0);
 
     // Server-authoritative safety state - NEVER trust browser for live mode
     let soc: number | null = null;
@@ -160,7 +164,7 @@ export async function POST(req: NextRequest) {
       // Telemetry freshness check
       if (actualAsset.last_telemetry_at) {
         const telemetryAgeMs = Date.now() - new Date(actualAsset.last_telemetry_at).getTime();
-        isTelemetryStale = telemetryAgeMs > 30 * 60 * 1000; // > 30 minutes
+        isTelemetryStale = !Number.isFinite(telemetryAgeMs) || telemetryAgeMs < 0 || telemetryAgeMs > 30 * 60 * 1000; // > 30 minutes
       } else {
         isTelemetryStale = true; // No telemetry = stale
       }
@@ -268,6 +272,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (isLiveMode) return NextResponse.json({ battery_id: effectiveBatteryId, operating_date: operatingDate, is_suppressed: true, suppression_reason: LIVE_BESS_BLOCK, blocks: [], schedule_blocks: [], persisted: false });
+
     // Resolve prices: Load 96-block price curve from grid_forecast_blocks for the requested operatingDate
     let effectivePrices: number[] = [];
     
@@ -279,19 +285,19 @@ export async function POST(req: NextRequest) {
       // Load the grid forecast run for the SPECIFIC operatingDate
       const { data: run } = await adminClient
         .from('grid_forecast_runs')
-        .select('id')
+        .select('id, model_version')
         .eq('site_id', siteId)
         .eq('operating_date', operatingDate)
         .maybeSingle();
 
-      if (run) {
+      if (run?.model_version === 'DEMO_BASELINE_v1.0') {
         const { data: blocks } = await adminClient
           .from('grid_forecast_blocks')
           .select('block_index, forecast_price_inr_per_mwh')
           .eq('run_id', run.id)
           .order('block_index', { ascending: true });
 
-        if (blocks && blocks.length === 96) {
+        if (blocks && blocks96(blocks)) {
           const rawPrices = blocks.map((b) => b.forecast_price_inr_per_mwh);
           const allValid = rawPrices.every((p) => p !== null && p !== undefined && Number.isFinite(Number(p)));
           if (allValid) {
@@ -301,7 +307,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (effectivePrices.length !== 96) {
+    if (effectivePrices.length !== 96 || !effectivePrices.every(finiteNumber)) {
       return NextResponse.json({
         battery_id: effectiveBatteryId,
         operating_date: operatingDate,
@@ -315,43 +321,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. Call FastAPI analytics microservice with verified effectivePrices and server-authoritative safety params
-    let advisoryResult: any;
-    try {
-      advisoryResult = await fetchBESSAdvisory({
-        batteryId: effectiveBatteryId || 'e0000000-0000-0000-0000-000000000001',
-        siteId,
-        operatingDate,
-        usableCapacityKwh: capKwh,
-        powerRatingKw: pRating,
-        initialSocPct: soc,
-        minSocPct: minSoc,
-        maxSocPct: maxSoc,
-        chargeEfficiency: cEff,
-        dischargeEfficiency: dEff,
-        degradationCostPerCycleInr: degCost,
-        pricesInrPerMwh: effectivePrices,
-        maintenanceLockActive: isMaintenance,
-        telemetryStale: isTelemetryStale,
-        interconnectionRestricted: isInterconnectionRestricted,
-      });
-    } catch (apiErr) {
-      return NextResponse.json(
-        {
-          error: 'ANALYTICS_SERVICE_UNAVAILABLE',
-          details: apiErr instanceof Error ? apiErr.message : String(apiErr),
-        },
-        { status: 502 }
-      );
-    }
-
-    const effectiveSolverVersion = isLiveMode
-      ? 'BESS_ARBITRAGE_INTERNAL_VALIDATION_v1.0'
-      : (advisoryResult.solver_version || 'BESS_ADVISORY_HEURISTIC_DEMO_v1.0');
-    advisoryResult.solver_version = effectiveSolverVersion;
+    const solverParams = {
+      isDemo: true, batteryId: actualAsset?.id || 'demo-unregistered-battery', siteId, operatingDate,
+      usableCapacityKwh: capKwh, powerRatingKw: pRating, initialSocPct: soc!, minSocPct: minSoc, maxSocPct: maxSoc,
+      chargeEfficiency: cEff, dischargeEfficiency: dEff, degradationCostPerCycleInr: degCost,
+      pricesInrPerMwh: effectivePrices.map(Number), maintenanceLockActive: isMaintenance,
+      telemetryStale: isTelemetryStale, interconnectionRestricted: isInterconnectionRestricted,
+    };
+    if (!validBessParameters(solverParams)) return NextResponse.json({ is_suppressed: true, suppression_reason: 'SAFETY_INTERLOCK: Invalid battery parameters.', blocks: [] });
+    const advisoryResult: any = await fetchBESSAdvisory(solverParams);
+    if (!validBessDispatch(advisoryResult, solverParams)) return NextResponse.json({ is_suppressed: true, suppression_reason: 'UNVERIFIED_OR_INFEASIBLE_DISPATCH', blocks: [], persisted: false });
+    const effectiveSolverVersion = advisoryResult.solver_version;
 
     // 4. Persist to bess_signal_runs safely via service client if real UUID exists
-    if (effectiveBatteryId && /^[0-9a-fA-F-]{36}$/.test(effectiveBatteryId)) {
+    if (actualAsset && actualAsset.id === effectiveBatteryId) {
       try {
         const grossArbitrage = advisoryResult.gross_arbitrage_value_inr ?? advisoryResult.gross_arbitrage_inr ?? 0;
         const degradationCost = advisoryResult.estimated_degradation_cost_inr ?? advisoryResult.degradation_cost_inr ?? 0;

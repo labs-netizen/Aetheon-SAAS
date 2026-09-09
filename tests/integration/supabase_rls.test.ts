@@ -406,14 +406,14 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
     });
 
     // 1. Direct Supabase update attempt on activation_status
-    const { data: updateData } = await clientB
+    const { error: updateError } = await clientB
       .from('sites')
       .update({ activation_status: 'ACTIVE' })
       .eq('id', siteB2Id)
       .select();
 
-    // Denied under RLS: 0 rows returned
-    expect(updateData).toHaveLength(0);
+    // Denied at the table ACL before RLS evaluation.
+    expect(updateError?.code).toBe('42501');
 
     // Verify DB value remains unchanged
     const { data: dbSite } = await adminClient.from('sites').select('activation_status').eq('id', siteB2Id).single();
@@ -505,20 +505,20 @@ describe('Real PostgreSQL & Supabase RLS Integration Tests', () => {
     expect(bessErr).toBeNull();
 
     // 1. Direct alter attempt on current_soc_pct
-    const { data: d1 } = await clientB.from('bess_assets').update({ current_soc_pct: 99.0 }).eq('id', bessAsset!.id).select();
-    expect(d1).toHaveLength(0);
+    const { error: e1 } = await clientB.from('bess_assets').update({ current_soc_pct: 99.0 }).eq('id', bessAsset!.id).select();
+    expect(e1?.code).toBe('42501');
 
     // 2. Direct alter attempt on maintenance_lock
-    const { data: d2 } = await clientB.from('bess_assets').update({ maintenance_lock: true }).eq('id', bessAsset!.id).select();
-    expect(d2).toHaveLength(0);
+    const { error: e2 } = await clientB.from('bess_assets').update({ maintenance_lock: true }).eq('id', bessAsset!.id).select();
+    expect(e2?.code).toBe('42501');
 
     // 3. Direct alter attempt on last_telemetry_at
-    const { data: d3 } = await clientB.from('bess_assets').update({ last_telemetry_at: '2020-01-01T00:00:00Z' }).eq('id', bessAsset!.id).select();
-    expect(d3).toHaveLength(0);
+    const { error: e3 } = await clientB.from('bess_assets').update({ last_telemetry_at: '2020-01-01T00:00:00Z' }).eq('id', bessAsset!.id).select();
+    expect(e3?.code).toBe('42501');
 
     // 4. Direct alter attempt on min_soc_pct / max_soc_pct
-    const { data: d4 } = await clientB.from('bess_assets').update({ min_soc_pct: 5.0, max_soc_pct: 95.0 }).eq('id', bessAsset!.id).select();
-    expect(d4).toHaveLength(0);
+    const { error: e4 } = await clientB.from('bess_assets').update({ min_soc_pct: 5.0, max_soc_pct: 95.0 }).eq('id', bessAsset!.id).select();
+    expect(e4?.code).toBe('42501');
 
     // 5. Verify DB state remains unchanged
     const { data: freshBess } = await adminClient.from('bess_assets').select('*').eq('id', bessAsset!.id).single();

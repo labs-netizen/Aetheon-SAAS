@@ -124,13 +124,13 @@ describe('Authority & Auditability Integration Suite', () => {
       const { data: beforeSite } = await adminClient.from('sites').select('activation_status').eq('id', nonDemoSiteId).single();
       const currentStatus = beforeSite.activation_status;
 
-      const { data: updateData } = await userClient
+      const { error: updateError } = await userClient
         .from('sites')
         .update({ activation_status: 'ACTIVE' })
         .eq('id', nonDemoSiteId)
         .select();
 
-      expect(updateData).toHaveLength(0);
+      expect(updateError?.code).toBe('42501');
 
       const { data: afterSite } = await adminClient.from('sites').select('activation_status').eq('id', nonDemoSiteId).single();
       expect(afterSite.activation_status).toBe(currentStatus);
@@ -389,7 +389,7 @@ describe('Authority & Auditability Integration Suite', () => {
         site_id: createdSiteId,
         product_id: 'GRID_INTELLIGENCE',
         amount_paise: 1990000,
-        provider_mode: 'RAZORPAY_TEST',
+        provider_mode: 'RAZORPAY_LIVE',
         status: 'CREATED',
       });
 
@@ -405,7 +405,7 @@ describe('Authority & Auditability Integration Suite', () => {
               id: `pay_audit_${Date.now()}`,
               amount: 1990000,
               currency: 'INR',
-              status: 'captured',
+              status: 'captured', captured: true,
               order_id: orderId,
               notes: {
                 organisation_id: createdOrgId,
@@ -510,13 +510,13 @@ describe('Authority & Auditability Integration Suite', () => {
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.is_suppressed).toBe(true);
-      expect(data.suppression_reason).toContain('QUALITY_GATE_NOT_MET');
+      expect(data.suppression_reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
 
       // Cleanup
       await adminClient.from('sites').delete().eq('id', tempActiveSiteId);
     });
 
-    it('proves live forecast persists non-demo internal validation model provenance', async () => {
+    it('suppresses synthetic GRID output despite publishable telemetry quality', async () => {
       const validDate = '2026-09-07';
 
       // 1. Construct valid ACTIVE non-demo site prerequisites
@@ -560,25 +560,11 @@ describe('Authority & Auditability Integration Suite', () => {
       expect(res.status).toBe(200);
       const data = await res.json();
 
-      // Assert forecast actually executed and was not suppressed
-      expect(Boolean(data.is_suppressed)).toBe(false);
-      expect(data.persisted).toBe(true);
-      expect(data.model_version).toBe('GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0');
-      expect(data.data_quality).toBe('PUBLISHABLE');
-      expect(data.freshness).toBe('RECENT');
-
-      // Assert persisted DB provenance in grid_forecast_runs
-      const { data: run, error: runErr } = await adminClient
-        .from('grid_forecast_runs')
-        .select('model_version, quality_status, freshness_status')
-        .eq('site_id', nonDemoSiteId)
-        .eq('operating_date', validDate)
-        .single();
-
-      expect(runErr).toBeNull();
-      expect(run!.model_version).toBe('GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0');
-      expect(run!.quality_status).toBe('PUBLISHABLE');
-      expect(run!.freshness_status).toBe('RECENT');
+      expect(data.is_suppressed).toBe(true);
+      expect(data.persisted).toBe(false);
+      expect(data.suppression_reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
+      const { data: runs } = await adminClient.from('grid_forecast_runs').select('id').eq('site_id',nonDemoSiteId).eq('operating_date',validDate);
+      expect(runs).toHaveLength(0);
     });
 
     it('proves wrong voltage, expired, future, and unapproved tariffs are blocked', async () => {
@@ -649,7 +635,7 @@ describe('Authority & Auditability Integration Suite', () => {
       expect(wrongVoltageRes.status).toBe(200);
       const wrongVoltageData = await wrongVoltageRes.json();
       expect(wrongVoltageData.is_suppressed).toBe(true);
-      expect(wrongVoltageData.suppression_reason).toContain('No approved, applicable DISCOM tariff found');
+      expect(wrongVoltageData.suppression_reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
 
       // Clean up
       await adminClient.from('sites').delete().eq('id', tempSiteId);
@@ -682,7 +668,7 @@ describe('Authority & Auditability Integration Suite', () => {
         expect(data.product_status).toBe('INTERNAL_VALIDATION');
         expect(data.rule_version).toBeDefined();
         // In live mode, monetary exposure remains suppressed under specialist review
-        expect(data.estimated_total_exposure_inr).toBe(0);
+        expect(data.estimated_total_exposure_inr).toBeNull();
       }
     });
   });
@@ -796,7 +782,7 @@ describe('Authority & Auditability Integration Suite', () => {
       }).eq('id', nonDemoBatteryId);
     });
 
-    it('proves live signal run persists non-demo solver provenance', async () => {
+    it('suppresses live BESS despite a relabelled synthetic price run', async () => {
       // Restore healthy asset parameters
       await adminClient.from('bess_assets').update({
         current_soc_pct: 65.0,
@@ -851,19 +837,9 @@ describe('Authority & Auditability Integration Suite', () => {
 
       const res = await bessPost(req);
       const data = await res.json();
-      expect(data.solver_version).not.toContain('BESS_ADVISORY_HEURISTIC_DEMO_v1.0');
-      expect(data.solver_version).toBe('BESS_ARBITRAGE_INTERNAL_VALIDATION_v1.0');
-
-      // Check persisted run in bess_signal_runs
-      const { data: run } = await adminClient
-        .from('bess_signal_runs')
-        .select('*')
-        .eq('battery_id', nonDemoBatteryId)
-        .eq('operating_date', validDate)
-        .single();
-
-      expect(run).toBeDefined();
-      expect(run.solver_version).toBe('BESS_ARBITRAGE_INTERNAL_VALIDATION_v1.0');
+      expect(data.is_suppressed).toBe(true);
+      expect(data.persisted).toBe(false);
+      expect(data.suppression_reason).toContain('LIVE_PRICE_AND_INTERCONNECTION_AUTHORITY_REQUIRED');
     });
   });
 });

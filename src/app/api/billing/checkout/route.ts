@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     if (siteId) {
       const { data: siteRecord, error: siteErr } = await adminClient
         .from('sites')
-        .select('id, organisation_id')
+        .select('id, organisation_id, is_demo')
         .eq('id', siteId)
         .maybeSingle();
 
@@ -57,6 +57,15 @@ export async function POST(req: NextRequest) {
           },
           { status: 400 }
         );
+      }
+    }
+
+    // Test payments may only be bound to an explicitly provisioned demo site.
+    if (billingProvider.mode !== 'RAZORPAY_LIVE') {
+      const { data: demoSite } = siteId ? await adminClient.from('sites')
+        .select('is_demo').eq('id', siteId).eq('organisation_id', organisationId).maybeSingle() : { data: null };
+      if (!demoSite?.is_demo || process.env.NEXT_PUBLIC_DEMO_MODE !== 'true') {
+        return NextResponse.json({ error: 'LIVE_BILLING_REQUIRED' }, { status: 503 });
       }
     }
 

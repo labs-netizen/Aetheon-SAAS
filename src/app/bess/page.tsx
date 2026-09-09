@@ -17,15 +17,18 @@ import { Badge } from '@/components/ui/Badge';
 import { useSite } from '@/components/layout/SiteContext';
 import { ModuleGate } from '@/components/shared/ModuleGate';
 import { formatPower, formatEnergy, formatSoc } from '@/lib/units/energy';
+import { getBlockTimes } from '@/lib/dates/blocks96';
 import { PRODUCTS } from '@/lib/constants';
 import { ProvenanceFooter } from '@/components/shared/ProvenanceFooter';
 
 export default function BESSPage() {
   const { currentSite, isEntitled } = useSite();
-  const [siteAsset, setSiteAsset] = useState<any>(null);
+  const [assetResponse, setSiteAsset] = useState<any>(null);
+  const siteAsset = assetResponse?.site_id === currentSite?.id ? assetResponse : null;
   const [maintenanceLock, setMaintenanceLock] = useState(false);
   const [simulatedSoc, setSimulatedSoc] = useState(50.0);
-  const [bessData, setBessData] = useState<any>(null);
+  const [bessDataResponse, setBessData] = useState<any>(null);
+  const bessData = bessDataResponse && bessDataResponse.requestSiteId === currentSite?.id ? bessDataResponse.data : null;
   const [isLoading, setIsLoading] = useState(false);
   const [bessError, setBessError] = useState<string | null>(null);
 
@@ -61,7 +64,9 @@ export default function BESSPage() {
   const powerRating = siteAsset?.power_rating_kw ? Number(siteAsset.power_rating_kw) : 500.0;
   const minSoc = siteAsset?.min_soc_pct ? Number(siteAsset.min_soc_pct) : 10.0;
   const maxSoc = siteAsset?.max_soc_pct ? Number(siteAsset.max_soc_pct) : 90.0;
-  const isSafetyLocked = maintenanceLock || simulatedSoc < minSoc;
+  const telemetryAge = siteAsset?.last_telemetry_at ? Date.now()-Date.parse(siteAsset.last_telemetry_at) : NaN;
+  const isSafetyLocked = maintenanceLock || simulatedSoc < minSoc || simulatedSoc > maxSoc ||
+    (!currentSite?.is_demo && (!siteAsset || !Number.isFinite(telemetryAge) || telemetryAge < 0 || telemetryAge > 1800000));
 
   const battery = {
     name: siteAsset?.name || 'Factory BESS Unit 1',
@@ -124,7 +129,7 @@ export default function BESSPage() {
         return res.json();
       })
       .then((data) => {
-        if (isMounted) setBessData(data);
+        if (isMounted) setBessData({ requestSiteId: currentSite.id, data });
       })
       .catch((err) => {
         console.warn('BESS API error:', err);
@@ -146,56 +151,23 @@ export default function BESSPage() {
 
   // Advisory opportunity windows
   const opportunityWindows = useMemo(() => {
-    if (bessData?.schedule_blocks && Array.isArray(bessData.schedule_blocks) && bessData.schedule_blocks.length > 0) {
-      const chargeBlocks = bessData.schedule_blocks.filter((b: any) => b.action === 'CHARGE');
-      const dischargeBlocks = bessData.schedule_blocks.filter((b: any) => b.action === 'DISCHARGE');
-      const windows: any[] = [];
-      if (chargeBlocks.length > 0) {
-        windows.push({
-          action: 'CHARGE',
-          timeWindow: `${chargeBlocks[0].start_time || '01:30'} - ${chargeBlocks[chargeBlocks.length - 1].end_time || '04:30'} IST`,
-          blocks: `Blocks ${chargeBlocks[0].block_index}–${chargeBlocks[chargeBlocks.length - 1].block_index}`,
-          avgPrice: 'Off-Peak Tariff Valley',
-          targetSoc: `${maxSoc}%`,
-          rationale: 'Off-peak solar or night valley charging window recommended by advisory solver.',
-        });
+    if (!bessData || bessData.is_suppressed || !Array.isArray(bessData.blocks)) return [];
+    const windows: any[] = [];
+    let current: any = null;
+    for (const block of bessData.blocks) {
+      const action = block.recommended_action;
+      if (action === 'IDLE') { current = null; continue; }
+      if (!current || current.action !== action || current.endBlock+1 !== block.block_index) {
+        current = { action, startBlock:block.block_index, endBlock:block.block_index,
+          targetSoc:block.resulting_soc_pct, avgPrice:'Demonstration price inputs', rationale:'Computed AC-side heuristic; advisory only.' };
+        windows.push(current);
       }
-      if (dischargeBlocks.length > 0) {
-        windows.push({
-          action: 'DISCHARGE',
-          timeWindow: `${dischargeBlocks[0].start_time || '18:30'} - ${dischargeBlocks[dischargeBlocks.length - 1].end_time || '20:30'} IST`,
-          blocks: `Blocks ${dischargeBlocks[0].block_index}–${dischargeBlocks[dischargeBlocks.length - 1].block_index}`,
-          avgPrice: 'Peak Tariff Window',
-          targetSoc: `${minSoc}%`,
-          rationale: 'Discharge against evening peak ToD tariff slab for demand cost mitigation.',
-        });
-      }
-      if (windows.length > 0) return windows;
+      current.endBlock = block.block_index;
+      current.targetSoc = block.resulting_soc_pct;
     }
-
-    if (currentSite?.is_demo) {
-      return [
-        {
-          action: 'CHARGE',
-          timeWindow: '01:30 - 04:30 IST',
-          blocks: 'Blocks 7–18',
-          avgPrice: '₹2,900 / MWh',
-          targetSoc: '85.0%',
-          rationale: 'Deep off-peak night valley tariff on Day-Ahead Market.',
-        },
-        {
-          action: 'DISCHARGE',
-          timeWindow: '18:30 - 20:30 IST',
-          blocks: 'Blocks 74–82',
-          avgPrice: '₹8,500 / MWh',
-          targetSoc: '18.0%',
-          rationale: 'Discharge against evening peak ToD tariff slab.',
-        },
-      ];
-    }
-
-    return [];
-  }, [bessData, currentSite?.is_demo, minSoc, maxSoc]);
+    return windows.map(w=>({ ...w, timeWindow:`${getBlockTimes(w.startBlock).startTime} - ${getBlockTimes(w.endBlock).endTime} IST`,
+      blocks:`Blocks ${w.startBlock}–${w.endBlock}`, targetSoc:`${Number(w.targetSoc).toFixed(1)}%` }));
+  }, [bessData]);
 
   return (
     <ModuleGate
@@ -321,7 +293,7 @@ export default function BESSPage() {
             </div>
           </CardHeader>
 
-          {isSafetyLocked || bessData?.is_suppressed ? (
+          {isSafetyLocked || !bessData || bessData?.is_suppressed ? (
             <div className="p-8 text-center rounded-lg border border-rose-900/60 bg-rose-950/20 space-y-2">
               <AlertOctagon className="w-8 h-8 text-rose-400 mx-auto" />
               <h4 className="text-sm font-semibold text-rose-200">

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { operatingToday, validDate } from '@/lib/analytics/domain-safety';
+import { applicableObligations } from '@/features/compliance/regulatoryResolver';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function GET(req: NextRequest) {
@@ -26,7 +28,7 @@ export async function GET(req: NextRequest) {
     // 2. Fetch site electrical and jurisdictional attributes
     const { data: site, error: siteErr } = await adminClient
       .from('sites')
-      .select('id, name, state, discom, voltage_category')
+      .select('id, name, state, discom, voltage_category, is_demo')
       .eq('id', siteId)
       .single();
 
@@ -34,23 +36,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
 
-    const siteState = site.state || 'Maharashtra';
-    const siteDiscom = site.discom || 'MSEDCL';
-    const siteVoltage = site.voltage_category || '33kV';
+    const siteState = site.state;
+    const siteDiscom = site.discom;
+    const siteVoltage = site.voltage_category;
 
-    // 3. Query ONLY APPROVED and PUBLISHED regulatory sources (Customer-Safe)
-    const { data: regSources, error: regErr } = await adminClient
-      .from('regulatory_sources')
-      .select('id, jurisdiction, state, discom, document_title, source_url, document_date, effective_date, version, status')
-      .or(`state.eq.${siteState},state.eq.National,state.is.null`)
-      .in('status', ['APPROVED', 'PUBLISHED'])
-      .order('effective_date', { ascending: false });
-
-    if (regErr) {
-      return NextResponse.json({ error: regErr.message }, { status: 500 });
-    }
-
-    const today = new Date().toISOString().split('T')[0];
+    const today = searchParams.get('operatingDate') || operatingToday();
+    if (!validDate(today)) return NextResponse.json({ error: 'INVALID_DATE' }, { status: 400 });
 
     // 4. Resolve applicable charges and tariffs via canonical approval resolver (no wrong-voltage fallback)
     const { resolveApplicableRegulatoryParameters } = await import('@/features/compliance/regulatoryResolver');
@@ -59,16 +50,17 @@ export async function GET(req: NextRequest) {
       discom: siteDiscom,
       voltageCategory: siteVoltage,
       operatingDate: today,
+      isDemo: site.is_demo === true,
     });
 
     const applicableCharge = resolution.applicableCharge;
     const applicableTariff = resolution.applicableTariff;
 
     // 6. Query approved statutory compliance calendar obligations
-    const { data: obligations } = await adminClient
+    const { data: obligations, error: obligationsError } = await adminClient
       .from('compliance_obligations')
       .select('*')
-      .or(`state.eq.${siteState},state.eq.National,state.is.null`)
+      .eq('state', siteState)
       .order('deadline_date', { ascending: true });
 
     return NextResponse.json({
@@ -79,12 +71,12 @@ export async function GET(req: NextRequest) {
         discom: siteDiscom,
         voltageCategory: siteVoltage,
       },
-      sources: regSources || [],
+      sources: resolution.approvedSources,
       charges: applicableCharge || null,
       tariff: applicableTariff || null,
-      calendar: obligations || [],
-      hasApprovedData: Boolean(regSources && regSources.length > 0),
-      is_data_gap: !applicableCharge || !applicableTariff,
+      calendar: obligationsError ? [] : applicableObligations(obligations || [], resolution, { state: siteState, discom: siteDiscom, voltageCategory: siteVoltage, operatingDate: today, isDemo: site.is_demo === true }),
+      hasApprovedData: resolution.hasApprovedData,
+      is_data_gap: Boolean(obligationsError) || !applicableCharge || !applicableTariff,
       gap_reason: resolution.gapReason || (!applicableCharge ? 'No applicable approved open access charges found for voltage' : null),
       legalDisclaimer: 'NOT FORMAL LEGAL ADVICE. Statutory parameters are published from official Commission regulatory orders for algorithmic decision support only.',
     });

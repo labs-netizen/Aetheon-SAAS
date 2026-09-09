@@ -4,7 +4,7 @@
  * cross-tenant, cross-site, unentitled, and malicious payloads.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST as forecastPost } from '@/app/api/forecast/route';
 import { POST as dsmPost } from '@/app/api/dsm/route';
@@ -38,7 +38,10 @@ describe('Adversarial API & Server Rejection Suite', () => {
   let siteBId: string;
   let subAId: string;
 
+  afterAll(() => vi.unstubAllEnvs());
   beforeAll(async () => {
+    // These fixtures are explicitly provisioned demo sites.
+    vi.stubEnv('NEXT_PUBLIC_DEMO_MODE', 'true');
     adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false, storageKey: 'test-admin-adv' },
     });
@@ -187,15 +190,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     try {
       // In demo mode, OA_COMPLIANCE is deliberately unsubscribed
       const req = new NextRequest('http://localhost:3000/api/forecast', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          siteId: siteAId,
-          operatingDate: '2026-09-08',
-          contractDemandKw: 2500,
-        }),
+        method: 'GET',
       });
 
       const { authorizeApiRequest } = await import('@/lib/auth/api-guard');
@@ -375,7 +370,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
       site_id: siteAId,
       product_id: 'GRID_INTELLIGENCE',
       amount_paise: 1990000,
-      provider_mode: 'MOCK_DEVELOPMENT',
+      provider_mode: 'RAZORPAY_LIVE',
       status: 'CREATED',
     });
 
@@ -388,7 +383,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
           entity: {
             id: paymentId,
             order_id: orderId,
-            amount: 1990000,
+            amount: 1990000, currency: 'INR', status: 'captured', captured: true,
             notes: {
               org_id: orgAId,
               product_id: 'GRID_INTELLIGENCE',
@@ -486,7 +481,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     // Must be rejected with 403 Forbidden due to email mismatch
     expect(res.status).toBe(403);
     const json = await res.json();
-    expect(json.error).toContain('different email address');
+    expect(json.error).toContain('EMAIL_BINDING_FORBIDDEN');
   });
 
   // 12. Direct RPC Lockdown: Customer cannot call process_razorpay_webhook_atomic directly
@@ -675,7 +670,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
   });
 
   // 18. Compliance API Approval Gate Enforcement
-  it('18. Compliance Approval Gate: Customer API returns APPROVED charge and suppresses REVIEW_PENDING charge', async () => {
+  it('18. Compliance Approval Gate: Rejects missing approval evidence and REVIEW_PENDING records', async () => {
     // Ensure orgA has OA_COMPLIANCE entitlement for test
     await adminClient.from('entitlements').upsert({
       organisation_id: orgAId,
@@ -755,10 +750,8 @@ describe('Adversarial API & Server Rejection Suite', () => {
     const res = await complianceGet(req);
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.charges).toBeDefined();
-    // Must return the APPROVED charge, never the REVIEW_PENDING 9.99 charge
-    expect(Number(json.charges.cross_subsidy_surcharge_inr_per_kwh)).toBe(1.85);
-    expect(Number(json.charges.cross_subsidy_surcharge_inr_per_kwh)).not.toBe(9.99);
+    expect(json.charges).toBeNull();
+    expect(json.is_data_gap).toBe(true);
 
     // Clean up
     await adminClient.from('open_access_charges').delete().match({ regulatory_source_id: pendingSourceId });
@@ -815,7 +808,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     const { data: qEvt } = await adminClient
       .from('processed_webhook_events')
       .select('status')
-      .eq('id', unmappedEventId)
+      .eq('id', CryptoJS.SHA256(rawPayload).toString(CryptoJS.enc.Hex))
       .maybeSingle();
     expect(qEvt?.status).toBe('QUARANTINED');
   });
@@ -832,11 +825,11 @@ describe('Adversarial API & Server Rejection Suite', () => {
       .insert({
         site_id: siteAId,
         operating_date: testDate,
-        model_version: 'GRID_INTEL_v1.0.4',
-        quality_status: 'PASSED',
-        average_price_inr_per_mwh: 4620.50,
-        peak_demand_kw: 1420.5,
-        peak_demand_block: 45,
+        model_version: 'DEMO_BASELINE_v1.0',
+        quality_status: 'DEMO_UNVERIFIED',
+        average_price_inr_per_mwh: 4975,
+        peak_demand_kw: 1390,
+        peak_demand_block: 96,
       })
       .select('id')
       .single();
@@ -853,7 +846,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
       forecast_demand_kw: 1200 + i * 2,
       forecast_price_inr_per_mwh: 4500 + i * 10,
       confidence_lower_kw: 1100,
-      confidence_upper_kw: 1300,
+      confidence_upper_kw: 1500,
       is_high_cost_window: i >= 72 && i <= 88,
     }));
 
@@ -895,7 +888,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     expect(dlRes.status).toBe(200);
     const csvContent = await dlRes.text();
     // CSV must contain the model version and 96 data rows
-    expect(csvContent).toContain('GRID_INTEL_v1.0.4');
+    expect(csvContent).toContain('DEMO_BASELINE_v1.0');
     expect(csvContent).toContain(`RUN ID: ${runId}`);
     const dataLines = csvContent.split('\n').filter(line => line.startsWith(testDate));
     expect(dataLines.length).toBe(96);
@@ -976,14 +969,14 @@ describe('Adversarial API & Server Rejection Suite', () => {
       organisation_id: orgAId,
       product_id: 'GRID_INTELLIGENCE',
       amount_paise: 1990000,
-      provider_mode: 'RAZORPAY_TEST',
+      provider_mode: 'RAZORPAY_LIVE',
       status: 'CREATED',
     });
 
     const { data: webhookRes, error: webhookErr } = await adminClient.rpc('process_razorpay_webhook_atomic', {
       p_event_id: eventId,
       p_event_type: 'payment.failed',
-      p_payload: { order_id: orderId, reason: 'card_declined' },
+      p_payload: { event: 'payment.failed', payload: { payment: { entity: { id: `pay_${Date.now()}`, order_id: orderId, amount: 1990000, currency: 'INR', status: 'failed' } } } },
       p_org_id: orgAId,
       p_site_id: null,
       p_product_id: 'GRID_INTELLIGENCE',
@@ -1033,7 +1026,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     const json = await res.json();
     expect(json.is_suppressed).toBe(true);
     expect(json.suppression_reason).toContain('MISSING_DATA');
-    expect(json.summary.estimated_penalty_inr).toBe(0);
+    expect(json.estimated_total_exposure_inr).toBeNull();
   });
 
   // 30. DSM Idempotency: POSTing same DSM calculation twice produces no duplicate incidents
@@ -1188,7 +1181,7 @@ describe('Adversarial API & Server Rejection Suite', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.is_suppressed).toBe(true);
-    expect(json.suppression_reason).toContain('CALIBRATING');
+    expect(json.suppression_reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
     expect(json.blocks).toHaveLength(0);
     expect(json.persisted).toBe(false);
   });

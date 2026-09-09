@@ -100,6 +100,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Forbidden: Internal access required' }, { status: 403 });
     }
 
+    // Platform-wide audit and health are reserved for platform administrators.
+    if (!isPlatformAdmin) {
+      return NextResponse.json({ error: 'Forbidden: Platform administrator required' }, { status: 403 });
+    }
+
     // Query real audit logs from PostgreSQL
     const { data: logs, error: logError } = await adminClient
       .from('audit_logs')

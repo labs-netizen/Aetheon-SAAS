@@ -101,7 +101,10 @@ export async function POST(request: Request) {
     }
 
     // Membership and organisation creation are executed atomically inside create_organisation_atomic RPC
-    const isDemoFlag = Boolean(isDemo || is_demo);
+    if (isDemo || is_demo) {
+      return NextResponse.json({ error: 'DEMO_PROVISIONING_FORBIDDEN' }, { status: 403 });
+    }
+    const isDemoFlag = false;
     const actualSiteName = siteName?.trim() || `${name.trim()} Main Facility`;
 
     let siteParams: any = null;

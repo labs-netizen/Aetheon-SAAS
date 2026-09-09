@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchGridForecast } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
+import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get('siteId');
-    const operatingDate = searchParams.get('operatingDate') || new Date().toISOString().substring(0, 10);
+    const operatingDate = searchParams.get('operatingDate') || operatingToday();
 
-    if (!siteId) {
+    if (!siteId || !validDate(operatingDate)) {
       return NextResponse.json({ error: 'siteId query parameter is required' }, { status: 400 });
     }
 
@@ -36,103 +37,8 @@ export async function GET(req: NextRequest) {
     }
 
     // 2. Authoritative Server-side Quality Gate
-    let qualityEval: any = null;
-    let tariff: any = null;
-    if (!site.is_demo) {
-      // Authoritatively require telemetry quality evaluation for the exact requested operatingDate
-      const { data: qData } = await adminClient
-        .from('data_quality_evaluations')
-        .select('*')
-        .eq('site_id', siteId)
-        .eq('evaluation_date', operatingDate)
-        .maybeSingle();
-      qualityEval = qData;
-
-      const completeness = qualityEval ? Number(qualityEval.completeness_pct) : 0;
-      const isCalibrated = site.activation_status === 'ACTIVE';
-      
-      // Allowlist approach: only explicitly publishable states may proceed
-      const publishableStates = ['PUBLISHABLE', 'PUBLISHABLE_WITH_WARNING'];
-      const isPublishable = qualityEval && publishableStates.includes(qualityEval.publication_gate_status);
-      
-      // Authoritatively require conditions for live publication
-      const isFresh = qualityEval && qualityEval.freshness_status === 'RECENT';
-      const isComplete = completeness >= 95.0;
-      const isValidated = qualityEval && qualityEval.validation_status === 'PASSED';
-
-      // Check persisted approved tariff configuration: requires matching state, discom, exact voltage category, date applicability, and approved regulatory source
-      const { data: tariffData, error: tariffErr } = await adminClient
-        .from('discom_tariffs')
-        .select(`
-          id, 
-          energy_charge_normal_inr_per_kwh, 
-          regulatory_source_id,
-          state,
-          discom,
-          voltage_category,
-          effective_from,
-          effective_until,
-          regulatory_sources!inner (
-            id,
-            status,
-            version
-          )
-        `)
-        .eq('state', site.state || 'Maharashtra')
-        .eq('discom', site.discom || 'MSEDCL')
-        .eq('voltage_category', site.voltage_category || '33kV')
-        .lte('effective_from', operatingDate)
-        .or(`effective_until.is.null,effective_until.gte.${operatingDate}`)
-        .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
-        .order('effective_from', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (tariffErr) {
-        console.error('Error resolving authoritative tariff:', tariffErr);
-      }
-      tariff = tariffData;
-
-      if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated || !tariff) {
-        let suppressionReason = '';
-        let gateStatus = qualityEval?.publication_gate_status || 'BLOCKED_MISSING_INPUT';
-
-        if (!tariff) {
-          suppressionReason = 'CONFIGURATION_REQUIRED: No approved, applicable DISCOM tariff found for site voltage category and operating date.';
-          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
-        } else if (!isCalibrated) {
-          suppressionReason = `CALIBRATING: Site activation status is ${site.activation_status}; active calibration baseline required.`;
-        } else if (!qualityEval) {
-          suppressionReason = `QUALITY_GATE_NOT_MET: No telemetry quality evaluation found for site on operating date ${operatingDate}.`;
-          gateStatus = 'BLOCKED_MISSING_INPUT';
-        } else if (!isComplete) {
-          suppressionReason = `DATA_GAP: Telemetry completeness (${completeness.toFixed(1)}%) below 95.0% threshold.`;
-          gateStatus = 'BLOCKED_MISSING_INPUT';
-        } else if (!isValidated) {
-          suppressionReason = `VALIDATION_FAILED: Telemetry validation status is ${qualityEval.validation_status}.`;
-          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
-        } else if (!isPublishable) {
-          suppressionReason = `QUALITY_GATE_BLOCKED: Telemetry publication gate status is ${qualityEval.publication_gate_status} (not PUBLISHABLE).`;
-        } else if (!isFresh) {
-          suppressionReason = `STALE_DATA: Telemetry freshness status is ${qualityEval.freshness_status}.`;
-          gateStatus = 'BLOCKED_STALE_DATA';
-        }
-
-        return NextResponse.json(
-          {
-            is_suppressed: true,
-            suppression_reason: suppressionReason,
-            quality_status: gateStatus,
-            freshness_status: qualityEval?.freshness_status || 'UNKNOWN',
-            completeness_pct: completeness,
-            activation_status: site.activation_status,
-            validation_status: qualityEval?.validation_status || 'UNKNOWN',
-            blocks: [],
-            persisted: false,
-          },
-          { status: 200 }
-        );
-      }
+    if (site.is_demo !== true) {
+      return NextResponse.json({ site_id: siteId, operating_date: operatingDate, is_suppressed: true, suppression_reason: LIVE_GRID_BLOCK, blocks: [], persisted: false, data_quality: 'UNVERIFIED', confidence_status: 'UNAVAILABLE', freshness: 'UNKNOWN' });
     }
 
     // 3. Check if a forecast run already exists for this site and date
@@ -157,7 +63,7 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      if (!blocks || blocks.length !== 96) {
+      if (!validGridDemo({ ...existingRun, data_quality: existingRun.quality_status, blocks }, siteId, operatingDate)) {
         return NextResponse.json(
           {
             error: 'DATA_GAP',
@@ -176,10 +82,11 @@ export async function GET(req: NextRequest) {
         average_price_inr_per_mwh: existingRun.average_price_inr_per_mwh,
         peak_demand_kw: existingRun.peak_demand_kw,
         peak_demand_block: existingRun.peak_demand_block,
-        data_quality: existingRun.quality_status,
+        data_quality: 'DEMO_UNVERIFIED',
+        confidence_status: 'DEMO_UNCALIBRATED',
         freshness: existingRun.freshness_status,
-        tariff_rate_inr_per_kwh: tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null),
-        tariff_version: tariff ? 'APPROVED_DISCOM_TARIFF' : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null),
+        tariff_rate_inr_per_kwh: 7.85,
+        tariff_version: 'MSEDCL_HT1_TOD_DEMO',
         blocks: blocks.map((b) => ({
           block_index: b.block_index,
           start_time: b.start_time,
@@ -200,6 +107,7 @@ export async function GET(req: NextRequest) {
     let forecastResult: any;
     try {
       forecastResult = await fetchGridForecast({
+        isDemo: true,
         siteId,
         operatingDate,
         contractDemandKw,
@@ -214,7 +122,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    if (!forecastResult.blocks || !Array.isArray(forecastResult.blocks) || forecastResult.blocks.length !== 96) {
+    if (!validGridDemo(forecastResult, siteId, operatingDate)) {
       return NextResponse.json(
         {
           error: 'INVALID_ANALYTICS_CONTRACT',
@@ -225,11 +133,6 @@ export async function GET(req: NextRequest) {
     }
 
     // 5. Persist run & blocks fail-closed
-    const liveModelVersion = forecastResult.model_version && !forecastResult.model_version.includes('DEMO')
-      ? forecastResult.model_version
-      : 'GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0';
-    const liveQualityStatus = qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN';
-    const liveFreshnessStatus = qualityEval?.freshness_status || 'UNKNOWN';
 
     const { data: run, error: runError } = await adminClient
       .from('grid_forecast_runs')
@@ -237,13 +140,13 @@ export async function GET(req: NextRequest) {
         {
           site_id: siteId,
           operating_date: operatingDate,
-          model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : liveModelVersion,
+          model_version: forecastResult.model_version,
           model_generation_time: forecastResult.model_generation_time || new Date().toISOString(),
           average_price_inr_per_mwh: Number(forecastResult.average_price_inr_per_mwh),
           peak_demand_kw: Number(forecastResult.peak_demand_kw),
           peak_demand_block: Number(forecastResult.peak_demand_block),
-          quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : liveQualityStatus,
-          freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : liveFreshnessStatus,
+          quality_status: 'DEMO_UNVERIFIED',
+          freshness_status: 'DEMO',
         },
         { onConflict: 'site_id,operating_date' }
       )
@@ -284,11 +187,10 @@ export async function GET(req: NextRequest) {
 
     forecastResult.run_id = run.id;
     forecastResult.persisted = true;
-    forecastResult.model_version = site.is_demo ? forecastResult.model_version : liveModelVersion;
-    forecastResult.data_quality = site.is_demo ? forecastResult.data_quality : liveQualityStatus;
-    forecastResult.freshness = site.is_demo ? forecastResult.freshness : liveFreshnessStatus;
-    forecastResult.tariff_rate_inr_per_kwh = tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null);
-    forecastResult.tariff_version = tariff ? `APPROVED_DISCOM_TARIFF_${tariff.regulatory_sources?.version || 'v1.0'}` : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
+    forecastResult.data_quality = 'DEMO_UNVERIFIED';
+    forecastResult.freshness = 'DEMO';
+    forecastResult.tariff_rate_inr_per_kwh = 7.85;
+    forecastResult.tariff_version = 'MSEDCL_HT1_TOD_DEMO';
     return NextResponse.json(forecastResult);
   } catch (err) {
     return NextResponse.json(
@@ -303,7 +205,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { siteId, operatingDate, seed } = body;
 
-    if (!siteId || !operatingDate) {
+    if (!siteId || !validDate(operatingDate)) {
       return NextResponse.json(
         { error: 'siteId and operatingDate are required' },
         { status: 400 }
@@ -334,102 +236,8 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Server-authoritative Quality Gate
-    let qualityEval: any = null;
-    let tariff: any = null;
-    if (!site.is_demo) {
-      const { data: qData } = await adminClient
-        .from('data_quality_evaluations')
-        .select('*')
-        .eq('site_id', siteId)
-        .eq('evaluation_date', operatingDate)
-        .maybeSingle();
-      qualityEval = qData;
-
-      const completeness = qualityEval ? Number(qualityEval.completeness_pct) : 0;
-      const isCalibrated = site.activation_status === 'ACTIVE';
-      
-      // Allowlist approach: only explicitly publishable states may proceed
-      const publishableStates = ['PUBLISHABLE', 'PUBLISHABLE_WITH_WARNING'];
-      const isPublishable = qualityEval && publishableStates.includes(qualityEval.publication_gate_status);
-      
-      // Authoritatively require conditions for live publication
-      const isFresh = qualityEval && qualityEval.freshness_status === 'RECENT';
-      const isComplete = completeness >= 95.0;
-      const isValidated = qualityEval && qualityEval.validation_status === 'PASSED';
-
-      // Check persisted approved tariff configuration: requires matching state, discom, exact voltage category, date applicability, and approved regulatory source
-      const { data: tariffData, error: tariffErr } = await adminClient
-        .from('discom_tariffs')
-        .select(`
-          id, 
-          energy_charge_normal_inr_per_kwh, 
-          regulatory_source_id,
-          state,
-          discom,
-          voltage_category,
-          effective_from,
-          effective_until,
-          regulatory_sources!inner (
-            id,
-            status,
-            version
-          )
-        `)
-        .eq('state', site.state || 'Maharashtra')
-        .eq('discom', site.discom || 'MSEDCL')
-        .eq('voltage_category', site.voltage_category || '33kV')
-        .lte('effective_from', operatingDate)
-        .or(`effective_until.is.null,effective_until.gte.${operatingDate}`)
-        .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
-        .order('effective_from', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (tariffErr) {
-        console.error('Error resolving authoritative tariff in POST:', tariffErr);
-      }
-      tariff = tariffData;
-
-      if (!qualityEval || !isCalibrated || !isPublishable || !isFresh || !isComplete || !isValidated || !tariff) {
-        let suppressionReason = '';
-        let gateStatus = qualityEval?.publication_gate_status || 'BLOCKED_MISSING_INPUT';
-
-        if (!tariff) {
-          suppressionReason = 'CONFIGURATION_REQUIRED: No approved, applicable DISCOM tariff found for site voltage category and operating date.';
-          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
-        } else if (!isCalibrated) {
-          suppressionReason = `CALIBRATING: Site activation status is ${site.activation_status}; active calibration baseline required.`;
-        } else if (!qualityEval) {
-          suppressionReason = `QUALITY_GATE_NOT_MET: No telemetry quality evaluation found for site on operating date ${operatingDate}.`;
-          gateStatus = 'BLOCKED_MISSING_INPUT';
-        } else if (!isComplete) {
-          suppressionReason = `DATA_GAP: Telemetry completeness (${completeness.toFixed(1)}%) below 95.0% threshold.`;
-          gateStatus = 'BLOCKED_MISSING_INPUT';
-        } else if (!isValidated) {
-          suppressionReason = `VALIDATION_FAILED: Telemetry validation status is ${qualityEval.validation_status}.`;
-          gateStatus = 'BLOCKED_INVALID_CONFIGURATION';
-        } else if (!isPublishable) {
-          suppressionReason = `QUALITY_GATE_BLOCKED: Telemetry publication gate status is ${qualityEval.publication_gate_status} (not PUBLISHABLE).`;
-        } else if (!isFresh) {
-          suppressionReason = `STALE_DATA: Telemetry freshness status is ${qualityEval.freshness_status}.`;
-          gateStatus = 'BLOCKED_STALE_DATA';
-        }
-
-        return NextResponse.json(
-          {
-            is_suppressed: true,
-            suppression_reason: suppressionReason,
-            quality_status: gateStatus,
-            freshness_status: qualityEval?.freshness_status || 'UNKNOWN',
-            completeness_pct: completeness,
-            activation_status: site.activation_status,
-            validation_status: qualityEval?.validation_status || 'UNKNOWN',
-            blocks: [],
-            persisted: false,
-          },
-          { status: 200 }
-        );
-      }
+    if (site.is_demo !== true) {
+      return NextResponse.json({ site_id: siteId, operating_date: operatingDate, is_suppressed: true, suppression_reason: LIVE_GRID_BLOCK, blocks: [], persisted: false, data_quality: 'UNVERIFIED', confidence_status: 'UNAVAILABLE', freshness: 'UNKNOWN' });
     }
 
     // 4. Resolve authoritative contract demand and historical load
@@ -437,35 +245,15 @@ export async function POST(req: NextRequest) {
       ? (body.contractDemandKw || site.contract_demand_value || 1000)
       : (site.contract_demand_value || 1000);
 
-    let historicalLoadKw: number[] | undefined = body.historicalLoadKw;
-    if (!site.is_demo) {
-      // Server-side historical average from interval_data_96
-      const { data: recentIntervals } = await adminClient
-        .from('interval_data_96')
-        .select('actual_drawal_kw')
-        .eq('site_id', siteId)
-        .order('created_at', { ascending: false })
-        .limit(96);
-
-      if (recentIntervals && recentIntervals.length > 0) {
-        const validValues = recentIntervals
-          .map((r) => Number(r.actual_drawal_kw))
-          .filter((v) => Number.isFinite(v));
-        if (validValues.length > 0) {
-          historicalLoadKw = validValues;
-        }
-      }
-    }
-
     // 5. Call FastAPI analytics microservice
     const effectiveSeed = site.is_demo ? seed : undefined;
     let forecastResult: any;
     try {
       forecastResult = await fetchGridForecast({
+        isDemo: true,
         siteId,
         operatingDate,
         contractDemandKw: effectiveContractDemand,
-        historicalLoadKw,
         seed: effectiveSeed,
       });
     } catch (apiErr) {
@@ -478,14 +266,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate required contract fields from FastAPI response
-    if (
-      forecastResult.average_price_inr_per_mwh === undefined ||
-      forecastResult.peak_demand_kw === undefined ||
-      forecastResult.peak_demand_block === undefined ||
-      !Array.isArray(forecastResult.blocks) ||
-      forecastResult.blocks.length !== 96
-    ) {
+    if (!validGridDemo(forecastResult, siteId, operatingDate)) {
       return NextResponse.json(
         {
           error: 'INVALID_ANALYTICS_CONTRACT',
@@ -497,9 +278,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Persist run and blocks safely fail-closed
-    const liveModelVersion = 'GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0';
-    const liveQualityStatus = qualityEval?.publication_gate_status || 'QUALITY_UNKNOWN';
-    const liveFreshnessStatus = qualityEval?.freshness_status || 'UNKNOWN';
 
     try {
       const { data: run, error: runError } = await adminClient
@@ -508,13 +286,13 @@ export async function POST(req: NextRequest) {
           {
             site_id: siteId,
             operating_date: operatingDate,
-            model_version: site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : liveModelVersion,
+            model_version: forecastResult.model_version,
             model_generation_time: forecastResult.model_generation_time || new Date().toISOString(),
             average_price_inr_per_mwh: Number(forecastResult.average_price_inr_per_mwh),
             peak_demand_kw: Number(forecastResult.peak_demand_kw),
             peak_demand_block: Number(forecastResult.peak_demand_block),
-            quality_status: site.is_demo ? (forecastResult.data_quality || 'PASSED') : liveQualityStatus,
-            freshness_status: site.is_demo ? (forecastResult.freshness || 'RECENT') : liveFreshnessStatus,
+            quality_status: 'DEMO_UNVERIFIED',
+            freshness_status: 'DEMO',
           },
           { onConflict: 'site_id,operating_date' }
         )
@@ -549,11 +327,10 @@ export async function POST(req: NextRequest) {
 
       forecastResult.run_id = run.id;
       forecastResult.persisted = true;
-      forecastResult.model_version = site.is_demo ? (forecastResult.model_version || 'DEMO_BASELINE_v1.0') : liveModelVersion;
-      forecastResult.data_quality = site.is_demo ? (forecastResult.data_quality || 'PASSED') : liveQualityStatus;
-      forecastResult.freshness = site.is_demo ? (forecastResult.freshness || 'RECENT') : liveFreshnessStatus;
-      forecastResult.tariff_rate_inr_per_kwh = tariff?.energy_charge_normal_inr_per_kwh ? Number(tariff.energy_charge_normal_inr_per_kwh) : (site.is_demo ? 7.85 : null);
-      forecastResult.tariff_version = tariff ? (tariff.regulatory_sources ? `APPROVED_DISCOM_TARIFF_${tariff.regulatory_sources.version || 'v1.0'}` : 'APPROVED_DISCOM_TARIFF') : (site.is_demo ? 'MSEDCL_HT1_TOD_DEMO' : null);
+      forecastResult.data_quality = 'DEMO_UNVERIFIED';
+      forecastResult.freshness = 'DEMO';
+      forecastResult.tariff_rate_inr_per_kwh = 7.85;
+      forecastResult.tariff_version = 'MSEDCL_HT1_TOD_DEMO';
     } catch (dbErr) {
       console.error('CRITICAL: Forecast persistence failure:', dbErr);
       return NextResponse.json(

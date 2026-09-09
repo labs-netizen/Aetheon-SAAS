@@ -1,111 +1,75 @@
-/**
- * Canonical Regulatory Applicability Resolver
- * 
- * Strict approval gate: Only sources with status 'APPROVED' or 'PUBLISHED' may be returned to customer sessions.
- * Strict voltage & period matching: If no valid record exists for the exact voltage category and effective period,
- * returns null / DATA_GAP. NEVER substitutes an unmatching voltage category.
- */
-
 import { createAdminClient } from '@/lib/supabase/admin';
+import { finiteNumber, validDate } from '@/lib/analytics/domain-safety';
 
 export interface ApplicableRegulatoryParams {
-  state: string;
-  discom: string;
-  voltageCategory: string;
-  operatingDate: string;
+  state: string; discom: string; voltageCategory: string; operatingDate: string;
+  throughDate?: string; isDemo?: boolean;
 }
-
 export interface RegulatoryResolutionResult {
-  hasApprovedData: boolean;
-  applicableSource: any | null;
-  approvedSources: any[];
-  applicableCharge: any | null;
-  applicableTariff: any | null;
-  status: 'RESOLVED' | 'DATA_GAP' | 'CONFIG_REQUIRED';
-  gapReason?: string;
+  hasApprovedData: boolean; applicableSource: any | null; approvedSources: any[];
+  applicableCharge: any | null; applicableTariff: any | null;
+  status: 'RESOLVED' | 'DATA_GAP' | 'CONFIG_REQUIRED'; gapReason?: string;
 }
 
-export async function resolveApplicableRegulatoryParameters(
-  params: ApplicableRegulatoryParams
-): Promise<RegulatoryResolutionResult> {
-  const { state, discom, voltageCategory, operatingDate } = params;
-  const adminClient = createAdminClient();
+export function sourceApplies(s: any, p: ApplicableRegulatoryParams): boolean {
+  const end = p.throughDate || p.operatingDate;
+  if (!s || !['APPROVED','PUBLISHED'].includes(s.status) || s.is_demo !== (p.isDemo === true) ||
+      !s.id || !s.version || !/^https?:\/\//.test(s.source_url || '') || !s.approved_by ||
+      !Number.isFinite(Date.parse(s.approved_at)) || Date.parse(s.approved_at) > Date.now() ||
+      !validDate(s.document_date) || !validDate(s.effective_date) ||
+      s.document_date > p.operatingDate || s.effective_date > p.operatingDate ||
+      (s.expiry_date !== null && (!validDate(s.expiry_date) || s.expiry_date < end))) return false;
+  const national = ['CERC','CEA','National'].includes(s.jurisdiction);
+  return (s.state === p.state || ((!s.state || s.state === 'National') && national)) &&
+    (!s.discom || s.discom === p.discom) && (national || s.jurisdiction === p.state);
+}
 
-  // 1. Fetch approved regulatory sources for state/discom
-  const { data: regSources, error: regError } = await adminClient
-    .from('regulatory_sources')
-    .select('id, jurisdiction, document_title, version, status, document_date, effective_date')
-    .or(`jurisdiction.eq.${state},jurisdiction.eq.CERC,jurisdiction.eq.National`)
-    .in('status', ['APPROVED', 'PUBLISHED'])
-    .order('document_date', { ascending: false });
-
-  if (regError) {
-    console.error('Failed to query regulatory sources:', regError);
+export async function resolveApplicableRegulatoryParameters(p: ApplicableRegulatoryParams): Promise<RegulatoryResolutionResult> {
+  const gap = (reason: string): RegulatoryResolutionResult => ({ hasApprovedData: false, applicableSource: null,
+    approvedSources: [], applicableCharge: null, applicableTariff: null, status: 'DATA_GAP', gapReason: reason });
+  const end = p.throughDate || p.operatingDate;
+  if (!p.state || !p.discom || !p.voltageCategory || !validDate(p.operatingDate) || !validDate(end) || end < p.operatingDate)
+    return gap('Site jurisdiction, voltage and valid operating period are required.');
+  const db = createAdminClient();
+  // Query every overlapping record: a newer overlapping version is an ambiguity, not a silent override.
+  const results = await Promise.all(['open_access_charges','discom_tariffs'].map(table => db.from(table)
+    .select('*, regulatory_sources!inner(*)').eq('state',p.state).eq('discom',p.discom)
+    .eq('voltage_category',p.voltageCategory).lte('effective_from',end)
+    .or(`effective_until.is.null,effective_until.gte.${p.operatingDate}`)));
+  if (results.some(r => r.error)) return gap('Regulatory evidence could not be verified.');
+  const chosen: any[] = [];
+  for (let i=0; i<results.length; i++) {
+    const candidates = (results[i].data || []).filter((r: any) => {
+      const s = r.regulatory_sources;
+      return r.state === p.state && r.discom === p.discom && r.voltage_category === p.voltageCategory &&
+        r.is_demo === (p.isDemo === true) && r.regulatory_source_id === s?.id &&
+        ['APPROVED','PUBLISHED'].includes(s?.status) && s.is_demo === (p.isDemo === true) &&
+        s.regulatory_domain === (i === 0 ? 'OPEN_ACCESS' : 'TARIFF') &&
+        validDate(r.effective_from) && r.effective_from <= end && (!r.effective_until || r.effective_until >= p.operatingDate);
+    });
+    if (candidates.length !== 1) return gap('Missing or overlapping approved versions for the requested voltage and period.');
+    const r = candidates[0];
+    if (!sourceApplies(r.regulatory_sources,p) || r.effective_from > p.operatingDate ||
+        (r.effective_until !== null && (!validDate(r.effective_until) || r.effective_until < end)))
+      return gap('Source approval or effective dates do not establish authority for the entire period.');
+    const fields = i === 0 ? ['cross_subsidy_surcharge_inr_per_kwh','additional_surcharge_inr_per_kwh',
+      'wheeling_charge_inr_per_kwh','transmission_charge_inr_per_kwh','banking_charge_pct'] :
+      ['energy_charge_normal_inr_per_kwh','fixed_charge_inr_per_kva_month'];
+    if (!fields.every(k => finiteNumber(r[k]) && Number(r[k]) >= 0) || (i === 0 && Number(r.banking_charge_pct)>100))
+      return gap('Approved numerical parameters are incomplete or invalid.');
+    chosen.push(r);
   }
+  const sources = Array.from(new Map(chosen.map(r => [r.regulatory_source_id,r.regulatory_sources])).values());
+  return { hasApprovedData: true, applicableSource: chosen[0].regulatory_sources, approvedSources: sources,
+    applicableCharge: chosen[0], applicableTariff: chosen[1], status: 'RESOLVED' };
+}
 
-  // 2. Fetch applicable Open Access Charges (Strict Approval Gate + Strict Voltage Matching)
-  const { data: chargesList, error: chargesErr } = await adminClient
-    .from('open_access_charges')
-    .select('*, regulatory_sources!inner(id, status)')
-    .eq('state', state)
-    .eq('discom', discom)
-    .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
-    .lte('effective_from', operatingDate)
-    .order('effective_from', { ascending: false });
-
-  if (chargesErr) {
-    console.error('Failed to query open access charges:', chargesErr);
-  }
-
-  // Exact voltage match ONLY — zero fallback to chargesList[0]
-  const applicableCharge = chargesList?.find(
-    (c) =>
-      c.voltage_category === voltageCategory &&
-      (!c.effective_until || c.effective_until >= operatingDate)
-  ) || null;
-
-  // 3. Fetch applicable Retail DISCOM Tariffs (Strict Approval Gate + Strict Voltage Matching)
-  const { data: tariffsList, error: tariffErr } = await adminClient
-    .from('discom_tariffs')
-    .select('*, regulatory_sources!inner(id, status)')
-    .eq('state', state)
-    .eq('discom', discom)
-    .in('regulatory_sources.status', ['APPROVED', 'PUBLISHED'])
-    .lte('effective_from', operatingDate)
-    .order('effective_from', { ascending: false });
-
-  if (tariffErr) {
-    console.error('Failed to query DISCOM tariffs:', tariffErr);
-  }
-
-  // Exact voltage match ONLY — zero fallback to tariffsList[0]
-  const applicableTariff = tariffsList?.find(
-    (t) =>
-      t.voltage_category === voltageCategory &&
-      (!t.effective_until || t.effective_until >= operatingDate)
-  ) || null;
-
-  const hasApprovedSources = Boolean(regSources && regSources.length > 0);
-  const isFullyResolved = Boolean(applicableCharge && applicableTariff);
-
-  let status: 'RESOLVED' | 'DATA_GAP' | 'CONFIG_REQUIRED' = 'RESOLVED';
-  let gapReason: string | undefined;
-
-  if (!hasApprovedSources) {
-    status = 'DATA_GAP';
-    gapReason = `No approved regulatory source orders found for jurisdiction ${state} / ${discom}.`;
-  } else if (!applicableTariff || !applicableCharge) {
-    status = 'DATA_GAP';
-    gapReason = `No approved tariff or open access charges found matching voltage ${voltageCategory} for operating date ${operatingDate}.`;
-  }
-
-  return {
-    hasApprovedData: hasApprovedSources,
-    applicableSource: regSources?.[0] || null,
-    approvedSources: regSources || [],
-    applicableCharge,
-    applicableTariff,
-    status,
-    gapReason,
-  };
+export function applicableObligations(rows: any[], resolution: RegulatoryResolutionResult, p: ApplicableRegulatoryParams): any[] {
+  if (resolution.status !== 'RESOLVED') return [];
+  const sources = new Map(resolution.approvedSources.map(s => [s.id,s]));
+  // Obligations have no voltage field; only a source bound to the resolved voltage can establish applicability.
+  return rows.filter(r => r.is_demo === (p.isDemo === true) && r.state === p.state &&
+    (!r.discom || r.discom === p.discom) && ['PENDING','IN_PROGRESS','COMPLETED'].includes(r.status) &&
+    validDate(r.deadline_date) && r.deadline_date >= p.operatingDate &&
+    sourceApplies(sources.get(r.regulatory_source_id), { ...p, operatingDate: r.deadline_date, throughDate: r.deadline_date }));
 }

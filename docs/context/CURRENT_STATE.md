@@ -1,15 +1,16 @@
 # CURRENT_STATE.md — Verified Repository State
 
-> **Last Updated**: September 2026 (Final Authority & Auditability Pass)  
-> **Verification Baseline**: Full clean database reset, auth user seeding, linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (14 files, 136 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), and Next.js production build (`npm run build`) executed cleanly.
+> **Last Updated**: September 9, 2026 (Astra Passes 1–3 and Final Closure)
+> **Verification Baseline**: Clean database reset and auth user seeding completed before final verification. Linting (`npm run lint`), typecheck (`npm run typecheck`), Vitest (21 files, 257 tests), Pytest (1 file, 7 tests), Playwright Non-Demo (3 files, 12 tests), Playwright Demo (1 file, 12 tests), Next.js production build (`npm run build`), and context-map validation all executed successfully.
 
 ## 1. Verified Metrics
-- **Database Migrations**: 18 applied SQL migrations (`20260907000001` through `20260907000018_atomic_org_creation_and_context_truth.sql`).
+- **Database Migrations**: 21 applied SQL migrations (`20260907000001` through `20260909000021_pass3_adversarial_boundaries.sql`).
 - **Next.js Production Build**: Succeeded (`npm run build`, exit code 0). 39 routes dynamically compiled on demand.
 - **ESLint**: 0 errors (`npm run lint`, exit code 0).
 - **TypeScript (`tsc --noEmit`)**: 0 errors (`npm run typecheck`, exit code 0).
-- **Automated Test Scorecard (167 / 167 passing)**:
-  - **Vitest**: **136 passed** (14 files, 100% pass rate) across unit, integration, live PostgreSQL RLS, audit chaining, adversarial API, surgical fixes & BESS, authority & auditability, and audit & onboarding truth suites.
+- **Database Security Catalog**: PASS. All nine audited tenant tables have RLS enabled; no non-SELECT policies remain on audited tables; all public `SECURITY DEFINER` functions have the fixed search path; no client execution privilege remains on mutating definers; no client table write grants remain on audited tables.
+- **Automated Test Scorecard (288 / 288 passing)**:
+  - **Vitest**: **257 passed** (21 files, 100% pass rate) across unit, integration, live PostgreSQL RLS, audit chaining, adversarial API, domain-safety, authority, and auditability suites.
   - **Python Pytest**: **7 passed** (1 file: `services/analytics/tests/test_analytics.py`, 100% pass rate) with explicit `ANALYTICS_SERVICE_TOKEN`.
   - **Playwright Non-Demo (Production-like)**: **12 passed** across 3 test files (`persistence_journey.spec.ts`: 1 passed; `real_auth_workflows.spec.ts`: 10 passed; `registration_journey.spec.ts`: 1 passed).
   - **Playwright Demo Mode**: **12 passed** (1 file: `demo_smoke.spec.ts`: 12 passed with `NEXT_PUBLIC_DEMO_MODE=true`).
@@ -29,7 +30,7 @@
 | **Alert & Notification Hub** | `VERIFIED_LOCAL` (Ack/Audit) / `INTERNAL_VALIDATION` (Conditions) / `PRODUCTION_CONFIG_REQUIRED` (Outbound) | Alert persistence/retrieval verified local; atomic ack verified local; automated dispatch not implemented; outbound SMTP required. |
 | **Common Report System** | `VERIFIED_IMPLEMENTED` | Fail-closed report generation. Rejects non-96 blocks or unpublishable quality; signed download URLs. |
 | **Admin Console** | `VERIFIED_IMPLEMENTED` | Evidence-based launch checklist, non-platform admin access blocked, analyst expiry enforced. |
-| **Grid Intelligence** | `INTERNAL_VALIDATION` | Dynamic highest-cost window & min/max prices derived from 96 blocks; approved DISCOM tariff required; live non-demo provenance `GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0`; live IEX clearing feed pending. |
+| **Grid Intelligence** | `INTERNAL_VALIDATION` | Live output is suppressed unless a validated live model and authoritative price feed are available. No synthetic or internally unvalidated 96-block forecast is published; live IEX clearing feed and model validation remain pending. |
 | **DSM Risk Monitor** | `INTERNAL_VALIDATION` | 15-minute drawal deviation calculation; rules resolved via `regulatory_domain = 'DSM'`; monetary exposure suppressed with `REGULATORY_CONFIGURATION_REQUIRED` on missing approved rule; canonical `dsm_evaluation_runs` persisted for zero-incident proof. |
 | **BESS Arbitrage** | `SPECIALIST_REVIEW_REQUIRED` | Live BESS solver execution, browser SOC ignored, asset constraints `min_soc_pct <= current_soc_pct <= max_soc_pct`, and `bess_signal_runs` persistence verified local; electrochemical engineer review pending. |
 | **Open Access Compliance** | `SPECIALIST_REVIEW_REQUIRED` | Relational rules engine, approval gate, voltage matching, dynamic obligations; legal signoff pending. |
@@ -51,8 +52,8 @@
 - **Real Non-Demo E2E State Machine Proof (Item 3)**: `persistence_journey.spec.ts` proves transition from CALIBRATING to ACTIVE via 7th 96-block day upload through the real ingestion API.
 - **Canonical Audit Write Contract (Item 4)**: `recordAuditEvent()` emits only real schema columns; `chain_audit_log` uses standard SHA-256.
 - **Zero Free Paid Entitlements (Item 5)**: New customer organisations start with 0 active paid entitlements until a validated payment webhook executes.
-- **Grid Quality Date & Approved Tariff Authority (Item 6)**: `/api/forecast` evaluates quality for the requested `operatingDate` only, enforces exact voltage category and effective dates with approved regulatory source, and emits live model provenance `GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0`.
-- **Live Grid UI Fabrication Removed (Item 7)**: Removed fake 0.75 multiplier and fake PASSED defaults; surfaces DATA GAP and CONFIGURATION REQUIRED.
+- **Grid Quality Date & Approved Tariff Authority (Item 6)**: `/api/forecast` evaluates quality for the requested `operatingDate` only, enforces exact voltage category and effective dates with approved regulatory sources, and suppresses live output with `LIVE_MODEL_AND_PRICE_FEED_REQUIRED` until validated model/feed authority exists.
+- **Live Grid UI Fabrication Removed (Item 7)**: Removed fabricated forecast fallbacks and fake PASSED defaults; the UI surfaces the explicit suppression state and does not render forecast blocks while live authority is unavailable.
 - **DSM Rule Domain Resolution (Item 8)**: Resolves rules via `regulatory_domain = 'DSM'`, fails closed on unapproved rules, renders actual status.
 - **BESS Safety Authority (Item 9)**: Ignores browser `initialSocPct`, enforces `min_soc_pct <= current_soc_pct <= max_soc_pct`, returns `SAFETY_INTERLOCK`.
 - **Product Readiness Consistency (Item 10)**: Single source of truth in `src/lib/constants/index.ts`.

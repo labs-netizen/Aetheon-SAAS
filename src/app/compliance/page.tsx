@@ -22,7 +22,8 @@ import { PRODUCTS } from '@/lib/constants';
 export default function CompliancePage() {
   const { currentSite, isEntitled } = useSite();
   const [filterState, setFilterState] = useState('ALL');
-  const [complianceData, setComplianceData] = useState<any>(null);
+  const [complianceDataResponse, setComplianceData] = useState<any>(null);
+  const complianceData = complianceDataResponse && complianceDataResponse.requestSiteId === currentSite?.id ? complianceDataResponse.data : null;
   const [isLoading, setIsLoading] = useState(false);
   const [complianceError, setComplianceError] = useState<string | null>(null);
 
@@ -41,7 +42,7 @@ export default function CompliancePage() {
         return res.json();
       })
       .then((data) => {
-        if (isMounted) setComplianceData(data);
+        if (isMounted) setComplianceData({ requestSiteId: currentSite.id, data });
       })
       .catch((err) => {
         console.warn('Compliance API query error:', err);
@@ -163,7 +164,7 @@ export default function CompliancePage() {
 
           <div className="flex items-center gap-2">
             {isLoading && <RefreshCw className="w-3.5 h-3.5 text-sky-400 animate-spin" />}
-            <span className="text-xs text-slate-400 font-mono">Jurisdiction: {currentSite?.state || 'Maharashtra'}</span>
+            <span className="text-xs text-slate-400 font-mono">Jurisdiction: {currentSite?.state || 'UNCONFIGURED'}</span>
           </div>
         </div>
 
@@ -187,13 +188,13 @@ export default function CompliancePage() {
           <CardHeader>
             <div>
               <CardTitle className="text-sky-400">
-                Open Access Landed Charges Tracker - {currentSite?.state || 'Maharashtra'} ({currentSite?.discom || 'MSEDCL'})
+                Open Access Landed Charges Tracker - {currentSite?.state || 'UNCONFIGURED'} ({currentSite?.discom || 'UNCONFIGURED'})
               </CardTitle>
               <CardDescription>
-                Applicable tariff components per unit for {currentSite?.voltage_category || '33kV'} connection from approved records.
+                Applicable tariff components per unit for {currentSite?.voltage_category || 'UNCONFIGURED'} connection from approved records.
               </CardDescription>
             </div>
-            <Badge variant="outline">Effective: FY 2024-25</Badge>
+            <Badge variant="outline">Effective: {charges?.effective_from || 'UNVERIFIED'}</Badge>
           </CardHeader>
 
           {charges ? (
@@ -219,7 +220,7 @@ export default function CompliancePage() {
                 <div className="text-lg font-bold font-mono text-slate-200">
                   ₹{Number(charges.wheeling_charge_inr_per_kwh).toFixed(2)} / kWh
                 </div>
-                <span className="text-[10px] text-slate-500">{currentSite?.voltage_category || '33kV'} level</span>
+                <span className="text-[10px] text-slate-500">{currentSite?.voltage_category || 'UNCONFIGURED'} level</span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded border border-slate-800">

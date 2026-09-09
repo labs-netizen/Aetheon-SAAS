@@ -11,9 +11,9 @@ The **Aetheon Energy Intelligence Platform** processes sensitive C&I operational
 
 ## 2. Automated Security & Isolation Test Suite
 
-A comprehensive automated security test suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (152/152 passing):
+A comprehensive automated verification suite has been implemented across Vitest, live PostgreSQL RLS, Pytest solvers, and Playwright E2E suites (288/288 passing). The final database catalog inspection also passed with zero violations across the audited RLS, definer search-path, execution-ACL, and table-grant invariants.
 
-### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 11/11 Passing)
+### 2.1 Live PostgreSQL Engine RLS Verification (`tests/integration/supabase_rls.test.ts` - 14/14 Passing)
 1. **Multi-Tenant Isolation**: An authenticated client representing User B in Organisation B querying `sites` or `organisations` receives zero records belonging to Organisation A.
 2. **Cross-Tenant Mutation Blocking**: User B attempting to insert or update telemetry under Organisation A's ID is rejected by PostgreSQL RLS policy `sites_isolation_insert` with an engine-level error.
 3. **Profile Boundary Isolation**: User B can only view profiles within their own organization or their own user record, preventing corporate espionage across tenants.
@@ -72,7 +72,7 @@ A comprehensive automated security test suite has been implemented across Vitest
 ## 3. Implemented Protections
 
 ### 3.1 Multi-Tenant & Site-Level Isolation
-- **Row Level Security (RLS)**: Enforced directly at the PostgreSQL layer across 11 migrations. All tenant tables (`sites`, `interval_data_96`, `subscriptions`, `alerts`, `audit_logs`, `compliance_obligations`, `report_records`) contain an `organisation_id` foreign key.
+- **Row Level Security (RLS)**: Enforced directly at the PostgreSQL layer in the final 21-migration schema. All tenant tables (`sites`, `interval_data_96`, `subscriptions`, `alerts`, `audit_logs`, `compliance_obligations`, `report_records`) contain an `organisation_id` foreign key.
 - **Site-Level Access Helper**: `has_site_access(p_user_id, p_site_id)` checks both explicit entries in `site_access` and organisation administration privileges, completely closing site-bleed vulnerabilities.
 - **Session Scoping**: Authenticated queries resolve tenant membership via the `memberships` table. Direct cross-tenant querying is prevented at the database kernel level.
 - **Private Storage**: Supabase Storage buckets for CSV uploads and report files are configured as private with signed URLs for authorized users only.

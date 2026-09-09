@@ -4,7 +4,8 @@ Defines strongly-typed request and response contracts for 96-block numerical pro
 """
 
 from typing import List, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict, field_validator
+from datetime import date
 
 
 class BlockData(BaseModel):
@@ -14,7 +15,18 @@ class BlockData(BaseModel):
     value: float = Field(..., description="Numerical value for the block")
 
 
-class GridForecastRequest(BaseModel):
+class DatedNumericalRequest(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    is_demo: bool = False
+
+    @field_validator("operating_date", check_fields=False)
+    @classmethod
+    def calendar_date(cls, value):
+        date.fromisoformat(value)
+        return value
+
+
+class GridForecastRequest(DatedNumericalRequest):
     site_id: str = Field(..., min_length=1)
     operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD")
     contract_demand_kw: float = Field(..., gt=0)
@@ -38,11 +50,14 @@ class GridForecastResponse(BaseModel):
     operating_date: str
     model_version: str = "DEMO_BASELINE_v1.0"
     model_generation_time: str
-    average_price_inr_per_mwh: float
-    peak_demand_kw: float
-    peak_demand_block: int
+    average_price_inr_per_mwh: Optional[float] = None
+    peak_demand_kw: Optional[float] = None
+    peak_demand_block: Optional[int] = None
     blocks: List[GridForecastBlock]
-    data_quality: str = "PASSED"
+    is_suppressed: bool = False
+    suppression_reason: Optional[str] = None
+    confidence_status: str = "DEMO_UNCALIBRATED"
+    data_quality: str = "DEMO_UNVERIFIED"
     freshness: str = "DEMO"
 
 
@@ -51,17 +66,24 @@ class DSMDeviationBlock(BaseModel):
     scheduled_drawal_kw: float
     actual_drawal_kw: float
     deviation_kw: float
-    deviation_pct: float
+    deviation_pct: Optional[float] = None
     risk_level: str  # NORMAL, WATCH, HIGH, CRITICAL
-    estimated_penalty_inr: float
+    estimated_penalty_inr: Optional[float] = None
 
 
-class DSMCalculationRequest(BaseModel):
+class DSMCalculationRequest(DatedNumericalRequest):
     site_id: str = Field(..., min_length=1)
     operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     scheduled_drawal_kw: List[float] = Field(..., min_length=96, max_length=96)
     actual_drawal_kw: List[float] = Field(..., min_length=96, max_length=96)
     contract_demand_kw: float = Field(..., gt=0)
+
+    @field_validator("scheduled_drawal_kw", "actual_drawal_kw")
+    @classmethod
+    def nonnegative_drawal(cls, values):
+        if any(v < 0 for v in values):
+            raise ValueError("Negative drawal requires a separately validated export model")
+        return values
 
 
 class DSMCalculationResponse(BaseModel):
@@ -74,12 +96,15 @@ class DSMCalculationResponse(BaseModel):
     blocks_in_watch: int
     blocks_in_high: int
     blocks_in_critical: int
-    estimated_total_exposure_inr: float
+    estimated_total_exposure_inr: Optional[float] = None
+    model_version: str = "DSM_TECHNICAL_DEVIATION_v2.0"
+    risk_basis: str = "TECHNICAL_HEURISTIC_NOT_REGULATORY"
+    monetary_exposure_status: str = "REGULATORY_CONFIGURATION_REQUIRED"
     blocks: List[DSMDeviationBlock]
     status: str = "COMPLETED"
 
 
-class BESSSolverRequest(BaseModel):
+class BESSSolverRequest(DatedNumericalRequest):
     battery_id: str = Field(..., min_length=1)
     site_id: str = Field(..., min_length=1)
     operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
@@ -92,6 +117,10 @@ class BESSSolverRequest(BaseModel):
     discharge_efficiency: float = Field(default=0.92, gt=0, le=1.0)
     degradation_cost_per_cycle_inr: float = Field(default=1500.0, ge=0)
     prices_inr_per_mwh: List[float] = Field(..., min_length=96, max_length=96)
+
+    maintenance_lock_active: bool = False
+    telemetry_stale: bool = False
+    interconnection_restricted: bool = False
 
     @model_validator(mode="after")
     def validate_soc_bounds(self) -> "BESSSolverRequest":
@@ -115,6 +144,11 @@ class BESSSolverResponse(BaseModel):
     battery_id: str
     site_id: str
     solver_version: str = "BESS_ADVISORY_HEURISTIC_DEMO_v1.0"
+    operating_date: str
+    is_suppressed: bool = False
+    suppression_reason: Optional[str] = None
+    power_basis: str = "AC_GRID_KW"
+    terminal_soc_policy: str = "RETURN_TO_INITIAL_SOC"
     is_feasibility_verified: bool
     gross_arbitrage_value_inr: float
     estimated_degradation_cost_inr: float

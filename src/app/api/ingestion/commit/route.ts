@@ -121,6 +121,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const operatingDateStr = rowsToIngest[0].operating_date;
+    const operatingDayEnd = Date.parse(`${operatingDateStr}T00:00:00+05:30`) + 86400000;
+    if (!authResult.isDemo && (!Number.isFinite(operatingDayEnd) || operatingDayEnd > Date.now())) {
+      return NextResponse.json({ error: 'INCOMPLETE_OPERATING_DAY',
+        message: 'Live observations require a fully completed 96-block operating day in Asia/Kolkata.' }, { status: 422 });
+    }
     const adminClient = createAdminClient();
 
     // 5. Store Original File Privately in tenant-uploads bucket (fail closed on error)
@@ -144,9 +150,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Compute Real Freshness Status from Operating Date
-    const operatingDateStr = rowsToIngest[0]?.operating_date || new Date().toISOString().split('T')[0];
-    const opDate = new Date(operatingDateStr);
-    const diffHours = (Date.now() - opDate.getTime()) / (1000 * 60 * 60);
+    const diffHours = (Date.now() - operatingDayEnd) / (1000 * 60 * 60);
     const freshnessStatus = diffHours <= 24 ? 'RECENT' : diffHours <= 168 ? 'DELAYED' : 'STALE';
 
     // Format rows for JSONB RPC

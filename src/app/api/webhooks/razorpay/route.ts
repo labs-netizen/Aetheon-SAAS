@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyWebhookSignature, isWebhookReplay, recordProcessedWebhook } from '@/lib/security/webhook';
+import { verifyWebhookSignature } from '@/lib/security/webhook';
+import crypto from 'crypto';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function POST(req: NextRequest) {
   try {
     const rawBody = await req.text();
     const signature = req.headers.get('x-razorpay-signature');
-    const eventId = req.headers.get('x-razorpay-event-id');
+    // Delivery headers are unsigned; deduplicate by the authenticated body.
+    const eventId = crypto.createHash('sha256').update(rawBody).digest('hex');
 
     // Fail closed: Webhook secret must be explicitly configured in runtime
     const configuredSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
@@ -39,57 +41,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const effectiveEventId = eventId || eventPayload.id || eventPayload?.payload?.payment?.entity?.id;
-
-    if (!effectiveEventId) {
-      return NextResponse.json(
-        { error: 'INVALID_EVENT', message: 'No resolvable event ID present in webhook payload' },
-        { status: 400 }
-      );
-    }
-
-    // 2. Replay Check
-    if (isWebhookReplay(effectiveEventId, eventPayload.created_at)) {
-      return NextResponse.json(
-        { status: 'already_processed', reason: 'Replay or duplicated event' },
-        { status: 200 }
-      );
-    }
+    const effectiveEventId = eventId;
 
     const supabase = createAdminClient();
     const eventType: string = eventPayload.event || 'unknown';
 
     const paymentEntity = eventPayload?.payload?.payment?.entity || {};
-    const subscriptionEntity = eventPayload?.payload?.subscription?.entity || {};
-    const notes = paymentEntity.notes || subscriptionEntity.notes || {};
-    const providerRef = subscriptionEntity.id || paymentEntity.order_id || paymentEntity.id || effectiveEventId;
-
-    // Resolve authoritative local checkout session mapping (prevent arbitrary notes spoofing)
-    const { data: checkoutSession } = await supabase
-      .from('billing_checkout_sessions')
-      .select('organisation_id, site_id, product_id, amount_paise')
-      .eq('provider_reference', providerRef)
-      .maybeSingle();
-
-    const orgId = checkoutSession?.organisation_id || notes.org_id || notes.organisation_id || null;
-    const siteId = checkoutSession?.site_id || notes.site_id || null;
-    const rawProductId = checkoutSession?.product_id || notes.product_id || 'GRID_INTELLIGENCE';
-    const productId =
-      rawProductId === 'OPEN_ACCESS_COMPLIANCE' ? 'OA_COMPLIANCE' :
-      rawProductId === 'DSM_MONITOR' ? 'DSM_RISK' :
-      rawProductId;
-    const amountPaise = checkoutSession ? Number(checkoutSession.amount_paise) : Number(paymentEntity.amount || subscriptionEntity.amount || 0);
+    const providerRef = paymentEntity.order_id || null;
 
     // 3. Atomic Database RPC (service_role privileged): Idempotency lock + State Mutation
     const { data: rpcResult, error: rpcError } = await supabase.rpc('process_razorpay_webhook_atomic', {
       p_event_id: effectiveEventId,
       p_event_type: eventType,
       p_payload: eventPayload,
-      p_org_id: orgId,
-      p_site_id: siteId,
-      p_product_id: productId,
+      p_org_id: null,
+      p_site_id: null,
+      p_product_id: null,
       p_provider_ref: providerRef,
-      p_amount_paise: amountPaise,
+      p_amount_paise: null,
     });
 
     if (rpcError) {
@@ -109,7 +78,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (rpcResult?.status === 'QUARANTINED' || rpcResult?.quarantined === true) {
-      recordProcessedWebhook(effectiveEventId);
       return NextResponse.json(
         {
           error: 'UNMAPPED_BILLING_REFERENCE',
@@ -122,7 +90,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    recordProcessedWebhook(effectiveEventId);
 
     return NextResponse.json({ received: true, status: 'processed', rpcResult }, { status: 200 });
   } catch (err) {

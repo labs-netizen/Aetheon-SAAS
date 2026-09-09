@@ -24,7 +24,8 @@ export default function DSMPage() {
   const { currentSite, isEntitled } = useSite();
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(true);
   const [acknowledgedIncidents, setAcknowledgedIncidents] = useState<Set<string>>(new Set());
-  const [dsmData, setDsmData] = useState<any>(null);
+  const [dsmDataResponse, setDsmData] = useState<any>(null);
+  const dsmData = dsmDataResponse && dsmDataResponse.requestSiteId === currentSite?.id ? dsmDataResponse.data : null;
   const [isLoading, setIsLoading] = useState(false);
 
   const [dsmError, setDsmError] = useState<string | null>(null);
@@ -35,8 +36,9 @@ export default function DSMPage() {
     let isMounted = true;
     setIsLoading(true);
     setDsmError(null);
+    setAcknowledgedIncidents(new Set());
 
-    const targetDate = new Date().toISOString().substring(0, 10);
+    const targetDate = new Date(Date.now()+330*60000-(currentSite.is_demo ? 0 : 86400000)).toISOString().substring(0, 10);
     
     // In demo mode only, generate deterministic synthetic 96-block arrays
     const isDemo = Boolean(currentSite.is_demo);
@@ -66,7 +68,7 @@ export default function DSMPage() {
       })
       .then((data) => {
         if (isMounted) {
-          setDsmData(data);
+          setDsmData({ requestSiteId: currentSite.id, data });
           if (Array.isArray(data.incidents)) {
             const persistedAcks = new Set<string>();
             data.incidents.forEach((inc: any) => {
@@ -93,12 +95,13 @@ export default function DSMPage() {
 
   // Use backend incidents if available, or fallback ONLY in demo mode
   const incidents = useMemo(() => {
+    if (dsmData?.is_suppressed || dsmData?.incidents?.length === 0) return [];
     const isDemo = Boolean(currentSite?.is_demo);
     if (dsmData?.incidents && Array.isArray(dsmData.incidents) && dsmData.incidents.length > 0) {
       return dsmData.incidents.map((inc: any, i: number) => {
         const maxDev = inc.max_deviation_pct !== undefined && inc.max_deviation_pct !== null
           ? `+${Number(inc.max_deviation_pct).toFixed(1)}%`
-          : (isDemo ? '+15.0%' : 'DATA GAP');
+          : 'UNDEFINED (zero schedule)';
         const excessEnergy = inc.total_excess_energy_kwh !== undefined && inc.total_excess_energy_kwh !== null
           ? inc.total_excess_energy_kwh
           : (inc.excess_energy_kwh !== undefined ? inc.excess_energy_kwh : (isDemo ? 225.0 : null));
@@ -152,6 +155,7 @@ export default function DSMPage() {
 
   // Deviation blocks
   const deviationBlocks = useMemo(() => {
+    if (dsmData?.is_suppressed) return [];
     const isDemo = Boolean(currentSite?.is_demo);
     if (dsmData?.blocks && Array.isArray(dsmData.blocks) && dsmData.blocks.length > 0) {
       return dsmData.blocks.map((b: any) => {
@@ -261,7 +265,7 @@ export default function DSMPage() {
               )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Real-time 15-minute scheduled vs. actual deviation tracking under CERC/SERC guidelines.
+              Completed-day 15-minute schedule versus actual deviations. Risk bands are technical heuristics, not regulatory limits.
             </p>
           </div>
 

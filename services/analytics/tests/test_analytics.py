@@ -35,6 +35,7 @@ def test_health_check():
 
 def test_grid_forecast_96_blocks():
     req = GridForecastRequest(
+        is_demo=True,
         site_id="site-demo-001",
         operating_date="2026-09-08",
         contract_demand_kw=2000.0
@@ -58,6 +59,7 @@ def test_dsm_deviation_calculation():
     actual[30] = 1050.0  # 5% excess (Watch risk)
 
     req = DSMCalculationRequest(
+        is_demo=True,
         site_id="site-demo-001",
         operating_date="2026-09-08",
         scheduled_drawal_kw=scheduled,
@@ -78,6 +80,7 @@ def test_bess_advisory_physical_feasibility():
     prices = [2500.0] * 24 + [4500.0] * 48 + [8500.0] * 24
 
     req = BESSSolverRequest(
+        is_demo=True,
         battery_id="bess-001",
         site_id="site-001",
         operating_date="2026-09-08",

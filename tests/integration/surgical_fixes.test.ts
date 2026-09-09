@@ -254,7 +254,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       expect(res.status).toBe(422);
       const json = await res.json();
       expect(json.error).toBe('REPORT_NOT_PUBLISHABLE');
-      expect(json.reason).toBe('DATA_GAP');
+      expect(json.reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
     });
 
     it('rejects report generation when quality status is BLOCKED or missing', async () => {
@@ -322,10 +322,10 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       expect(res.status).toBe(422);
       const json = await res.json();
       expect(json.error).toBe('REPORT_NOT_PUBLISHABLE');
-      expect(json.reason).toContain('QUALITY_GATE');
+      expect(json.reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
     });
 
-    it('successfully generates report when run has 96 blocks and PUBLISHABLE quality', async () => {
+    it('suppresses a live report even with 96 blocks and PUBLISHABLE telemetry quality', async () => {
       const testDate = '2026-09-22';
       const { data: run } = await adminClient
         .from('grid_forecast_runs')
@@ -385,10 +385,10 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       });
 
       const res = await reportsGeneratePost(req);
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(422);
       const json = await res.json();
-      expect(json.success).toBe(true);
-      expect(json.reportId).toBeDefined();
+      expect(json.error).toBe('REPORT_NOT_PUBLISHABLE');
+      expect(json.reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
     });
   });
 
@@ -397,7 +397,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
   // =========================================================================
   describe('6. DSM Evaluation-Run Proof (Zero Incidents vs Data Gap)', () => {
     it('persists a dsm_evaluation_runs record when zero incidents are detected', async () => {
-      const dsmDate = '2026-09-23';
+      const dsmDate = '2026-08-23';
 
       // Live site requires persisted 96 intervals in interval_data_96
       const intervalRows = [];
@@ -406,7 +406,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
           site_id: nonDemoSiteId,
           operating_date: dsmDate,
           block_index: b,
-          timestamp_utc: new Date(Date.parse(`${dsmDate}T00:00:00Z`) + (b - 1) * 15 * 60000).toISOString(),
+          timestamp_utc: new Date(Date.parse(`${dsmDate}T00:00:00+05:30`) + (b - 1) * 15 * 60000).toISOString(),
           load_kw: 2000,
           scheduled_drawal_kw: 2000,
           actual_drawal_kw: 2000, // 0% deviation -> zero incidents
@@ -472,7 +472,8 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
         .select('*')
         .eq('id', repJson.reportId)
         .single();
-      expect(reportDoc.summary.status).toBe('NO_MATERIAL_INCIDENTS');
+      expect(reportDoc.summary.totalIncidents).toBe(0);
+      expect(reportDoc.summary.monetaryExposureAuthoritative).toBe(false);
     });
 
     it('returns REPORT_DATA_GAP when no valid DSM evaluation run exists', async () => {
@@ -526,7 +527,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
         product_id: 'GRID_INTELLIGENCE',
         provider_reference: orderId,
         amount_paise: 1499900,
-        provider_mode: 'RAZORPAY_TEST',
+        provider_mode: 'RAZORPAY_LIVE',
         status: 'CREATED',
       });
 
@@ -541,7 +542,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
               order_id: orderId,
               amount: 1499900,
               currency: 'INR',
-              status: 'captured',
+              status: 'captured', captured: true,
               notes: {
                 organisation_id: brandNewOrgId,
                 product_ids: JSON.stringify(['GRID_INTELLIGENCE']),
@@ -629,7 +630,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
               order_id: unknownOrderId,
               amount: 500000,
               currency: 'INR',
-              status: 'captured',
+              status: 'captured', captured: true,
               notes: {
                 organisation_id: '00000000-0000-0000-0000-000000000000',
               },
@@ -659,7 +660,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       const { data: eventRecord } = await adminClient
         .from('processed_webhook_events')
         .select('*')
-        .eq('id', unknownPaymentId)
+        .eq('id', CryptoJS.SHA256(payloadStr).toString(CryptoJS.enc.Hex))
         .maybeSingle();
 
       expect(eventRecord).not.toBeNull();
@@ -729,7 +730,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       await adminClient.from('grid_forecast_blocks').insert(blocks96);
     });
 
-    it('executes live BESS solver without browser prices and persists bess_signal_runs', async () => {
+    it('suppresses live BESS without a verified price feed and interconnection authority', async () => {
       // POST without browser prices (server must resolve price curve and asset parameters)
       const req = new NextRequest('http://localhost:3000/api/bess', {
         method: 'POST',
@@ -746,22 +747,12 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       const res = await bessPost(req);
       expect(res.status).toBe(200);
       const json = await res.json();
-      expect(json.blocks).toHaveLength(96);
-      expect(json.gross_arbitrage_inr).toBeGreaterThanOrEqual(0);
-
-      // Verify run persisted in bess_signal_runs
-      const { data: persistedRun } = await adminClient
-        .from('bess_signal_runs')
-        .select('*')
-        .eq('battery_id', nonDemoBatteryId)
-        .eq('operating_date', bessDate)
-        .maybeSingle();
-
-      expect(persistedRun).not.toBeNull();
-      expect(persistedRun.gross_arbitrage_inr).toBe(json.gross_arbitrage_inr);
+      expect(json.is_suppressed).toBe(true);
+      expect(json.persisted).toBe(false);
+      expect(json.suppression_reason).toContain('LIVE_PRICE_AND_INTERCONNECTION_AUTHORITY_REQUIRED');
     });
 
-    it('generates BESS_PERFORMANCE_REPORT from persisted schema', async () => {
+    it('refuses BESS_PERFORMANCE_REPORT from unverified persisted runs', async () => {
       const repReq = new NextRequest('http://localhost:3000/api/reports/generate', {
         method: 'POST',
         headers: {
@@ -777,18 +768,8 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       });
 
       const repRes = await reportsGeneratePost(repReq);
-      expect(repRes.status).toBe(200);
-      const repJson = await repRes.json();
-      expect(repJson.success).toBe(true);
-      expect(repJson.reportId).toBeDefined();
-
-      const { data: reportDoc } = await adminClient
-        .from('report_records')
-        .select('*')
-        .eq('id', repJson.reportId)
-        .single();
-      expect(reportDoc.summary.assetId).toBe(nonDemoBatteryId);
-      expect(reportDoc.summary.solverVersion).toBeDefined();
+      expect(repRes.status).toBe(422);
+      expect((await repRes.json()).reason).toContain('LIVE_PRICE_AND_INTERCONNECTION_AUTHORITY_REQUIRED');
     });
 
     it('suppresses safely when price curve is missing for requested date', async () => {
@@ -809,7 +790,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.is_suppressed).toBe(true);
-      expect(json.suppression_reason).toContain('DATA_GAP');
+      expect(json.suppression_reason).toContain('LIVE_PRICE_AND_INTERCONNECTION_AUTHORITY_REQUIRED');
     });
 
     it('suppresses safely when BESS asset telemetry is stale', async () => {

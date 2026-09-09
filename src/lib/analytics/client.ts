@@ -14,6 +14,7 @@ if (!process.env.ANALYTICS_SERVICE_TOKEN && isProduction) {
 const effectiveToken = process.env.ANALYTICS_SERVICE_TOKEN || '';
 
 export interface GridForecastParams {
+  isDemo?: boolean;
   siteId: string;
   operatingDate: string;
   contractDemandKw: number;
@@ -22,6 +23,7 @@ export interface GridForecastParams {
 }
 
 export interface DSMCalculationParams {
+  isDemo?: boolean;
   siteId: string;
   operatingDate: string;
   scheduledDrawalKw: number[];
@@ -30,6 +32,7 @@ export interface DSMCalculationParams {
 }
 
 export interface BESSSolverParams {
+  isDemo?: boolean;
   batteryId: string;
   siteId: string;
   operatingDate: string;
@@ -84,6 +87,7 @@ async function callAnalyticsEndpoint<TResponse>(endpoint: string, payload: unkno
 
 export async function fetchGridForecast(params: GridForecastParams) {
   return callAnalyticsEndpoint('/v1/grid/forecast', {
+    is_demo: params.isDemo === true,
     site_id: params.siteId,
     operating_date: params.operatingDate,
     contract_demand_kw: params.contractDemandKw,
@@ -94,6 +98,7 @@ export async function fetchGridForecast(params: GridForecastParams) {
 
 export async function fetchDSMCalculation(params: DSMCalculationParams) {
   return callAnalyticsEndpoint('/v1/dsm/deviation', {
+    is_demo: params.isDemo === true,
     site_id: params.siteId,
     operating_date: params.operatingDate,
     scheduled_drawal_kw: params.scheduledDrawalKw,
@@ -104,6 +109,10 @@ export async function fetchDSMCalculation(params: DSMCalculationParams) {
 
 export async function fetchBESSAdvisory(params: BESSSolverParams) {
   return callAnalyticsEndpoint('/v1/bess/optimise-demo', {
+    is_demo: params.isDemo === true,
+    maintenance_lock_active: params.maintenanceLockActive === true,
+    telemetry_stale: params.telemetryStale === true,
+    interconnection_restricted: params.interconnectionRestricted === true,
     battery_id: params.batteryId,
     site_id: params.siteId,
     operating_date: params.operatingDate,

@@ -3,7 +3,7 @@
 > **Handoff Status**: Phase 1 Foundation, Final Authority & Auditability Pass, and End-to-End Functional SaaS V1 Verification Complete. Ready for Specialist Astra Takeover.  
 > **Engineering Tag**: `antigravity-authority-v1.4`  
 > **Date**: September 2026  
-> **Verification Status**: Real Local Supabase (PostgreSQL 17.6 + Auth + Storage + Kong) Active and Healthy; 121 Vitest Tests (13 test files, 100% Pass Rate), 7 Pytest Tests (1 file, 100% Pass Rate), 12 Playwright Non-Demo Tests (3 files, 100% Pass Rate), 12 Playwright Demo Tests (1 file, 100% Pass Rate) — **152 total automated tests at 100% pass rate**. All 39 Next.js App Routes Dynamically Compiling Cleanly (`npm run build` exit code 0). 15 Applied Migrations.
+> **Verification Status**: Real Local Supabase (PostgreSQL 17.6 + Auth + Storage + Kong) active and healthy; 257 Vitest tests (21 files), 7 Pytest tests (1 file), 12 Playwright Non-Demo tests (3 files), and 12 Playwright Demo tests (1 file) — **288 total automated tests at 100% pass rate**. Lint, typecheck, the 39-route Next.js production build, context-map validator, and final database security catalog checks passed. 21 migrations applied.
 
 ---
 
@@ -11,7 +11,7 @@
 
 Antigravity has executed the comprehensive final authority, auditability, and functional blocker corrective pass on the Aetheon platform. The application is a genuinely connected, persistent, locally functional SaaS V1 strictly aligned with [docs/PRODUCT_SPECIFICATION.md](docs/PRODUCT_SPECIFICATION.md):
 
-- **Live Local Supabase Architecture**: Running in Docker on Windows (ports mapped to 15431–15437 to bypass Hyper-V exclusions). PostgreSQL 17.6 database is fully migrated with 15 migrations (`20260907000001` through `20260907000015_authority_and_auditability.sql`) and seeded with tenant organizations, sites, site access grants, discom tariffs, regulatory records, verified CEA emission factors, and atomic transactional RPCs.
+- **Live Local Supabase Architecture**: Running in Docker on Windows (ports mapped to 15431–15437 to bypass Hyper-V exclusions). PostgreSQL 17.6 is fully migrated with 21 migrations (`20260907000001` through `20260909000021_pass3_adversarial_boundaries.sql`) and seeded with tenant organizations, sites, site access grants, tariffs, regulatory records, CEA emission factors, and atomic transactional RPCs.
 - **Critical Privilege-Escalation Hardening & Analyst Expiry**:
   - `handle_new_user()` trigger sanitizes metadata and unconditionally creates unprivileged profiles (`is_platform_admin = false`).
   - `trg_protect_user_profile_escalation` blocks user-driven promotion to platform admin.
@@ -57,26 +57,22 @@ The local development and testing environment is configured as follows:
 | **PostgreSQL Database** | PostgreSQL 17.6 (Supabase) | `127.0.0.1:15432` (`postgres/postgres`) | **HEALTHY** |
 | **GoTrue Auth Service** | GoTrue v2.196.0 | via Kong (`/auth/v1`) | **HEALTHY** |
 | **Inbucket / Mailpit** | Mailpit v1.30.2 | `http://127.0.0.1:15434` | **HEALTHY** |
-| **Python Analytics Service** | FastAPI / Python 3.11 | `http://127.0.0.1:8000` | **HEALTHY / VERIFIED** |
+| **Python Analytics Service** | FastAPI / Python 3.12.10 | `http://127.0.0.1:8000` | **HEALTHY / VERIFIED** |
 | **Next.js Web Application** | Next.js 14.2.35 | `http://localhost:3000` | **HEALTHY / VERIFIED** |
 
 ---
 
 ## 3. Verified Test Scorecard
 
-| Test Suite | Framework | Target Engine | Test Files | Individual Tests | Passed | Failed | Status |
-|---|---|---|---|---|---|---|---|
-| **Unit Tests** | Vitest | Node.js | 7 files | 30 tests | 30 | 0 | **PASSED** |
-| **Tamper-Evident Audit Chaining** | Vitest | Live Docker PostgreSQL 17.6 | 1 file | 5 tests | 5 | 0 | **PASSED** |
-| **Security Isolation Tests** | Vitest | Node.js / Next.js Handlers | 1 file | 10 tests | 10 | 0 | **PASSED** |
-| **Real Supabase PostgreSQL RLS** | Vitest | Live Docker PostgreSQL 17.6 | 1 file | 11 tests | 11 | 0 | **PASSED** |
-| **Adversarial API Tests** | Vitest | Node.js / Next.js Handlers | 1 file | 29 tests | 29 | 0 | **PASSED** |
-| **Python Analytics Solvers** | Pytest | Python 3.11 (FastAPI) | 1 file | 7 tests | 7 | 0 | **PASSED** |
-| **Playwright E2E Suite** | Playwright | Chromium Headless | 3 files | 14 tests | 14 | 0 | **PASSED** |
-| **TypeScript Type Safety** | `tsc --noEmit` | Node.js | Entire codebase | N/A | 0 errors | 0 | **PASSED** |
-| **Linting** | `eslint` | Node.js | Entire codebase | N/A | 0 errors | 0 | **PASSED** |
-| **Production Build** | `next build` | Next.js | 39 routes | 39 routes | 39 | 0 | **PASSED** |
-| **TOTAL AUTOMATED VERIFICATION** | | | **17 test files** | **152 tests** | **152 passed** | **0 failed** | **100% PASS RATE** |
+| Test Suite | Engine | Test Files | Passed | Failed | Status |
+|---|---|---:|---:|---:|---|
+| **Vitest unit, integration, RLS, security, domain, and concurrency suites** | Node.js + PostgreSQL 17.6 | 21 | 257 | 0 | **PASSED** |
+| **Python Analytics Solvers** | Python 3.12.10 / FastAPI | 1 | 7 | 0 | **PASSED** |
+| **Playwright Non-Demo** | Chromium Headless | 3 | 12 | 0 | **PASSED** |
+| **Playwright Demo** | Chromium Headless | 1 | 12 | 0 | **PASSED** |
+| **TOTAL AUTOMATED VERIFICATION** | | **26** | **288** | **0** | **100% PASS RATE** |
+
+Lint, TypeScript typecheck, the 39-route Next.js production build, and context-map validation also passed. Final catalog inspection reported zero disabled RLS tables, non-SELECT audited-table policies, unpinned `SECURITY DEFINER` functions, client-executable mutating definers, or client write grants on the audited tenant tables.
 
 ---
 
@@ -85,7 +81,7 @@ The local development and testing environment is configured as follows:
 ### Target 1: PostgreSQL RLS Engine & Production Query Performance
 - **Files**: [supabase/migrations/20260907000007_rls_policies.sql](supabase/migrations/20260907000007_rls_policies.sql), [supabase/migrations/20260907000008_security_site_access_hardening.sql](supabase/migrations/20260907000008_security_site_access_hardening.sql), [supabase/migrations/20260907000010_pre_astra_hardening.sql](supabase/migrations/20260907000010_pre_astra_hardening.sql), [supabase/migrations/20260907000011_pre_astra_blockers.sql](supabase/migrations/20260907000011_pre_astra_blockers.sql), [supabase/migrations/20260907000012_final_rls_and_pipeline_consistency.sql](supabase/migrations/20260907000012_final_rls_and_pipeline_consistency.sql), [supabase/migrations/20260907000015_authority_and_auditability.sql](supabase/migrations/20260907000015_authority_and_auditability.sql), [tests/integration/supabase_rls.test.ts](tests/integration/supabase_rls.test.ts)
 - **Implemented**: RLS enabled across all public tables with `has_site_access()`, tenant boundaries, and server-write barriers on trusted operational output tables. Write-time analyst expiry trigger blocks unexpired or indefinite analyst roles. Migration 12 purged all surviving permissive legacy policy overloads and re-established idempotent DROP + CREATE policy sequences for all key tables.
-- **Tested**: 11/11 live database integration tests verifying cross-tenant isolation, cross-site boundary enforcement, customer role boundaries, privilege escalation blocks, and server-only output writes.
+- **Tested**: 14/14 live database integration tests plus the Pass 1 and Pass 3 adversarial suites verify cross-tenant isolation, cross-site boundaries, customer role boundaries, privilege escalation blocks, and server-only output writes.
 - **Astra Action**: Run `EXPLAIN ANALYZE` on 15-minute interval queries with millions of rows to ensure composite indexes (`idx_interval_site_time`) prevent sequential scans under RLS filters.
 
 ### Target 2: Regulatory Review Dual-Signoff Workflow & Customer Boundary

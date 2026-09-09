@@ -5,7 +5,7 @@
  * Never fabricates fake order IDs in TEST or LIVE mode.
  */
 
-import CryptoJS from 'crypto-js';
+import { verifyWebhookSignature } from '@/lib/security/webhook';
 
 export type BillingMode = 'MOCK_DEVELOPMENT' | 'RAZORPAY_TEST' | 'RAZORPAY_LIVE';
 
@@ -46,6 +46,11 @@ export class RazorpayBillingAdapter implements IBillingProvider {
     this.keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
     this.keySecret = process.env.RAZORPAY_KEY_SECRET || '';
     this.webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+
+    if (process.env.NODE_ENV === 'production' &&
+        (!this.keyId.startsWith('rzp_live_') || !this.keySecret || this.keySecret.includes('mock'))) {
+      throw new Error('PRODUCTION_CONFIG_REQUIRED: Production billing requires live Razorpay credentials.');
+    }
 
     if (this.keyId.startsWith('rzp_live_')) {
       this.mode = 'RAZORPAY_LIVE';
@@ -120,15 +125,7 @@ export class RazorpayBillingAdapter implements IBillingProvider {
   }
 
   verifyWebhookSignature(body: string, signature: string, secret?: string): boolean {
-    const activeSecret = secret || this.webhookSecret;
-    if (!activeSecret) {
-      return false;
-    }
-    if (this.mode === 'MOCK_DEVELOPMENT' && signature === 'dev_signature_bypass') {
-      return true;
-    }
-    const expectedSignature = CryptoJS.HmacSHA256(body, activeSecret).toString(CryptoJS.enc.Hex);
-    return expectedSignature === signature;
+    return verifyWebhookSignature(body, signature, secret || this.webhookSecret);
   }
 
   async cancelSubscription(subscriptionId: string): Promise<{ success: boolean; mode: BillingMode; message?: string }> {
@@ -146,6 +143,12 @@ export class RazorpayBillingAdapter implements IBillingProvider {
       );
     }
 
+    // V1 checkouts are prepaid Orders. They have no recurring provider mandate.
+    if (/^order_[a-zA-Z0-9]+$/.test(subscriptionId)) {
+      return { success: true, mode: this.mode, message: 'Prepaid access will expire at period end.' };
+    }
+    if (!/^sub_[a-zA-Z0-9]+$/.test(subscriptionId)) throw new Error('INVALID_PROVIDER_REFERENCE');
+
     const authHeader = Buffer.from(`${this.keyId}:${this.keySecret}`).toString('base64');
     const res = await fetch(`https://api.razorpay.com/v1/subscriptions/${subscriptionId}/cancel`, {
       method: 'POST',
@@ -154,12 +157,22 @@ export class RazorpayBillingAdapter implements IBillingProvider {
         Authorization: `Basic ${authHeader}`,
       },
       body: JSON.stringify({
-        cancel_at_cycle_end: 1,
+        cancel_at_cycle_end: true,
       }),
     });
 
     if (!res.ok) {
       const errBody = await res.text();
+      // A previous request may have succeeded before the response was lost.
+      const check = await fetch(`https://api.razorpay.com/v1/subscriptions/${subscriptionId}`, {
+        headers: { Authorization: `Basic ${authHeader}` },
+      });
+      if (check.ok) {
+        const state = await check.json();
+        if (state.id === subscriptionId && ['cancelled', 'completed', 'expired'].includes(state.status)) {
+          return { success: true, mode: this.mode };
+        }
+      }
       throw new Error(`Razorpay cancel error (${res.status}): ${errBody}`);
     }
 
@@ -171,4 +184,20 @@ export class RazorpayBillingAdapter implements IBillingProvider {
   }
 }
 
-export const billingProvider = new RazorpayBillingAdapter();
+class LazyBillingProvider implements IBillingProvider {
+  private provider?: RazorpayBillingAdapter;
+
+  private getProvider() {
+    this.provider ??= new RazorpayBillingAdapter();
+    return this.provider;
+  }
+
+  get mode() { return this.getProvider().mode; }
+  createCheckout(req: CheckoutRequest) { return this.getProvider().createCheckout(req); }
+  verifyWebhookSignature(body: string, signature: string, secret?: string) {
+    return this.getProvider().verifyWebhookSignature(body, signature, secret);
+  }
+  cancelSubscription(subscriptionId: string) { return this.getProvider().cancelSubscription(subscriptionId); }
+}
+
+export const billingProvider: IBillingProvider = new LazyBillingProvider();

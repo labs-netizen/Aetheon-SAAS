@@ -32,6 +32,12 @@ def get_block_times(block_idx: int) -> Tuple[str, str]:
 
 def solve_grid_forecast(req: GridForecastRequest) -> GridForecastResponse:
     """Deterministic 96-block load and day-ahead clearing price forecast."""
+    if not req.is_demo:
+        return GridForecastResponse(
+            site_id=req.site_id, operating_date=req.operating_date,
+            model_version="LIVE_MODEL_UNAVAILABLE", model_generation_time=datetime.now(timezone.utc).isoformat(),
+            blocks=[], is_suppressed=True, suppression_reason="LIVE_MODEL_AND_PRICE_FEED_REQUIRED",
+            data_quality="UNVERIFIED", freshness="UNKNOWN", confidence_status="UNAVAILABLE")
     np.random.seed(req.seed or 42)
     blocks: List[GridForecastBlock] = []
     
@@ -96,7 +102,7 @@ def solve_grid_forecast(req: GridForecastRequest) -> GridForecastResponse:
 
 
 def solve_dsm_deviation(req: DSMCalculationRequest) -> DSMCalculationResponse:
-    """Calculate 96-block deviations and classify risk under CERC/SERC DSM guidelines."""
+    """Compute technical deviations. The demonstration bands are not regulatory limits."""
     blocks: List[DSMDeviationBlock] = []
     total_dev_kwh = 0.0
     max_pos = 0.0
@@ -109,7 +115,7 @@ def solve_dsm_deviation(req: DSMCalculationRequest) -> DSMCalculationResponse:
     for b in range(1, 97):
         sched = req.scheduled_drawal_kw[b - 1]
         act = req.actual_drawal_kw[b - 1]
-        dev_kw = round(act - sched, 2)
+        dev_kw = act - sched
         
         # 15-minute energy in kWh = kW * 0.25h
         total_dev_kwh += abs(dev_kw) * 0.25
@@ -119,16 +125,17 @@ def solve_dsm_deviation(req: DSMCalculationRequest) -> DSMCalculationResponse:
         if dev_kw < max_neg:
             max_neg = dev_kw
             
-        pct = round(abs(dev_kw) / sched * 100.0, 2) if sched > 0 else 0.0
+        pct = round(dev_kw / sched * 100.0, 2) if sched > 0 else (0.0 if act == 0 else None)
+        risk_pct = abs(dev_kw) / sched * 100.0 if sched > 0 else (0.0 if act == 0 else math.inf)
         
-        if pct < 4.0:
+        if risk_pct < 4.0:
             risk = "NORMAL"
             penalty = 0.0
-        elif pct < 8.0:
+        elif risk_pct < 8.0:
             risk = "WATCH"
             watch_count += 1
             penalty = abs(dev_kw) * 0.25 * 3.5  # DEMO rate: ₹3.5/kWh on excess
-        elif pct < 12.0:
+        elif risk_pct < 12.0:
             risk = "HIGH"
             high_count += 1
             penalty = abs(dev_kw) * 0.25 * 7.5  # DEMO rate: ₹7.5/kWh
@@ -145,7 +152,7 @@ def solve_dsm_deviation(req: DSMCalculationRequest) -> DSMCalculationResponse:
             deviation_kw=dev_kw,
             deviation_pct=pct,
             risk_level=risk,
-            estimated_penalty_inr=round(penalty, 2)
+            estimated_penalty_inr=round(penalty, 2) if req.is_demo else None
         ))
         
     return DSMCalculationResponse(
@@ -157,88 +164,76 @@ def solve_dsm_deviation(req: DSMCalculationRequest) -> DSMCalculationResponse:
         blocks_in_watch=watch_count,
         blocks_in_high=high_count,
         blocks_in_critical=critical_count,
-        estimated_total_exposure_inr=round(total_penalty, 2),
+        estimated_total_exposure_inr=round(total_penalty, 2) if req.is_demo else None,
+        rule_version="CERC_DSM_2024_DEMO" if req.is_demo else "REGULATORY_CONFIGURATION_REQUIRED",
+        monetary_exposure_status="DEMO_CALCULATION" if req.is_demo else "REGULATORY_CONFIGURATION_REQUIRED",
         blocks=blocks
     )
 
 
 def solve_bess_advisory(req: BESSSolverRequest) -> BESSSolverResponse:
-    """
-    Feasible deterministic reference solver for BESS opportunity windows.
-    Enforces capacity bounds, power limits, SOC limits, and efficiency losses.
-    """
-    # Identify price percentiles
-    p_low = np.percentile(req.prices_inr_per_mwh, 25)
-    p_high = np.percentile(req.prices_inr_per_mwh, 75)
-    
-    current_soc_kwh = req.usable_capacity_kwh * (req.initial_soc_pct / 100.0)
-    min_soc_kwh = req.usable_capacity_kwh * (req.min_soc_pct / 100.0)
-    max_soc_kwh = req.usable_capacity_kwh * (req.max_soc_pct / 100.0)
-    max_energy_step_kwh = req.power_rating_kw * 0.25 # 15 minutes
-    
-    blocks: List[BESSDispatchBlock] = []
-    total_cost = 0.0
-    total_rev = 0.0
-    throughput_kwh = 0.0
-    
-    for b in range(1, 97):
-        price_mwh = req.prices_inr_per_mwh[b - 1]
-        price_kwh = price_mwh / 1000.0
-        
-        action = "IDLE"
-        power_kw = 0.0
-        cost_step = 0.0
-        rev_step = 0.0
-        
-        # Charge condition: price is low and SOC headroom exists
-        if price_mwh <= p_low and current_soc_kwh < max_soc_kwh:
-            headroom = max_soc_kwh - current_soc_kwh
-            energy_to_charge = min(max_energy_step_kwh, headroom)
-            power_kw = round(energy_to_charge / 0.25, 2)
-            energy_stored = energy_to_charge * req.charge_efficiency
-            current_soc_kwh += energy_stored
-            cost_step = round(energy_to_charge * price_kwh, 2)
-            total_cost += cost_step
-            throughput_kwh += energy_to_charge
+    """Conservative AC-side heuristic, with energy balance and terminal inventory checks."""
+    def suppressed(reason, feasible=False):
+        return BESSSolverResponse(battery_id=req.battery_id, site_id=req.site_id, operating_date=req.operating_date,
+            solver_version="BESS_AC_HEURISTIC_DEMO_v2.0" if req.is_demo else "BESS_AC_HEURISTIC_v2.0",
+            is_feasibility_verified=feasible, is_suppressed=True, suppression_reason=reason,
+            gross_arbitrage_value_inr=0, estimated_degradation_cost_inr=0, net_opportunity_value_inr=0,
+            cycles_equivalent=0, blocks=[])
+
+    if req.maintenance_lock_active or req.telemetry_stale or req.interconnection_restricted:
+        return suppressed("SAFETY_INTERLOCK")
+    if not req.is_demo:
+        return suppressed("LIVE_PRICE_AND_INTERCONNECTION_AUTHORITY_REQUIRED")
+    prices = req.prices_inr_per_mwh
+    if not all(math.isfinite(v) for v in prices):
+        return suppressed("INVALID_PRICES")
+    low, high = np.percentile(prices, [25, 75])
+    if high <= low:
+        return suppressed("NO_VERIFIED_ECONOMIC_OPPORTUNITY", True)
+    initial = req.usable_capacity_kwh * req.initial_soc_pct / 100
+    energy = initial
+    minimum = req.usable_capacity_kwh * req.min_soc_pct / 100
+    maximum = req.usable_capacity_kwh * req.max_soc_pct / 100
+    total_cost = total_revenue = throughput = 0.0
+    blocks = []
+    for idx, price in enumerate(prices):
+        action, power, cost, revenue = "IDLE", 0.0, 0.0, 0.0
+        # Reserve initial inventory; profits must not count its liquidation as free energy.
+        if price <= low and energy < maximum and any(p >= high for p in prices[idx+1:]):
+            power = min(req.power_rating_kw, (maximum-energy)/(0.25*req.charge_efficiency))
+            stored = power*0.25*req.charge_efficiency
+            energy += stored
+            throughput += stored
+            cost = power*0.25*price/1000
             action = "CHARGE"
-            
-        # Discharge condition: price is high and energy available above min SOC
-        elif price_mwh >= p_high and current_soc_kwh > min_soc_kwh:
-            available = current_soc_kwh - min_soc_kwh
-            energy_to_extract = min(max_energy_step_kwh, available)
-            power_kw = round(energy_to_extract / 0.25, 2)
-            energy_delivered = energy_to_extract * req.discharge_efficiency
-            current_soc_kwh -= energy_to_extract
-            rev_step = round(energy_delivered * price_kwh, 2)
-            total_rev += rev_step
-            throughput_kwh += energy_to_extract
+        elif price >= high and energy > initial:
+            power = min(req.power_rating_kw, (energy-initial)*req.discharge_efficiency/0.25)
+            extracted = power*0.25/req.discharge_efficiency
+            energy -= extracted
+            throughput += extracted
+            revenue = power*0.25*price/1000
             action = "DISCHARGE"
-            
-        soc_pct = round((current_soc_kwh / req.usable_capacity_kwh) * 100.0, 1)
-        blocks.append(BESSDispatchBlock(
-            block_index=b,
-            recommended_action=action,
-            power_kw=power_kw,
-            resulting_soc_pct=soc_pct,
-            marginal_cost_inr=cost_step,
-            marginal_revenue_inr=rev_step
-        ))
-        
-    cycles = round(throughput_kwh / (2.0 * req.usable_capacity_kwh), 2)
-    deg_cost = round(cycles * req.degradation_cost_per_cycle_inr, 2)
-    gross_val = round(total_rev - total_cost, 2)
-    net_val = round(gross_val - deg_cost, 2)
-    
-    return BESSSolverResponse(
-        battery_id=req.battery_id,
-        site_id=req.site_id,
-        is_feasibility_verified=True,
-        gross_arbitrage_value_inr=gross_val,
-        estimated_degradation_cost_inr=deg_cost,
-        net_opportunity_value_inr=net_val,
-        cycles_equivalent=cycles,
-        blocks=blocks
-    )
+        if not minimum-1e-7 <= energy <= maximum+1e-7 or not 0 <= power <= req.power_rating_kw+1e-7:
+            return suppressed("INFEASIBLE_DISPATCH")
+        total_cost += cost
+        total_revenue += revenue
+        blocks.append(BESSDispatchBlock(block_index=idx+1, recommended_action=action, power_kw=round(power,8),
+            resulting_soc_pct=round(energy/req.usable_capacity_kwh*100,8),
+            marginal_cost_inr=round(cost,8), marginal_revenue_inr=round(revenue,8)))
+    if abs(energy-initial) > 1e-6:
+        return suppressed("TERMINAL_SOC_NOT_RESTORED")
+    cycles = throughput/(2*req.usable_capacity_kwh)
+    degradation = cycles*req.degradation_cost_per_cycle_inr
+    gross = total_revenue-total_cost
+    if not all(math.isfinite(v) for v in [cycles, degradation, gross]):
+        return suppressed("NONFINITE_ECONOMICS")
+    if gross-degradation <= 0:
+        return suppressed("NO_VERIFIED_ECONOMIC_OPPORTUNITY", True)
+    return BESSSolverResponse(battery_id=req.battery_id, site_id=req.site_id, operating_date=req.operating_date,
+        solver_version="BESS_AC_HEURISTIC_DEMO_v2.0" if req.is_demo else "BESS_AC_HEURISTIC_v2.0",
+        is_feasibility_verified=True, gross_arbitrage_value_inr=round(gross,2),
+        estimated_degradation_cost_inr=round(degradation,2), net_opportunity_value_inr=round(gross-degradation,2),
+        cycles_equivalent=round(cycles,8), blocks=blocks)
 
 
 def solve_renewable_reconciliation(req: RenewableReconciliationRequest) -> RenewableReconciliationResponse:

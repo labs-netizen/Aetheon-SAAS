@@ -3,6 +3,8 @@ import { fetchRenewableReconciliation } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+const LIVE_RENEWABLE_BLOCK = 'LIVE_RENEWABLE_MODEL_AND_FACTOR_AUTHORITY_REQUIRED';
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -23,6 +25,10 @@ export async function GET(req: NextRequest) {
     }
 
     const adminClient = createAdminClient();
+    const { data: site, error: siteError } = await adminClient.from('sites').select('is_demo').eq('id',siteId).single();
+    if (siteError || !site) return NextResponse.json({error:'SITE_NOT_FOUND'},{status:404});
+    if (site.is_demo !== true) return NextResponse.json({siteId,operatingDate,asset:null,ledger:null,
+      is_suppressed:true,suppression_reason:LIVE_RENEWABLE_BLOCK});
     const { data: asset } = await adminClient
       .from('renewable_assets')
       .select('*')
@@ -93,6 +99,8 @@ export async function POST(req: NextRequest) {
     }
 
     const isDemo = Boolean(siteRecord.is_demo);
+    if (!isDemo) return NextResponse.json({error:'RECONCILIATION_NOT_PUBLISHABLE',is_suppressed:true,
+      suppression_reason:LIVE_RENEWABLE_BLOCK,persisted:false},{status:422});
 
     // 3. Resolve installedCapacityKw
     let effectiveCapacity = inputCapacity;

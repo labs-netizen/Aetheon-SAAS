@@ -37,7 +37,8 @@ export default function GridIntelligencePage() {
   const [oaEnabled, setOaEnabled] = useState(false);
 
   // Backend forecast state
-  const [forecastResult, setForecastResult] = useState<any>(null);
+  const [forecastResultResponse, setForecastResult] = useState<any>(null);
+  const forecastResult = forecastResultResponse && forecastResultResponse.requestSiteId === currentSite?.id ? forecastResultResponse.data : null;
   const [isLoadingForecast, setIsLoadingForecast] = useState<boolean>(false);
   const [forecastError, setForecastError] = useState<string | null>(null);
 
@@ -63,7 +64,7 @@ export default function GridIntelligencePage() {
       })
       .then((data) => {
         if (isMounted) {
-          setForecastResult(data);
+          setForecastResult({ requestSiteId: currentSite.id, data });
         }
       })
       .catch((err) => {
@@ -137,7 +138,7 @@ export default function GridIntelligencePage() {
   // Quality gate evaluation
   // Quality gate evaluation
   const qualityGate = useMemo(() => {
-    return evaluateQualityGate({
+    const evaluated = evaluateQualityGate({
       sourceTimestamp: forecastResult?.model_generation_time || '2026-09-07T00:00:00Z',
       sourceType: forecastResult?.persisted ? 'PostgreSQL Persisted Model Forecast' : (isDemo ? 'DEMO / SYNTHETIC' : 'INTERNAL_VALIDATION'),
       completenessPct: currentSite?.activation_status === 'ACTIVE' ? 100.0 : (isDemo ? 95.0 : 0.0),
@@ -149,6 +150,14 @@ export default function GridIntelligencePage() {
       modelGenerationTime: forecastResult?.model_generation_time || new Date().toISOString(),
       tariffVersion: isDemo ? 'MSEDCL_HT1_TOD_DEMO' : (forecastResult?.tariff_version || 'CONFIGURATION_REQUIRED'),
     });
+    return forecastResult?.is_suppressed ? {
+      ...evaluated,
+      gateStatus: 'BLOCKED_INVALID_CONFIGURATION' as const,
+      isPublishable: false,
+      isSuppressed: true,
+      suppressionReason: forecastResult.suppression_reason || 'Live forecast authority is unavailable.',
+      remediationAdvice: 'Configure and validate the live forecasting model and market price feed before publishing operational output.',
+    } : evaluated;
   }, [forecastResult, currentSite, forecastBlocks.length, isDemo, hasValidForecast]);
 
   // Derived highest-cost window and price range from returned 96 blocks
@@ -328,11 +337,13 @@ export default function GridIntelligencePage() {
 
         {/* Quality Gate Check */}
         {qualityGate.isSuppressed ? (
-          <QualityGateBlock
-            reason={qualityGate.suppressionReason || 'Data requirements not satisfied.'}
-            remediationAdvice={qualityGate.remediationAdvice}
-            onRemediate={() => window.location.assign('/settings')}
-          />
+          <div data-testid="grid-suppressed">
+            <QualityGateBlock
+              reason={qualityGate.suppressionReason || 'Data requirements not satisfied.'}
+              remediationAdvice={qualityGate.remediationAdvice}
+              onRemediate={() => window.location.assign('/settings')}
+            />
+          </div>
         ) : (
           <>
             {/* Daily Grid Brief Overview */}

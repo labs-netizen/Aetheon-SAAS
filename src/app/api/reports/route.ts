@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { reportEvidenceValid } from '@/lib/analytics/report-evidence';
 import { type ReportType, type ProductId } from '@/types';
 
 const REPORT_PRODUCT_REQUIREMENTS: Record<ReportType, ProductId> = {
@@ -35,6 +36,8 @@ export async function GET(req: NextRequest) {
     const { data: entitlements } = await adminClient
       .from('entitlements')
       .select('product_id, site_id, is_active')
+      .lte('valid_from', new Date().toISOString())
+      .or(`valid_until.is.null,valid_until.gt.${new Date().toISOString()}`)
       .eq('organisation_id', authResult.organisationId)
       .eq('is_active', true);
 
@@ -73,9 +76,11 @@ export async function GET(req: NextRequest) {
           return reqProduct ? activeProductIds.has(reqProduct) : false;
         });
 
+    const { data: site } = await adminClient.from('sites').select('id,state,discom,voltage_category,is_demo').eq('id',siteId).single();
+    const evidence = await Promise.all(filteredReports.map(r=>reportEvidenceValid(adminClient,r,site)));
     return NextResponse.json({
       siteId,
-      reports: filteredReports,
+      reports: filteredReports.filter((_,i)=>evidence[i]),
     });
   } catch (err) {
     return NextResponse.json(

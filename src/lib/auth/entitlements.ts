@@ -35,33 +35,30 @@ export async function checkServerEntitlement(
     return { entitled: false, reason: 'MISSING_CONTEXT: organisationId and productId are required.' };
   }
 
-  // Demo mode fallback: ONLY when NEXT_PUBLIC_DEMO_MODE is explicitly 'true' and the org is the demo org
-  const env = process.env;
-  const isDemoMode = env['NEXT_PUBLIC_DEMO_MODE'] === 'true' || env['DEMO_MODE'] === 'true';
-  const isDemoOrg = organisationId === 'a0000000-0000-0000-0000-000000000001' || organisationId === 'org-demo-001';
-
-  if (isDemoMode && isDemoOrg && productId !== 'OA_COMPLIANCE') {
-    // In demo mode, demo org has access to standard modules
-    const demoAllowed = ['GRID_INTELLIGENCE', 'DSM_RISK', 'BESS_ARBITRAGE', 'RENEWABLE_PORTFOLIO'];
-    if (demoAllowed.includes(productId)) {
-      return { entitled: true, planTier: 'DEMO_FULL_SUITE' };
-    }
-  }
-
   // Authoritative database check via Supabase admin client
   try {
     const { createAdminClient } = await import('@/lib/supabase/admin');
     const supabase = createAdminClient();
 
-    const { data, error } = await supabase
+    if (siteId) {
+      const { data: site } = await supabase.from('sites').select('organisation_id, is_demo')
+        .eq('id', siteId).maybeSingle();
+      if (!site || site.organisation_id !== organisationId ||
+          (site.is_demo && process.env.NEXT_PUBLIC_DEMO_MODE !== 'true')) {
+        return { entitled: false, reason: 'SITE_ORGANISATION_MISMATCH' };
+      }
+    }
+    const now = new Date().toISOString();
+    let query = supabase
       .from('entitlements')
       .select('id, is_active, valid_until')
       .eq('organisation_id', organisationId)
       .eq('product_id', productId)
       .eq('is_active', true)
-      .or(`site_id.eq.${siteId},site_id.is.null`)
-      .limit(1)
-      .maybeSingle();
+      .lte('valid_from', now)
+      .or(`valid_until.is.null,valid_until.gt.${now}`);
+    query = siteId ? query.or(`site_id.eq.${siteId},site_id.is.null`) : query.is('site_id', null);
+    const { data, error } = await query.limit(1).maybeSingle();
 
     if (error) {
       return { entitled: false, reason: `DATABASE_ERROR: ${error.message}` };

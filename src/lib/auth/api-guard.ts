@@ -64,7 +64,7 @@ export async function authorizeApiRequest(
   options: GuardOptions
 ): Promise<GuardResult> {
   const env = process.env;
-  const isDemoModeEnabled = env['NEXT_PUBLIC_DEMO_MODE'] === 'true' || env['DEMO_MODE'] === 'true';
+  const isDemoModeEnabled = env['NEXT_PUBLIC_DEMO_MODE'] === 'true';
   const adminClient = createAdminClient();
 
   // 1. Resolve Authenticated User
@@ -113,21 +113,18 @@ export async function authorizeApiRequest(
 
   // 2. Handle Unauthenticated Requests
   if (!user) {
-    let unauthenticatedSiteIsDemo = false;
-    if (options.siteId) {
-      if (DEMO_SITE_IDS.includes(options.siteId)) {
-        unauthenticatedSiteIsDemo = true;
-      } else {
-        const { data: s } = await adminClient.from('sites').select('is_demo').eq('id', options.siteId).maybeSingle();
-        unauthenticatedSiteIsDemo = Boolean(s?.is_demo);
-      }
+    let demoOrgId: string | undefined;
+    if (options.siteId && isDemoModeEnabled) {
+      const { data: site } = await adminClient.from('sites').select('organisation_id, is_demo')
+        .eq('id', options.siteId).maybeSingle();
+      if (site?.is_demo) demoOrgId = site.organisation_id;
     }
-    // If demo mode is active and the requested site/org is a demo site/org
-    const isTargetingDemo =
-      (options.siteId && unauthenticatedSiteIsDemo) ||
-      (options.organisationId && DEMO_ORG_IDS.includes(options.organisationId));
+    const isTargetingDemo = options.siteId
+      ? Boolean(demoOrgId && (!options.organisationId || options.organisationId === demoOrgId))
+      : Boolean(options.organisationId && DEMO_ORG_IDS.includes(options.organisationId));
 
-    if (isDemoModeEnabled && isTargetingDemo) {
+    if (isDemoModeEnabled && isTargetingDemo && req.method === 'GET' &&
+        (!options.requiredRoles || options.requiredRoles.length === 0)) {
       // Demo entitlement check
       if (options.productId === 'OA_COMPLIANCE') {
         return {
@@ -150,7 +147,7 @@ export async function authorizeApiRequest(
           email: 'rajesh.sharma@demo.aetheonlabs.in',
           is_platform_admin: false,
         },
-        organisationId: options.organisationId || DEMO_ORG_IDS[0],
+        organisationId: demoOrgId || options.organisationId || DEMO_ORG_IDS[0],
         siteId: options.siteId || DEMO_SITE_IDS[0],
         role: 'ORGANISATION_ADMIN',
         isDemo: true,
@@ -190,6 +187,12 @@ export async function authorizeApiRequest(
       };
     }
 
+    if (resolvedOrgId && resolvedOrgId !== siteData.organisation_id) {
+      return { authorized: false, response: NextResponse.json({ error: 'SITE_ORGANISATION_MISMATCH' }, { status: 403 }) };
+    }
+    if (siteData.is_demo && !isDemoModeEnabled) {
+      return { authorized: false, response: NextResponse.json({ error: 'DEMO_DISABLED' }, { status: 403 }) };
+    }
     resolvedOrgId = siteData.organisation_id;
     siteIsDemo = Boolean(siteData.is_demo);
   }
@@ -229,8 +232,8 @@ export async function authorizeApiRequest(
   const userRole = membership.role as PlatformRole;
 
   // Enforce time-bounded least privilege for AETHEON_ANALYST
-  if (userRole === 'AETHEON_ANALYST') {
-    if (!membership.expires_at || new Date(membership.expires_at) <= new Date()) {
+  if (membership.expires_at || userRole === 'AETHEON_ANALYST') {
+    if (!membership.expires_at || !Number.isFinite(Date.parse(membership.expires_at)) || new Date(membership.expires_at) <= new Date()) {
       return {
         authorized: false,
         response: NextResponse.json(

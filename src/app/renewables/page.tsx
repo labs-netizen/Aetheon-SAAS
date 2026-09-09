@@ -20,7 +20,8 @@ import { formatPower, formatEnergy, formatPercentage, formatEmissions } from '@/
 
 export default function RenewablesPage() {
   const { currentSite, isEntitled } = useSite();
-  const [reconData, setReconData] = useState<any>(null);
+  const [reconResult, setReconData] = useState<{siteId:string;data:any} | null>(null);
+  const reconData = reconResult?.siteId === currentSite?.id ? reconResult?.data : null;
   const [isLoading, setIsLoading] = useState(false);
   const [reconError, setReconError] = useState<string | null>(null);
 
@@ -39,6 +40,7 @@ export default function RenewablesPage() {
 
   useEffect(() => {
     if (!currentSite?.id) return;
+    const requestedSiteId = currentSite.id;
     let isMounted = true;
     setIsLoading(true);
     setReconError(null);
@@ -69,7 +71,7 @@ export default function RenewablesPage() {
         return res.json();
       })
       .then((data) => {
-        if (isMounted) setReconData(data);
+        if (isMounted) setReconData({siteId:requestedSiteId,data});
       })
       .catch((err) => {
         console.warn('Renewables API fetch error:', err);
@@ -86,6 +88,17 @@ export default function RenewablesPage() {
 
   const selfConsumptionPct = solarAsset.measuredGenerationKwh > 0 ? (solarAsset.selfConsumptionKwh / solarAsset.measuredGenerationKwh) * 100.0 : 0;
   const performanceRatio = solarAsset.modelledGenerationKwh > 0 ? (solarAsset.measuredGenerationKwh / solarAsset.modelledGenerationKwh) * 100.0 : 0;
+
+  if (currentSite?.is_demo !== true) return (
+    <ModuleGate productId="RENEWABLE_PORTFOLIO" productName="Renewable Portfolio Monitor"
+      description="Generation reconciliation and avoided carbon emission accounting." basePricePaise={2490000}
+      isEntitled={isEntitled('RENEWABLE_PORTFOLIO')}>
+      <Card><CardHeader>
+        <CardTitle>Live reconciliation unavailable</CardTitle>
+        <CardDescription>Verified generation-model and emissions-factor evidence is required before live results can be shown.</CardDescription>
+      </CardHeader></Card>
+    </ModuleGate>
+  );
 
   return (
     <ModuleGate

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { reportEvidenceValid } from '@/lib/analytics/report-evidence';
 import { type ReportType, type ProductId } from '@/types';
 
 const REPORT_PRODUCT_REQUIREMENTS: Record<ReportType, ProductId> = {
@@ -51,6 +52,9 @@ export async function GET(
   if (!authResult.authorized) {
     return authResult.response;
   }
+
+  const { data: site } = await adminClient.from('sites').select('id,state,discom,voltage_category,is_demo').eq('id',report.site_id).single();
+  if (!await reportEvidenceValid(adminClient,report,site)) return NextResponse.json({ error:'REPORT_NOT_PUBLISHABLE', message:'Report evidence is missing, superseded or changed; regenerate from validated inputs.' },{ status:422 });
 
   // 3. Retrieve actual persisted CSV snapshot from storage bucket or record summary
   let csvBody = '';

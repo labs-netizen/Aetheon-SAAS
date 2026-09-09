@@ -8,7 +8,16 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
     const testEmail = process.env.E2E_NON_DEMO_EMAIL || 'alok.nondemo@kalyanibharat.com';
     const testPassword = process.env.E2E_NON_DEMO_PASSWORD || 'AetheonLive2026!';
     const nonDemoSiteId = 'b0000000-0000-0000-0000-000000000010';
-    const todayDate = new Date().toISOString().substring(0, 10);
+    const selectIntendedSite = async () => {
+      const siteSelect = page.locator('header select').filter({
+        has: page.locator(`option[value="${nonDemoSiteId}"]`),
+      });
+      await siteSelect.selectOption(nonDemoSiteId);
+      await expect(siteSelect).toHaveValue(nonDemoSiteId);
+      await expect(siteSelect.locator('option:checked')).toContainText('Kalyani Pune Heavy Forge Unit 1');
+    };
+    // Upload the most recent fully completed IST day, never the current partial day.
+    const operatingDate = new Date(Date.now() + 330 * 60000 - 86400000).toISOString().substring(0, 10);
 
     const adminClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:15431',
@@ -16,14 +25,43 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
       { auth: { persistSession: false } }
     );
 
-    // Deterministic state: site has 6 historical days and remains CALIBRATING before 7th day
-    await adminClient.from('interval_data_96').delete().eq('site_id', nonDemoSiteId).eq('operating_date', todayDate);
-    await adminClient.from('data_quality_evaluations').delete().eq('site_id', nonDemoSiteId).eq('evaluation_date', todayDate);
-    await adminClient.from('grid_forecast_runs').delete().eq('site_id', nonDemoSiteId).eq('operating_date', todayDate);
+    // Replace this fixture site's history so prior test runs cannot supply or remove calibration days.
+    const historicalDates = Array.from({ length: 6 }, (_, day) =>
+      new Date(Date.parse(`${operatingDate}T00:00:00Z`) - (6 - day) * 86400000).toISOString().substring(0, 10));
+    const history = historicalDates.flatMap(date => Array.from({ length: 96 }, (_, block) => ({
+      site_id: nonDemoSiteId,
+      operating_date: date,
+      block_index: block + 1,
+      timestamp_utc: new Date(Date.parse(`${date}T00:00:00+05:30`) + block * 900000).toISOString(),
+      load_kw: 2400,
+      generation_solar_kw: 120,
+      actual_drawal_kw: 2420,
+      scheduled_drawal_kw: 2400,
+      data_quality: 'PASSED',
+    })));
+    await adminClient.from('interval_data_96').delete().eq('site_id', nonDemoSiteId).throwOnError();
+    await adminClient.from('data_quality_evaluations').delete().eq('site_id', nonDemoSiteId).throwOnError();
+    await adminClient.from('interval_data_96').insert(history).throwOnError();
+    await adminClient.from('data_quality_evaluations').insert(historicalDates.map(date => ({
+      site_id: nonDemoSiteId, evaluation_date: date, completeness_pct: 100, missing_blocks_count: 0,
+      validation_status: 'PASSED', freshness_status: 'DELAYED', publication_gate_status: 'PUBLISHABLE',
+    }))).throwOnError();
+    const { data: persistedHistory } = await adminClient.from('interval_data_96')
+      .select('operating_date,block_index,timestamp_utc,data_quality').eq('site_id', nonDemoSiteId)
+      .order('operating_date').order('block_index').throwOnError();
+    expect(persistedHistory).toHaveLength(6 * 96);
+    for (const date of historicalDates) {
+      const dayRows = persistedHistory!.filter(row => row.operating_date === date);
+      expect(dayRows.map(row => row.block_index)).toEqual(Array.from({ length: 96 }, (_, block) => block + 1));
+      const start = Date.parse(`${date}T00:00:00+05:30`);
+      expect(start + 86400000).toBeLessThanOrEqual(Date.now());
+      expect(dayRows.every((row, block) => Date.parse(row.timestamp_utc) === start + block * 900000 && row.data_quality === 'PASSED')).toBe(true);
+    }
+    await adminClient.from('grid_forecast_runs').delete().eq('site_id', nonDemoSiteId).eq('operating_date', operatingDate).throwOnError();
     await adminClient.from('sites').update({
       activation_status: 'CALIBRATING',
       activation_reason: '6 of 7 operating days calibrated (calibration baseline in progress)'
-    }).eq('id', nonDemoSiteId);
+    }).eq('id', nonDemoSiteId).throwOnError();
     
     await page.goto('/auth/login');
     await expect(page.getByRole('heading', { name: /Aetheon Energy Intelligence|Sign in to your account/i }).first()).toBeVisible();
@@ -39,6 +77,7 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
 
     // 3. Navigate to Settings & Save Site Configuration
     await page.goto('/settings');
+    await selectIntendedSite();
     await page.getByRole('button', { name: 'Site Parameters' }).click();
     await expect(page.getByText('Site Electrical Configuration')).toBeVisible();
 
@@ -51,6 +90,7 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
 
     // Reload and verify site configuration persisted in database
     await page.reload();
+    await selectIntendedSite();
     await page.getByRole('button', { name: 'Site Parameters' }).click();
     await expect(page.locator('input[type="number"]').first()).toHaveValue(testDemand);
 
@@ -60,18 +100,26 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
     const siteBefore = await siteBeforeRes.json();
     expect(siteBefore.site.activation_status).toBe('CALIBRATING');
 
-    // Live site forecast must suppress with CALIBRATING requirement before 7th day
+    // GRID availability is independent of activation readiness: live output stays suppressed
+    // until validated model and price-feed authority exists.
     const calibratingRes = await page.request.post('/api/forecast', {
       data: {
         siteId: nonDemoSiteId,
-        operatingDate: todayDate,
+        operatingDate: operatingDate,
         contractDemandKw: 3200,
       },
     });
     expect(calibratingRes.status()).toBe(200);
     const calibratingData = await calibratingRes.json();
-    expect(calibratingData.is_suppressed).toBe(true);
-    expect(calibratingData.suppression_reason).toContain('CALIBRATING');
+    expect(calibratingData).toMatchObject({
+      site_id: nonDemoSiteId,
+      operating_date: operatingDate,
+      is_suppressed: true,
+      persisted: false,
+      blocks: [],
+      data_quality: 'UNVERIFIED',
+    });
+    expect(calibratingData.suppression_reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
 
     // 5. Ingest Real Raw 96-Row CSV for 7th Day -> Server Computes SHA-256 -> Atomic Ingestion Commit
     await page.getByRole('button', { name: /Data Ingestion/i }).click();
@@ -80,7 +128,7 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
     const runSalt = (Date.now() % 10000) / 10;
     const csvRows = ['operating_date,block_index,load_kw,solar_generation_kw,actual_drawal_kw,scheduled_drawal_kw'];
     for (let b = 1; b <= 96; b++) {
-      csvRows.push(`${todayDate},${b},${(2400 + runSalt + Math.sin(b) * 150).toFixed(1)},120.0,2420.0,2400.0`);
+      csvRows.push(`${operatingDate},${b},${(2400 + runSalt + Math.sin(b) * 150).toFixed(1)},120.0,2420.0,2400.0`);
     }
     const csvContent = csvRows.join('\n');
 
@@ -112,53 +160,57 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
     );
     expect(activeTransition).toBeDefined();
 
-    // 7. Server-Authoritative Forecast Path -> Persisted Run
+    // 7. Live GRID remains fail-closed until model and price-feed authority is configured.
     const liveForecastRes = await page.request.post('/api/forecast', {
       data: {
         siteId: nonDemoSiteId,
-        operatingDate: todayDate,
+        operatingDate: operatingDate,
         contractDemandKw: 3200,
       },
     });
-    expect(liveForecastRes.status()).toBe(200);
     const forecastData = await liveForecastRes.json();
-    expect(forecastData.persisted).toBe(true);
-    expect(forecastData.run_id).toBeDefined();
-    expect(Boolean(forecastData.is_suppressed)).toBe(false);
-    expect(forecastData.blocks.length).toBe(96);
-    expect(forecastData.average_price_inr_per_mwh).toBeGreaterThan(0);
+    expect(liveForecastRes.status(), JSON.stringify(forecastData)).toBe(200);
+    expect(forecastData).toMatchObject({
+      site_id: nonDemoSiteId,
+      operating_date: operatingDate,
+      is_suppressed: true,
+      persisted: false,
+      blocks: [],
+      data_quality: 'UNVERIFIED',
+    });
+    expect(forecastData.suppression_reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
+    const { data: persistedForecasts } = await adminClient.from('grid_forecast_runs').select('id')
+      .eq('site_id', nonDemoSiteId).eq('operating_date', operatingDate).throwOnError();
+    expect(persistedForecasts).toHaveLength(0);
 
-    // 8. Grid Intelligence Monitor UI Displays Backend Forecast Result
+    // 8. Grid UI exposes the safety block and no fabricated operational result.
     await page.goto('/grid-intelligence');
+    await selectIntendedSite();
     await expect(page.getByRole('heading', { name: /Grid Intelligence Monitor/i })).toBeVisible();
-    await expect(page.getByText('Peak Demand Block')).toBeVisible();
+    await expect(page.getByTestId('grid-suppressed')).toContainText('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
+    await expect(page.getByText('Peak Demand Block')).toHaveCount(0);
 
-    // 9. Report Generated & Persisted
+    // 9. Suppressed/unknown-quality GRID output cannot become a report.
     const reportRes = await page.request.post('/api/reports/generate', {
       data: {
         siteId: nonDemoSiteId,
         reportType: 'GRID_DAILY_BRIEF',
-        periodStart: todayDate,
-        periodEnd: todayDate,
+        periodStart: operatingDate,
+        periodEnd: operatingDate,
       },
     });
-    expect(reportRes.status()).toBe(200);
     const reportJson = await reportRes.json();
-    expect(reportJson.success).toBe(true);
-    expect(reportJson.reportId).toBeDefined();
-    expect(reportJson.downloadUrl).toBe(`/api/reports/${reportJson.reportId}/download`);
-
-    // 10. Download Persisted Report via Canonical Route
-    const downloadRes = await page.request.get(reportJson.downloadUrl);
-    expect(downloadRes.status()).toBe(200);
-    expect(downloadRes.headers()['content-type']).toContain('text/csv');
-    const downloadedText = await downloadRes.text();
-    expect(downloadedText).toContain('# AETHEON ENERGY INTELLIGENCE REPORT');
-    expect(downloadedText).toContain('GRID_DAILY_BRIEF');
-    expect(downloadedText).not.toContain('metric_key,value,unit');
+    expect(reportRes.status(), JSON.stringify(reportJson)).toBe(422);
+    expect(reportJson).toMatchObject({ error: 'REPORT_NOT_PUBLISHABLE' });
+    expect(reportJson.reason).toContain('LIVE_MODEL_AND_PRICE_FEED_REQUIRED');
+    const { data: persistedReports } = await adminClient.from('report_records').select('id')
+      .eq('site_id', nonDemoSiteId).eq('report_type', 'GRID_DAILY_BRIEF')
+      .eq('period_start', operatingDate).eq('period_end', operatingDate).throwOnError();
+    expect(persistedReports).toHaveLength(0);
 
     // 11. Alerts Hub Check
     await page.goto('/alerts');
+    await selectIntendedSite();
     await expect(page.getByRole('heading', { name: /Alerts & Incident Hub/i })).toBeVisible();
 
     // 12. Logout and Re-Login: State Remains Persisted
@@ -174,11 +226,13 @@ test.describe('End-to-End Real Non-Demo Persistence Journey (Pre-Astra Proving)'
 
     // Verify persisted site configuration persists after re-login
     await page.goto('/settings');
+    await selectIntendedSite();
     await page.getByRole('button', { name: 'Site Parameters' }).click();
     await expect(page.locator('input[type="number"]').first()).toHaveValue(testDemand);
 
-    // Verify generated report persists on reports page
+    // The reports page must not fabricate the blocked GRID report after re-login.
     await page.goto('/reports');
-    await expect(page.locator('h4').filter({ hasText: /GRID DAILY BRIEF/i }).first()).toBeVisible();
+    await selectIntendedSite();
+    await expect(page.locator('h4').filter({ hasText: /GRID DAILY BRIEF/i })).toHaveCount(0);
   });
 });

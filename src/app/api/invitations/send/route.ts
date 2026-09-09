@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { recordAuditEvent } from '@/lib/audit';
 import crypto from 'crypto';
 
 const ALLOWED_INVITE_ROLES = [
@@ -62,6 +61,9 @@ export async function POST(req: NextRequest) {
 
     if (rpcErr || !invitation) {
       console.error('Failed to atomically create invitation and audit log:', rpcErr);
+      if (rpcErr?.message.includes('SITE_ORGANISATION_MISMATCH')) {
+        return NextResponse.json({ error: 'SITE_ORGANISATION_MISMATCH' }, { status: 400 });
+      }
       return NextResponse.json(
         { error: 'DATABASE_ERROR', message: rpcErr?.message || 'Failed to record invitation.' },
         { status: 500 }
