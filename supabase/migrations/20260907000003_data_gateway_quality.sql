@@ -3,7 +3,7 @@
 
 -- 1. Data Sources
 CREATE TABLE IF NOT EXISTS data_sources (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     source_type VARCHAR(50) NOT NULL CHECK (source_type IN ('CSV_UPLOAD', 'API', 'SFTP', 'MAILBOX', 'BILL_UPLOAD')),
     name VARCHAR(255) NOT NULL,
@@ -20,7 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_data_sources_site ON data_sources(site_id);
 
 -- 2. Ingestion Runs (Tracking, Idempotency Checksum, Row-level Stats)
 CREATE TABLE IF NOT EXISTS ingestion_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     data_source_id UUID NOT NULL REFERENCES data_sources(id) ON DELETE CASCADE,
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     filename VARCHAR(255) NOT NULL,
@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_interval_date_block ON interval_data_96(site_id, 
 
 -- 4. Central Data Quality Evaluations
 CREATE TABLE IF NOT EXISTS data_quality_evaluations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     evaluation_date DATE NOT NULL,
     completeness_pct NUMERIC(5, 2) NOT NULL,

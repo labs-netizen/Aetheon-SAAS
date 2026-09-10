@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 1. Organisations (Tenant Root)
 CREATE TABLE IF NOT EXISTS organisations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
     legal_entity_name VARCHAR(255) NOT NULL,
     gstin VARCHAR(15),
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS organisations (
 
 -- 2. Sites (Operational metering & scheduling boundary)
 CREATE TABLE IF NOT EXISTS sites (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     state VARCHAR(100) NOT NULL,
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 
 -- 4. Memberships & Exact Platform Roles
 CREATE TABLE IF NOT EXISTS memberships (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL CHECK (role IN (
@@ -95,7 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id);
 
 -- 6. Granular Site-Level Access
 CREATE TABLE IF NOT EXISTS site_access (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     granted_by UUID REFERENCES user_profiles(id),

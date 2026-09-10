@@ -485,7 +485,7 @@ CREATE TRIGGER trg_freeze_audit_log_update
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS organisation_invitations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     email VARCHAR(255) NOT NULL,
     role VARCHAR(50) NOT NULL CHECK (role IN (

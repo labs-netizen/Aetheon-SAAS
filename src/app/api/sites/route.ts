@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const rawVoltage = voltageCategory || voltage_category;
     const rawDemand = contractDemandValue !== undefined ? contractDemandValue : contract_demand_value;
-    const rawDemandUnit = contractDemandUnit || contract_demand_unit;
+    const rawDemandUnit = contractDemandUnit !== undefined ? contractDemandUnit : contract_demand_unit;
     const rawMetering = meteringPoint || metering_point;
 
     if (!organisationId || !name || !state || !discom) {
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!rawVoltage || rawDemand === undefined || rawDemand === null || !rawDemandUnit || !rawMetering) {
+    if (!rawVoltage || rawDemand === undefined || rawDemand === null || !rawMetering) {
       return NextResponse.json(
         {
           error: 'MISSING_ELECTRICAL_FIELDS',
@@ -49,9 +49,19 @@ export async function POST(req: NextRequest) {
 
     const effectiveVoltage = String(rawVoltage).trim();
     const effectiveDemand = Number(rawDemand);
-    const effectiveUnit = String(rawDemandUnit).trim();
+    const effectiveUnit = typeof rawDemandUnit === 'string' ? rawDemandUnit.trim() : '';
     const effectiveMetering = String(rawMetering).trim();
     const effectiveLoadClass = (loadClass || load_class || 'Industrial C&I').trim();
+
+    if (!['kVA', 'MVA'].includes(effectiveUnit)) {
+      return NextResponse.json(
+        {
+          error: 'INVALID_DEMAND_UNIT',
+          message: 'Contract demand unit must be explicitly supplied as kVA or MVA.',
+        },
+        { status: 400 }
+      );
+    }
 
     if (isNaN(effectiveDemand) || effectiveDemand <= 0) {
       return NextResponse.json(

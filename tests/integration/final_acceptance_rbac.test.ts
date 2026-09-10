@@ -23,6 +23,7 @@ async function must(query: any): Promise<any> {
 describe('Final acceptance operational mutation RBAC', () => {
   let db: SupabaseClient;
   let organisationId: string;
+  let foreignOrganisationId: string;
   let siteId: string;
   const actors: Record<string, { id: string; token: string }> = {};
 
@@ -38,6 +39,10 @@ describe('Final acceptance operational mutation RBAC', () => {
     organisationId = (await must(db.from('organisations').insert({
       name: `Acceptance RBAC ${stamp}`,
       legal_entity_name: 'Acceptance RBAC fixture',
+    }).select().single())).id;
+    foreignOrganisationId = (await must(db.from('organisations').insert({
+      name: `Foreign Acceptance RBAC ${stamp}`,
+      legal_entity_name: 'Foreign acceptance RBAC fixture',
     }).select().single())).id;
 
     for (const role of ['ORGANISATION_ADMIN', 'ENERGY_MANAGER', 'OPERATOR', 'FINANCE_SUSTAINABILITY_VIEWER']) {
@@ -151,6 +156,108 @@ describe('Final acceptance operational mutation RBAC', () => {
       meteringPoint: 'Main incomer',
     }));
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: 'MISSING_ELECTRICAL_FIELDS' });
+    expect(await response.json()).toMatchObject({ error: 'INVALID_DEMAND_UNIT' });
+  });
+
+  it.each([
+    ['whitespace-only', '   '],
+    ['unsupported', 'MW'],
+  ])('rejects a %s contract demand unit', async (_, contractDemandUnit) => {
+    const response = await sitePost(request('/api/sites', actors.ORGANISATION_ADMIN.token, {
+      organisationId,
+      name: `Invalid demand unit ${contractDemandUnit}`,
+      state: 'Maharashtra',
+      discom: 'MSEDCL',
+      voltageCategory: '33kV',
+      contractDemandValue: 1000,
+      contractDemandUnit,
+      meteringPoint: 'Main incomer',
+    }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'INVALID_DEMAND_UNIT' });
+  });
+
+  it.each(['kVA', 'MVA'])('accepts %s past contract demand unit validation', async (contractDemandUnit) => {
+    const response = await sitePost(request('/api/sites', actors.ORGANISATION_ADMIN.token, {
+      organisationId,
+      name: `Valid ${contractDemandUnit} site ${stamp}`,
+      state: 'Maharashtra',
+      discom: 'MSEDCL',
+      voltageCategory: '33kV',
+      contractDemandValue: 1000,
+      contractDemandUnit,
+      meteringPoint: 'Main incomer',
+    }));
+    expect(response.status).toBe(201);
+  });
+
+  it('allows an authenticated user to resolve their own organisation through active membership', async () => {
+    const authenticated = createClient(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${actors.ENERGY_MANAGER.token}` } },
+    });
+
+    const { data: ownMembership, error: ownError } = await authenticated
+      .from('memberships')
+      .select(`
+        role,
+        is_active,
+        organisation_id,
+        organisations:organisation_id (id, name)
+      `)
+      .eq('user_id', actors.ENERGY_MANAGER.id)
+      .eq('is_active', true)
+      .single();
+
+    expect(ownError).toBeNull();
+    expect(ownMembership).toMatchObject({
+      role: 'ENERGY_MANAGER',
+      is_active: true,
+      organisation_id: organisationId,
+      organisations: { id: organisationId },
+    });
+  });
+
+  it('does not expose another organisation to an authenticated tenant member', async () => {
+    const authenticated = createClient(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${actors.ENERGY_MANAGER.token}` } },
+    });
+
+    const { data: foreignOrganisations, error: foreignOrganisationError } = await authenticated
+      .from('organisations')
+      .select('id')
+      .eq('id', foreignOrganisationId);
+
+    expect(foreignOrganisationError).toBeNull();
+    expect(foreignOrganisations).toEqual([]);
+
+    const { data: foreignMemberships, error: foreignError } = await authenticated
+      .from('memberships')
+      .select('organisation_id')
+      .neq('organisation_id', organisationId);
+
+    expect(foreignError).toBeNull();
+    expect(foreignMemberships).toEqual([]);
+  });
+
+  it('allows authenticated bootstrap reads from organisations, entitlements, and sites', async () => {
+    const authenticated = createClient(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${actors.ENERGY_MANAGER.token}` } },
+    });
+
+    const [organisationResult, entitlementResult, siteResult] = await Promise.all([
+      authenticated.from('organisations').select('id').eq('id', organisationId).single(),
+      authenticated.from('entitlements').select('product_id').eq('organisation_id', organisationId),
+      authenticated.from('sites').select('id').eq('organisation_id', organisationId),
+    ]);
+
+    expect(organisationResult.error).toBeNull();
+    expect(organisationResult.data?.id).toBe(organisationId);
+    expect(entitlementResult.error).toBeNull();
+    expect(entitlementResult.data).toHaveLength(4);
+    expect(siteResult.error).toBeNull();
+    expect(siteResult.data?.some((site) => site.id === siteId)).toBe(true);
   });
 });

@@ -54,7 +54,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- 3. Local Provider Checkout Reference Mapping (Billing Binding Hardening)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.billing_checkout_sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     provider_reference VARCHAR(255) NOT NULL UNIQUE,
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     site_id UUID REFERENCES sites(id) ON DELETE SET NULL,
@@ -465,7 +465,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- 7. Compliance Obligations Table (Statutory Compliance Calendar)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.compliance_obligations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     regulatory_source_id UUID REFERENCES regulatory_sources(id),
     jurisdiction VARCHAR(100) NOT NULL,
     state VARCHAR(100),

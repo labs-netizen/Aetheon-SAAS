@@ -6,7 +6,7 @@
 
 -- 1. Table dsm_evaluation_runs
 CREATE TABLE IF NOT EXISTS public.dsm_evaluation_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
     operating_date DATE NOT NULL,
     calculation_timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),

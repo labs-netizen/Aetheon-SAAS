@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 -- 2. Commercial Subscriptions
 CREATE TABLE IF NOT EXISTS subscriptions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING'
         CHECK (status IN ('PENDING', 'ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CANCELLED', 'EXPIRED')),
@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_org ON subscriptions(organisation_i
 
 -- 3. Subscription Items
 CREATE TABLE IF NOT EXISTS subscription_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     subscription_id UUID NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
     product_id VARCHAR(50) NOT NULL REFERENCES products(id),
     site_id UUID REFERENCES sites(id) ON DELETE SET NULL,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS subscription_items (
 
 -- 4. Centralized Entitlements (Decoupled from payment status)
 CREATE TABLE IF NOT EXISTS entitlements (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     product_id VARCHAR(50) NOT NULL REFERENCES products(id),
     site_id UUID REFERENCES sites(id) ON DELETE CASCADE,
@@ -61,7 +61,7 @@ ON entitlements(organisation_id, product_id, site_id, is_active);
 
 -- 5. Invoices & Billing History
 CREATE TABLE IF NOT EXISTS invoices (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     subscription_id UUID REFERENCES subscriptions(id) ON DELETE SET NULL,
     invoice_number VARCHAR(100) NOT NULL UNIQUE,
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS processed_webhook_events (
 
 -- 7. Billing Customers Mapping
 CREATE TABLE IF NOT EXISTS billing_customers (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     provider VARCHAR(50) NOT NULL DEFAULT 'RAZORPAY',
     provider_customer_id VARCHAR(255) NOT NULL,

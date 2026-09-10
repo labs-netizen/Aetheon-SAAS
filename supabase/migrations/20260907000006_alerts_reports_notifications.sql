@@ -3,7 +3,7 @@
 
 -- 1. Alert Definitions & System Alerts
 CREATE TABLE IF NOT EXISTS alert_definitions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     module VARCHAR(50) NOT NULL, -- GRID, DSM, BESS, COMPLIANCE, RENEWABLE
     alert_type VARCHAR(100) NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS alert_definitions (
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     module VARCHAR(50) NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS notification_logs (
 
 -- 3. Reports & Calculation Provenance
 CREATE TABLE IF NOT EXISTS report_records (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     module VARCHAR(50) NOT NULL,

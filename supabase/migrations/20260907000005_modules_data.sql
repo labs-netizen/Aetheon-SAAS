@@ -3,7 +3,7 @@
 
 -- 1. Grid Forecast Runs & 96 Blocks
 CREATE TABLE IF NOT EXISTS grid_forecast_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     operating_date DATE NOT NULL,
     model_version VARCHAR(50) NOT NULL DEFAULT 'DEMO_BASELINE_v1.0',
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS grid_forecast_blocks (
 
 -- 2. DSM Incidents (Adjacent-block grouping)
 CREATE TABLE IF NOT EXISTS dsm_incidents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     operating_date DATE NOT NULL,
     start_block INTEGER NOT NULL CHECK (start_block BETWEEN 1 AND 96),
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS dsm_incidents (
 
 -- 3. BESS Assets & Opportunity Windows
 CREATE TABLE IF NOT EXISTS bess_assets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     usable_capacity_kwh NUMERIC(12, 2) NOT NULL CHECK (usable_capacity_kwh > 0),
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS bess_assets (
 );
 
 CREATE TABLE IF NOT EXISTS bess_signal_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     battery_id UUID NOT NULL REFERENCES bess_assets(id) ON DELETE CASCADE,
     operating_date DATE NOT NULL,
     solver_version VARCHAR(50) NOT NULL DEFAULT 'BESS_ADVISORY_HEURISTIC_DEMO_v1.0',
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS bess_signal_runs (
 
 -- 4. Renewable Assets & Reconciliations
 CREATE TABLE IF NOT EXISTS renewable_assets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     technology VARCHAR(50) NOT NULL DEFAULT 'SOLAR_PV', -- SOLAR_PV, WIND, HYBRID

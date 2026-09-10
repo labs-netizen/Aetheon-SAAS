@@ -225,7 +225,7 @@ END $$;
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS renewable_generation_ledger (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
     site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     operating_date DATE NOT NULL,
     total_measured_generation_kwh NUMERIC(12, 2) NOT NULL,
