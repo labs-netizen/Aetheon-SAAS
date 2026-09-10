@@ -112,9 +112,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setIsSubmittingSite(true);
     setSiteCreationError(null);
     try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session?.access_token) {
+        throw new Error('Your authenticated session could not be verified. Please sign in again.');
+      }
+
       const res = await fetch('/api/sites', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           organisationId: currentOrg.id,
           name: siteFormName.trim(),
