@@ -99,6 +99,12 @@ export async function POST(req: NextRequest) {
           error: 'CSV_PARSING_FAILED',
           message: 'Server CSV validation detected invalid formatting or data violations.',
           errors: parseResult.errors,
+          totalRows: parseResult.totalRows,
+          daysDetected: parseResult.daysDetected,
+          validDays: parseResult.validDays,
+          validBlocks: parseResult.validBlocks,
+          invalidDays: parseResult.invalidDays,
+          invalidRows: parseResult.invalidRows,
           rejectedRows: parseResult.rejectedRows,
         },
         { status: 422 }
@@ -107,13 +113,13 @@ export async function POST(req: NextRequest) {
 
     const rowsToIngest = parseResult.parsedData;
 
-    // 4. Server-Side 96-Block Contiguity Validation (Exact 96 blocks required)
+    // 4. Server-Side 96-Block Contiguity Validation (exactly 96 blocks per day)
     const contiguity = validate96BlockContiguity(rowsToIngest);
-    if (!contiguity.isContiguous || rowsToIngest.length !== 96) {
+    if (!contiguity.isContiguous || rowsToIngest.length % 96 !== 0) {
       return NextResponse.json(
         {
           error: 'NON_CONTIGUOUS_BLOCKS',
-          message: 'The submitted file does not form a complete 1-96 contiguous block set (exactly 96 blocks required).',
+          message: 'Every operating date must form a complete 1-96 contiguous block set.',
           missingBlocksByDate: contiguity.missingBlocksByDate,
           receivedBlocks: rowsToIngest.length,
         },
@@ -121,11 +127,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const operatingDateStr = rowsToIngest[0].operating_date;
+    const operatingDates = [...new Set(rowsToIngest.map((row) => row.operating_date))].sort();
+    const incompleteOperatingDate = operatingDates.find((operatingDate) => {
+      const operatingDayEnd = Date.parse(`${operatingDate}T00:00:00+05:30`) + 86400000;
+      return !Number.isFinite(operatingDayEnd) || operatingDayEnd > Date.now();
+    });
+    const operatingDateStr = operatingDates[operatingDates.length - 1];
     const operatingDayEnd = Date.parse(`${operatingDateStr}T00:00:00+05:30`) + 86400000;
-    if (!authResult.isDemo && (!Number.isFinite(operatingDayEnd) || operatingDayEnd > Date.now())) {
+    if (!authResult.isDemo && incompleteOperatingDate) {
       return NextResponse.json({ error: 'INCOMPLETE_OPERATING_DAY',
-        message: 'Live observations require a fully completed 96-block operating day in Asia/Kolkata.' }, { status: 422 });
+        message: `Live observations require fully completed 96-block operating days in Asia/Kolkata; ${incompleteOperatingDate} is incomplete.` }, { status: 422 });
     }
     const adminClient = createAdminClient();
 
@@ -165,7 +176,9 @@ export async function POST(req: NextRequest) {
         block_index: row.block_index,
         timestamp_utc: timestampUtc,
         load_kw: Number(row.load_kw),
-        solar_generation_kw: Number(row.solar_generation_kw || row.generation_solar_kw || 0),
+        solar_generation_kw: row.solar_generation_kw !== null && row.solar_generation_kw !== undefined
+          ? Number(row.solar_generation_kw)
+          : null,
         actual_drawal_kw: row.actual_drawal_kw !== null && row.actual_drawal_kw !== undefined ? Number(row.actual_drawal_kw) : null,
         scheduled_drawal_kw: row.scheduled_drawal_kw !== null && row.scheduled_drawal_kw !== undefined ? Number(row.scheduled_drawal_kw) : null,
       };
@@ -211,6 +224,13 @@ export async function POST(req: NextRequest) {
       run_id: rpcResult?.run_id,
       siteId,
       totalBlocks: formattedRows.length,
+      totalRows: parseResult.totalRows,
+      daysDetected: parseResult.daysDetected,
+      validDays: parseResult.validDays,
+      validBlocks: parseResult.validBlocks,
+      invalidDays: parseResult.invalidDays,
+      invalidRows: parseResult.invalidRows,
+      errors: parseResult.errors,
       serverChecksum,
       freshnessStatus,
       publicationGateStatus: rpcResult?.publication_gate_status || 'BLOCKED_MISSING_INPUT',

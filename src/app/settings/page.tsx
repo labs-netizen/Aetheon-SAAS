@@ -219,7 +219,7 @@ function SettingsContent() {
 
       setCommitFeedback({
         type: 'success',
-        message: `Successfully committed ${data.totalBlocks || 96} interval blocks to site database (Run ID: ${data.ingestionRunId}).`,
+        message: `Successfully committed ${data.validBlocks || data.totalBlocks} interval blocks across ${data.validDays || 1} operating day(s) (Run ID: ${data.run_id}).`,
       });
       await refreshSites();
     } catch (err) {
@@ -335,7 +335,7 @@ function SettingsContent() {
                   15-Minute AMR Interval Data Ingestion Gateway
                 </CardTitle>
                 <CardDescription>
-                  Upload 96-block daily load or smart meter readings. Enforces 15-minute contiguity and SHA-256 duplicate prevention.
+                  Upload one or more complete 96-block operating days. Enforces per-day 15-minute contiguity and SHA-256 duplicate prevention.
                 </CardDescription>
               </div>
               <Button onClick={handleDownloadTemplate} variant="outline" size="sm" className="text-xs gap-1.5">
@@ -360,7 +360,7 @@ function SettingsContent() {
                   />
                 </label>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Supported format: 96-block 15-minute AMR CSV (Max 25MB).
+                  Supported format: one or more complete 96-block 15-minute AMR days in a CSV (Max 25MB).
                 </p>
               </div>
             </div>
@@ -382,18 +382,22 @@ function SettingsContent() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="p-3 rounded bg-slate-950 border border-slate-800">
                         <span className="text-xs text-slate-400 block mb-1">Total Rows</span>
                         <div className="text-lg font-bold font-mono text-slate-200">{parseResult.totalRows}</div>
                       </div>
                       <div className="p-3 rounded bg-emerald-950/30 border border-emerald-800/60">
-                        <span className="text-xs text-emerald-300 block mb-1">Accepted Valid Blocks</span>
-                        <div className="text-lg font-bold font-mono text-emerald-400">{parseResult.acceptedRows}</div>
+                        <span className="text-xs text-emerald-300 block mb-1">Valid Days / Blocks</span>
+                        <div className="text-lg font-bold font-mono text-emerald-400">{parseResult.validDays} / {parseResult.validBlocks}</div>
                       </div>
                       <div className="p-3 rounded bg-rose-950/30 border border-rose-800/60">
-                        <span className="text-xs text-rose-300 block mb-1">Rejected Rows</span>
-                        <div className="text-lg font-bold font-mono text-rose-400">{parseResult.rejectedRows}</div>
+                        <span className="text-xs text-rose-300 block mb-1">Invalid Days / Rows</span>
+                        <div className="text-lg font-bold font-mono text-rose-400">{parseResult.invalidDays} / {parseResult.invalidRows}</div>
+                      </div>
+                      <div className="p-3 rounded bg-slate-950 border border-slate-800">
+                        <span className="text-xs text-slate-400 block mb-1">Days Detected</span>
+                        <div className="text-lg font-bold font-mono text-slate-200">{parseResult.daysDetected}</div>
                       </div>
                     </div>
 
@@ -427,11 +431,11 @@ function SettingsContent() {
                       </div>
                     )}
 
-                    {parseResult.acceptedRows === 96 && (
+                    {parseResult.errors.length === 0 && parseResult.validDays > 0 && (
                       <div className="p-3 rounded-md bg-emerald-950/40 border border-emerald-800 text-xs text-emerald-200 flex items-center justify-between">
                         <span className="flex items-center gap-2">
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          96/96 blocks validated successfully. Contiguity verified.
+                          {parseResult.validBlocks} blocks across {parseResult.validDays} day(s) validated successfully.
                         </span>
                         <Button
                           onClick={handleCommitToDatabase}

@@ -2,12 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { parseAndValidateCsv, generateCsvTemplate, computeFileChecksum } from '@/features/ingestion/csvParser';
 
 describe('CSV Parser, Idempotency & Ingestion Gateway', () => {
+  const csvDays = (dates: string[], blocksPerDay = 96) => {
+    const rows = ['operating_date,block_index,start_time,end_time,load_kw'];
+    dates.forEach((date) => {
+      for (let block = 1; block <= blocksPerDay; block++) {
+        rows.push(`${date},${block},00:00,00:15,1000`);
+      }
+    });
+    return rows.join('\n');
+  };
+
   it('should successfully parse valid 96-block CSV template', () => {
     const template = generateCsvTemplate('2026-09-08');
     const result = parseAndValidateCsv(template, 'site-test-01');
 
     expect(result.isDuplicate).toBe(false);
     expect(result.totalRows).toBe(96);
+    expect(result.daysDetected).toBe(1);
+    expect(result.validDays).toBe(1);
+    expect(result.validBlocks).toBe(96);
     expect(result.acceptedRows).toBe(96);
     expect(result.rejectedRows).toBe(0);
     expect(result.errors).toHaveLength(0);
@@ -34,7 +47,8 @@ describe('CSV Parser, Idempotency & Ingestion Gateway', () => {
 invalid-date,4,00:45,01:00,1200`;
 
     const result = parseAndValidateCsv(invalidCsv, 'site-test-errors');
-    expect(result.acceptedRows).toBe(1);
+    expect(result.acceptedRows).toBe(0);
+    expect(result.invalidDays).toBeGreaterThan(0);
     expect(result.errors.length).toBeGreaterThanOrEqual(3);
     expect(result.errors.some((e) => e.column === 'block_index')).toBe(true);
     expect(result.errors.some((e) => e.column === 'load_kw')).toBe(true);
@@ -48,40 +62,26 @@ invalid-date,4,00:45,01:00,1200`;
     expect(result.errors.some((e) => e.column === 'operating_date' && e.reason.includes('INVALID_CALENDAR_DATE'))).toBe(true);
   });
 
-  it('should reject non-96 row files (95 rows, 97 rows, 192 rows)', () => {
-    // 95 rows
-    const rows95 = ['operating_date,block_index,start_time,end_time,load_kw'];
-    for (let b = 1; b <= 95; b++) {
-      rows95.push(`2026-09-08,${b},00:00,00:15,1000`);
-    }
-    const res95 = parseAndValidateCsv(rows95.join('\n'), 'site-95');
-    expect(res95.errors.some((e) => e.reason.includes('EXACT_96_ROWS'))).toBe(true);
-
-    // 97 rows
-    const rows97 = ['operating_date,block_index,start_time,end_time,load_kw'];
-    for (let b = 1; b <= 97; b++) {
-      rows97.push(`2026-09-08,${b},00:00,00:15,1000`);
-    }
-    const res97 = parseAndValidateCsv(rows97.join('\n'), 'site-97');
-    expect(res97.errors.some((e) => e.reason.includes('EXACT_96_ROWS'))).toBe(true);
-
-    // 192 rows
-    const rows192 = ['operating_date,block_index,start_time,end_time,load_kw'];
-    for (let b = 1; b <= 192; b++) {
-      rows192.push(`2026-09-08,${((b - 1) % 96) + 1},00:00,00:15,1000`);
-    }
-    const res192 = parseAndValidateCsv(rows192.join('\n'), 'site-192');
-    expect(res192.errors.some((e) => e.reason.includes('EXACT_96_ROWS'))).toBe(true);
+  it('accepts 192 rows containing two complete operating days', () => {
+    const result = parseAndValidateCsv(csvDays(['2026-09-07', '2026-09-08']), 'site-192');
+    expect(result.errors).toHaveLength(0);
+    expect(result).toMatchObject({ totalRows: 192, daysDetected: 2, validDays: 2, validBlocks: 192, invalidDays: 0 });
   });
 
-  it('should reject multiple operating dates in one CSV', () => {
-    const rows = ['operating_date,block_index,start_time,end_time,load_kw'];
-    for (let b = 1; b <= 96; b++) {
-      const d = b <= 48 ? '2026-09-08' : '2026-09-09';
-      rows.push(`${d},${b},00:00,00:15,1000`);
-    }
-    const res = parseAndValidateCsv(rows.join('\n'), 'site-multi-dates');
-    expect(res.errors.some((e) => e.reason.includes('V1_CONTRACT_SINGLE_DATE'))).toBe(true);
+  it('structurally accepts 40,896 rows containing 426 complete operating days', () => {
+    const start = Date.UTC(2024, 0, 1);
+    const dates = Array.from({ length: 426 }, (_, index) => new Date(start + index * 86400000).toISOString().slice(0, 10));
+    const result = parseAndValidateCsv(csvDays(dates), 'site-426-days');
+    expect(result.errors).toHaveLength(0);
+    expect(result).toMatchObject({ totalRows: 40896, daysDetected: 426, validDays: 426, validBlocks: 40896, invalidDays: 0 });
+  });
+
+  it('rejects a day containing only 95 blocks', () => {
+    const result = parseAndValidateCsv(csvDays(['2026-09-08'], 95), 'site-95');
+    expect(result.validDays).toBe(0);
+    expect(result.invalidDays).toBe(1);
+    expect(result.invalidRows).toBe(95);
+    expect(result.errors.some((error) => error.reason.includes('INVALID_DAY_BLOCK_COUNT'))).toBe(true);
   });
 
   it('should reject duplicate and missing blocks in 96-row CSV', () => {
@@ -95,5 +95,11 @@ invalid-date,4,00:45,01:00,1200`;
     expect(res.errors.some((e) => e.reason.includes('DUPLICATE_BLOCK'))).toBe(true);
     expect(res.errors.some((e) => e.reason.includes('MISSING_BLOCK'))).toBe(true);
   });
-});
 
+  it('accepts valid trimmed YYYY-MM-DD dates without calendar errors', () => {
+    const csv = csvDays(['2026-09-08']).replaceAll('2026-09-08', ' 2026-09-08 ');
+    const result = parseAndValidateCsv(csv, 'site-trimmed-date');
+    expect(result.errors).toHaveLength(0);
+    expect(result.parsedData[0].operating_date).toBe('2026-09-08');
+  });
+});

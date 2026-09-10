@@ -83,7 +83,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       expect(error.message).toContain('EXACTLY 96');
     });
 
-    it('rejects multiple operating dates in commit_ingestion_transaction RPC', async () => {
+    it('rejects multiple operating dates when neither day has a complete 96-block set', async () => {
       const multiDateRows: any[] = [];
       for (let b = 1; b <= 96; b++) {
         multiDateRows.push({
@@ -107,7 +107,7 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       });
 
       expect(error).not.toBeNull();
-      expect(error.message).toContain('one operating date permitted');
+      expect(error.message).toContain('96');
     });
 
     it('rejects duplicate blocks in commit_ingestion_transaction RPC', async () => {
@@ -134,7 +134,41 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       });
 
       expect(error).not.toBeNull();
-      expect(error.message).toContain('contiguous 1 to 96');
+      expect(error.message).toContain('contiguous blocks 1 to 96');
+    });
+
+    it('accepts two complete operating days through the authenticated API path', async () => {
+      const rows = ['operating_date,block_index,start_time,end_time,load_kw'];
+      const load = 1000 + (Date.now() % 1000) / 1000;
+      for (const date of ['2026-09-01', '2026-09-02']) {
+        for (let block = 1; block <= 96; block++) {
+          rows.push(`${date},${block},00:00,00:15,${load}`);
+        }
+      }
+
+      const response = await ingestionCommitPost(new NextRequest('http://localhost:3000/api/ingestion/commit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${nonDemoUserToken}`,
+        },
+        body: JSON.stringify({
+          siteId: nonDemoSiteId,
+          filename: `two_days_${Date.now()}.csv`,
+          csvText: rows.join('\n'),
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        success: true,
+        totalRows: 192,
+        daysDetected: 2,
+        validDays: 2,
+        validBlocks: 192,
+        invalidDays: 0,
+        invalidRows: 0,
+      });
     });
 
     it('API commit endpoint rejects 95 rows and impossible calendar date 2026-02-31', async () => {

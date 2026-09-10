@@ -29,6 +29,11 @@ export interface ParseResult {
   checksum: string;
   isDuplicate: boolean;
   totalRows: number;
+  daysDetected: number;
+  validDays: number;
+  validBlocks: number;
+  invalidDays: number;
+  invalidRows: number;
   acceptedRows: number;
   rejectedRows: number;
   errors: RowError[];
@@ -38,7 +43,7 @@ export interface ParseResult {
     start_time: string;
     end_time: string;
     load_kw: number;
-    solar_generation_kw: number;
+    solar_generation_kw: number | null;
     actual_drawal_kw: number | null;
     scheduled_drawal_kw: number | null;
   }>;
@@ -77,6 +82,11 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
       checksum,
       isDuplicate: true,
       totalRows: 0,
+      daysDetected: 0,
+      validDays: 0,
+      validBlocks: 0,
+      invalidDays: 0,
+      invalidRows: 0,
       acceptedRows: 0,
       rejectedRows: 0,
       errors: [{
@@ -95,31 +105,26 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
   const rows = parseOutput.data;
   const errors: RowError[] = [];
   const acceptedData: ParseResult['parsedData'] = [];
+  const candidates: Array<{ rowNumber: number; data: ParseResult['parsedData'][number] }> = [];
+  const detectedDates = new Set<string>();
+  const parserRejectedRows = new Set<number>();
 
-  // V1 Contract Enforcement: Exactly 96 rows required
-  if (rows.length !== 96) {
+  parseOutput.errors.forEach((error) => {
+    const rowNumber = typeof error.row === 'number' ? error.row + 2 : 0;
+    if (rowNumber > 0) parserRejectedRows.add(rowNumber);
     errors.push({
-      rowNumber: 0,
-      reason: `V1_CONTRACT_EXACT_96_ROWS: Ingestion file must contain exactly 96 interval blocks (received ${rows.length}).`,
+      rowNumber,
+      reason: `CSV_PARSE_ERROR: ${error.message}`,
     });
-  }
-
-  // V1 Contract Enforcement: Exactly ONE operating date permitted per CSV
-  const rawDates = rows.map((r) => r.operating_date).filter(Boolean);
-  const distinctDates = Array.from(new Set(rawDates));
-  if (distinctDates.length > 1) {
-    errors.push({
-      rowNumber: 0,
-      column: 'operating_date',
-      reason: `V1_CONTRACT_SINGLE_DATE: V1 contract strictly permits only ONE operating date per CSV (found ${distinctDates.length}: ${distinctDates.join(', ')}).`,
-    });
-  }
+  });
 
   rows.forEach((row, idx) => {
     const rowNum = idx + 2; // +1 for 1-based index, +1 for header row
 
     // 1. Validate operating date calendar integrity (reject impossible calendar dates like 2026-02-31)
-    if (!row.operating_date || !isValidCalendarDate(row.operating_date)) {
+    const operatingDate = typeof row.operating_date === 'string' ? row.operating_date.trim() : '';
+    if (operatingDate) detectedDates.add(operatingDate);
+    if (!operatingDate || !isValidCalendarDate(operatingDate)) {
       errors.push({
         rowNumber: rowNum,
         column: 'operating_date',
@@ -154,46 +159,75 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
     }
 
     // 4. Optional fields - DO NOT fabricate DSM data if missing
-    const solar = row.solar_generation_kw !== undefined && row.solar_generation_kw !== '' ? parseFloat(row.solar_generation_kw as string) : 0.0;
+    const solar = row.solar_generation_kw !== undefined && row.solar_generation_kw !== '' ? parseFloat(row.solar_generation_kw as string) : null;
     const actual = row.actual_drawal_kw !== undefined && row.actual_drawal_kw !== '' ? parseFloat(row.actual_drawal_kw as string) : null;
     const scheduled = row.scheduled_drawal_kw !== undefined && row.scheduled_drawal_kw !== '' ? parseFloat(row.scheduled_drawal_kw as string) : null;
 
+    for (const [column, value] of [
+      ['solar_generation_kw', solar],
+      ['actual_drawal_kw', actual],
+      ['scheduled_drawal_kw', scheduled],
+    ] as const) {
+      if (value !== null && (!Number.isFinite(value) || value < 0)) {
+        errors.push({
+          rowNumber: rowNum,
+          column,
+          value: row[column],
+          reason: `${column} must be a non-negative number when supplied.`,
+        });
+        return;
+      }
+    }
+
     const timings = getBlockTimes(block);
 
-    acceptedData.push({
-      operating_date: row.operating_date,
+    if (parserRejectedRows.has(rowNum)) return;
+
+    candidates.push({ rowNumber: rowNum, data: {
+      operating_date: operatingDate,
       block_index: block,
       start_time: timings.startTime,
       end_time: timings.endTime,
       load_kw: load,
-      solar_generation_kw: isNaN(solar) ? 0.0 : Math.max(0, solar),
-      actual_drawal_kw: actual !== null && !isNaN(actual) ? Math.max(0, actual) : null,
-      scheduled_drawal_kw: scheduled !== null && !isNaN(scheduled) ? Math.max(0, scheduled) : null,
-    });
+      solar_generation_kw: solar,
+      actual_drawal_kw: actual,
+      scheduled_drawal_kw: scheduled,
+    } });
   });
 
-  // Check for duplicate blocks within the same date
-  const blockMap = new Map<string, Set<number>>();
-  acceptedData.forEach((row, idx) => {
-    if (!blockMap.has(row.operating_date)) {
-      blockMap.set(row.operating_date, new Set());
-    }
-    const seen = blockMap.get(row.operating_date)!;
-    if (seen.has(row.block_index)) {
+  const rowsByDate = new Map<string, typeof candidates>();
+  candidates.forEach((candidate) => {
+    const dayRows = rowsByDate.get(candidate.data.operating_date) || [];
+    dayRows.push(candidate);
+    rowsByDate.set(candidate.data.operating_date, dayRows);
+  });
+
+  const invalidDateKeys = new Set<string>();
+  rowsByDate.forEach((dayRows, operatingDate) => {
+    const seen = new Set<number>();
+    let dayInvalid = dayRows.length !== 96;
+    if (dayRows.length !== 96) {
       errors.push({
-        rowNumber: idx + 2,
-        column: 'block_index',
-        value: row.block_index,
-        reason: `DUPLICATE_BLOCK: Block ${row.block_index} appears multiple times for date ${row.operating_date}.`,
+        rowNumber: 0,
+        column: 'operating_date',
+        value: operatingDate,
+        reason: `INVALID_DAY_BLOCK_COUNT: Operating date ${operatingDate} must contain exactly 96 rows (received ${dayRows.length}).`,
       });
-    } else {
-      seen.add(row.block_index);
     }
-  });
 
-  // Check for missing blocks when single operating date is present
-  if (distinctDates.length === 1 && rows.length === 96) {
-    const seen = blockMap.get(distinctDates[0]) || new Set();
+    dayRows.forEach(({ rowNumber, data }) => {
+      if (seen.has(data.block_index)) {
+        dayInvalid = true;
+        errors.push({
+          rowNumber,
+          column: 'block_index',
+          value: data.block_index,
+          reason: `DUPLICATE_BLOCK: Block ${data.block_index} appears multiple times for date ${operatingDate}.`,
+        });
+      }
+      seen.add(data.block_index);
+    });
+
     const missing: number[] = [];
     for (let b = 1; b <= 96; b++) {
       if (!seen.has(b)) {
@@ -201,13 +235,22 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
       }
     }
     if (missing.length > 0) {
+      dayInvalid = true;
       errors.push({
         rowNumber: 0,
         column: 'block_index',
-        reason: `MISSING_BLOCK: Operating date ${distinctDates[0]} is missing block(s): ${missing.join(', ')}. Contract requires blocks 1 to 96 exactly once.`,
+        value: operatingDate,
+        reason: `MISSING_BLOCK: Operating date ${operatingDate} is missing block(s): ${missing.join(', ')}. Contract requires blocks 1 to 96 exactly once.`,
       });
     }
-  }
+
+    if (dayInvalid) invalidDateKeys.add(operatingDate);
+    else acceptedData.push(...dayRows.map(({ data }) => data));
+  });
+
+  const validDays = rowsByDate.size - invalidDateKeys.size;
+  const invalidDetectedDates = [...detectedDates].filter((date) => !rowsByDate.has(date)).length;
+  const invalidDays = invalidDateKeys.size + invalidDetectedDates;
 
   // If no errors, record checksum as processed
   if (errors.length === 0 && acceptedData.length > 0) {
@@ -218,8 +261,13 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
     checksum,
     isDuplicate: false,
     totalRows: rows.length,
+    daysDetected: detectedDates.size,
+    validDays,
+    validBlocks: acceptedData.length,
+    invalidDays,
+    invalidRows: rows.length - acceptedData.length,
     acceptedRows: acceptedData.length,
-    rejectedRows: errors.length,
+    rejectedRows: rows.length - acceptedData.length,
     errors,
     parsedData: acceptedData,
   };
@@ -236,19 +284,20 @@ export function validate96BlockContiguity(data: ParseResult['parsedData']): {
   const missing: Record<string, number[]> = {};
   let allContiguous = true;
 
-  if (dates.length !== 1 || data.length !== 96) {
+  if (dates.length === 0) {
     allContiguous = false;
   }
 
   for (const date of dates) {
-    const presentBlocks = new Set(data.filter((d) => d.operating_date === date).map((d) => d.block_index));
+    const dateRows = data.filter((d) => d.operating_date === date);
+    const presentBlocks = new Set(dateRows.map((d) => d.block_index));
     const missingForDate: number[] = [];
     for (let b = 1; b <= 96; b++) {
       if (!presentBlocks.has(b)) {
         missingForDate.push(b);
       }
     }
-    if (missingForDate.length > 0) {
+    if (dateRows.length !== 96 || presentBlocks.size !== 96 || missingForDate.length > 0) {
       missing[date] = missingForDate;
       allContiguous = false;
     }
