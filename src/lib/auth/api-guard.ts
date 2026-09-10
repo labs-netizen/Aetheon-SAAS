@@ -3,7 +3,7 @@ import { createServerSupabaseClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { checkServerEntitlement } from '@/lib/auth/entitlements';
 import { PlatformRole } from '@/types';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export interface GuardOptions {
   siteId?: string;
@@ -69,15 +69,20 @@ export async function authorizeApiRequest(
 
   // 1. Resolve Authenticated User
   let user: { id: string; email?: string; is_platform_admin?: boolean } | null = null;
+  let authenticatedClient: SupabaseClient | null = null;
   const authHeader = req.headers.get('authorization');
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://mock-aetheon.supabase.co';
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'mock-anon-key-placeholder';
-    const tokenClient = createClient(supabaseUrl, supabaseAnonKey);
+    const tokenClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: authHeader } },
+    });
     const { data: authData, error: authError } = await tokenClient.auth.getUser(token);
     if (!authError && authData?.user) {
+      authenticatedClient = tokenClient;
       user = {
         id: authData.user.id,
         email: authData.user.email,
@@ -86,11 +91,12 @@ export async function authorizeApiRequest(
     }
   }
 
-  if (!user) {
+  if (!user || !authenticatedClient) {
     try {
       const serverSupabase = createServerSupabaseClient();
       const { data: authData } = await serverSupabase.auth.getUser();
       if (authData?.user) {
+        authenticatedClient = serverSupabase;
         user = {
           id: authData.user.id,
           email: authData.user.email,
@@ -112,7 +118,7 @@ export async function authorizeApiRequest(
   }
 
   // 2. Handle Unauthenticated Requests
-  if (!user) {
+  if (!user || !authenticatedClient) {
     let demoOrgId: string | undefined;
     if (options.siteId && isDemoModeEnabled) {
       const { data: site } = await adminClient.from('sites').select('organisation_id, is_demo')
@@ -208,7 +214,7 @@ export async function authorizeApiRequest(
   }
 
   // 4. Verify Organisation Membership
-  const { data: membership, error: memError } = await adminClient
+  const { data: membership, error: memError } = await authenticatedClient
     .from('memberships')
     .select('role, is_active, expires_at')
     .eq('organisation_id', resolvedOrgId)
