@@ -23,7 +23,9 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { useSite } from '@/components/layout/SiteContext';
-import { parseAndValidateCsv, generateCsvTemplate, type ParseResult } from '@/features/ingestion/csvParser';
+import { generateCsvTemplate, type ParseResult } from '@/features/ingestion/csvParser';
+import { prepareCsvImport } from '@/features/ingestion/normalizer';
+import type { CsvSchemaMapping, SchemaDetectionResult } from '@/features/ingestion/mappingTypes';
 import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants';
 
@@ -39,6 +41,11 @@ function SettingsContent() {
   const [fileContent, setFileContent] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
+  const [schemaDetection, setSchemaDetection] = useState<SchemaDetectionResult | null>(null);
+  const [schemaMapping, setSchemaMapping] = useState<CsvSchemaMapping>({});
+  const [mappingConfirmed, setMappingConfirmed] = useState(false);
+  const [mappingErrors, setMappingErrors] = useState<string[]>([]);
+  const [sampleRows, setSampleRows] = useState<Array<{ operating_date: string; block_index: number; load_kw: number }>>([]);
 
   // Commit State
   const [isCommitting, setIsCommitting] = useState(false);
@@ -170,10 +177,27 @@ function SettingsContent() {
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setFileContent(content);
-      const result = parseAndValidateCsv(content, currentSite.id);
-      setParseResult(result);
+      const prepared = prepareCsvImport(content, currentSite.id);
+      setSchemaDetection(prepared.detection);
+      setSchemaMapping(prepared.mapping);
+      setMappingConfirmed(!prepared.detection.requiresConfirmation);
+      setMappingErrors(prepared.normalizationErrors.map((error) => error.reason));
+      setSampleRows(prepared.sampleRows);
+      setParseResult(prepared.validation);
     };
     reader.readAsText(file);
+  };
+
+  const applySchemaMapping = (patch: Partial<CsvSchemaMapping>, confirmed = true) => {
+    const next = { ...schemaMapping, ...patch };
+    const prepared = prepareCsvImport(fileContent, currentSite.id, next, confirmed);
+    setSchemaMapping(prepared.mapping);
+    setSchemaDetection(prepared.detection);
+    setMappingConfirmed(confirmed);
+    setMappingErrors(prepared.normalizationErrors.map((error) => error.reason));
+    setSampleRows(prepared.sampleRows);
+    setParseResult(prepared.validation);
+    setCommitFeedback(null);
   };
 
   const handleDownloadTemplate = () => {
@@ -206,6 +230,8 @@ function SettingsContent() {
       } else {
         throw new Error('No CSV file selected for upload.');
       }
+      formData.append('mapping', JSON.stringify(schemaMapping));
+      formData.append('mappingConfirmed', String(mappingConfirmed));
 
       const res = await fetch('/api/ingestion/commit', {
         method: 'POST',
@@ -364,6 +390,104 @@ function SettingsContent() {
                 </p>
               </div>
             </div>
+
+            {schemaDetection && (
+              <div className="mt-6 space-y-4 rounded-lg border border-slate-800 bg-slate-950/40 p-4" data-testid="csv-mapping-preview">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">Column mapping preview</h3>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Delimiter: {schemaDetection.delimiter === '\t' ? 'tab' : schemaDetection.delimiter} · Date: {schemaMapping.dateFormat || 'confirmation required'} · Interval: {schemaDetection.detectedIntervalMinutes ? `${schemaDetection.detectedIntervalMinutes} minutes` : 'not detected'} · Unit: {schemaMapping.measurementUnit || 'confirmation required'}
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  {([
+                    ['Date', 'dateColumn'], ['Timestamp', 'timestampColumn'], ['Time', 'timeColumn'],
+                    ['Block', 'blockColumn'], ['Load / energy', 'measurementColumn'], ['Unit column', 'unitColumn'],
+                  ] as const).map(([label, key]) => (
+                    <label key={key} className="text-[11px] text-slate-400">
+                      {label}
+                      <select
+                        data-testid={`csv-mapping-${key}`}
+                        value={schemaMapping[key] || ''}
+                        onChange={(event) => applySchemaMapping({ [key]: event.target.value || undefined })}
+                        className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-200"
+                      >
+                        <option value="">Not mapped</option>
+                        {schemaDetection.columns.map((column) => <option key={column} value={column}>{column}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                  <label className="text-[11px] text-slate-400">
+                    Date format
+                    <select
+                      value={schemaMapping.dateFormat || ''}
+                      onChange={(event) => applySchemaMapping({ dateFormat: (event.target.value || undefined) as CsvSchemaMapping['dateFormat'] })}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-200"
+                    >
+                      <option value="">Not confirmed</option>
+                      <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                      <option value="ISO-8601">ISO-8601</option>
+                      <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                      <option value="DD-MM-YYYY">DD-MM-YYYY</option>
+                    </select>
+                  </label>
+                  <label className="text-[11px] text-slate-400">
+                    Measurement unit
+                    <select
+                      value={schemaMapping.measurementUnit || ''}
+                      onChange={(event) => applySchemaMapping({ measurementUnit: (event.target.value || undefined) as CsvSchemaMapping['measurementUnit'] })}
+                      className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-200"
+                    >
+                      <option value="">Not confirmed</option>
+                      {['kW', 'MW', 'kVA', 'MVA', 'kWh', 'MWh'].map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {(schemaMapping.measurementUnit === 'kWh' || schemaMapping.measurementUnit === 'MWh') && (
+                  <label className="flex items-start gap-2 text-xs text-amber-200">
+                    <input
+                      type="checkbox"
+                      checked={schemaMapping.confirmEnergyToPower === true}
+                      onChange={(event) => applySchemaMapping({ confirmEnergyToPower: event.target.checked })}
+                    />
+                    Convert interval energy to average power using the confirmed 15-minute interval (explicit confirmation required).
+                  </label>
+                )}
+                {schemaDetection.proposedMappings.length > 0 && (
+                  <div className="grid gap-1 text-[11px] text-slate-400">
+                    {schemaDetection.proposedMappings.map((mapping, index) => (
+                      <div key={`${mapping.targetField}-${index}`}>
+                        {mapping.sourceColumn} → {mapping.targetField} · <span className={mapping.confidence === 'high' ? 'text-emerald-400' : 'text-amber-300'}>{mapping.confidence}</span> · {mapping.reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {schemaDetection.warnings.length > 0 && (
+                  <div className="rounded border border-amber-800 bg-amber-950/30 p-3 text-[11px] text-amber-200" data-testid="csv-mapping-warnings">
+                    {schemaDetection.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+                    {!mappingConfirmed && (
+                      <Button onClick={() => applySchemaMapping({}, true)} variant="outline" size="sm" className="mt-3 text-xs">
+                        Confirm reviewed mapping
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {mappingErrors.length > 0 && (
+                  <div className="rounded border border-rose-900 bg-rose-950/20 p-3 text-[11px] text-rose-200">
+                    {mappingErrors.slice(0, 5).map((error, index) => <div key={`${error}-${index}`}>{error}</div>)}
+                  </div>
+                )}
+                {sampleRows.length > 0 && (
+                  <div className="overflow-x-auto">
+                    <div className="mb-1 text-[11px] font-semibold text-slate-300">Normalized sample</div>
+                    <table className="w-full text-left text-[11px] text-slate-400">
+                      <thead><tr><th>Date</th><th>Block</th><th>Load kW</th></tr></thead>
+                      <tbody>{sampleRows.map((row, index) => <tr key={index}><td>{row.operating_date}</td><td>{row.block_index}</td><td>{row.load_kw}</td></tr>)}</tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
 
             {parseResult && (
               <div className="mt-6 space-y-4 pt-4 border-t border-slate-800">

@@ -73,8 +73,12 @@ export function computeFileChecksum(content: string): string {
   return CryptoJS.SHA256(content).toString();
 }
 
-export function parseAndValidateCsv(fileContent: string, siteId: string): ParseResult {
-  const checksum = computeFileChecksum(fileContent);
+export function parseAndValidateCsv(
+  fileContent: string,
+  siteId: string,
+  options: { checksumSource?: string; recordChecksum?: boolean } = {}
+): ParseResult {
+  const checksum = computeFileChecksum(options.checksumSource ?? fileContent);
   const isDuplicate = PROCESSED_CHECKSUMS.has(`${siteId}:${checksum}`);
 
   if (isDuplicate) {
@@ -253,7 +257,7 @@ export function parseAndValidateCsv(fileContent: string, siteId: string): ParseR
   const invalidDays = invalidDateKeys.size + invalidDetectedDates;
 
   // If no errors, record checksum as processed
-  if (errors.length === 0 && acceptedData.length > 0) {
+  if (options.recordChecksum !== false && errors.length === 0 && acceptedData.length > 0) {
     PROCESSED_CHECKSUMS.add(`${siteId}:${checksum}`);
   }
 

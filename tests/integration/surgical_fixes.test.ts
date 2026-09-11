@@ -171,6 +171,23 @@ describe('Surgical Fixes & Canonical Invariants Suite', () => {
       });
     });
 
+    it('accepts a schema-flexible Date, Time, Load_kW file through the authenticated API path', async () => {
+      const rows = ['Date,Time,Load_kW,Irrelevant'];
+      const load = 900 + (Date.now() % 1000) / 1000;
+      for (let block = 1; block <= 96; block++) {
+        const minute = (block - 1) * 15;
+        const time = `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+        rows.push(`2026-08-31,${time},${load},ignored`);
+      }
+      const response = await ingestionCommitPost(new NextRequest('http://localhost:3000/api/ingestion/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${nonDemoUserToken}` },
+        body: JSON.stringify({ siteId: nonDemoSiteId, filename: `flexible_${Date.now()}.csv`, csvText: rows.join('\n') }),
+      }));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ success: true, totalRows: 96, validDays: 1, validBlocks: 96 });
+    });
+
     it('API commit endpoint rejects 95 rows and impossible calendar date 2026-02-31', async () => {
       // 95 rows via API
       const rows95 = ['operating_date,block_index,start_time,end_time,load_kw'];

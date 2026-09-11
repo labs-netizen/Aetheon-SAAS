@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { validate96BlockContiguity, parseAndValidateCsv } from '@/features/ingestion/csvParser';
+import { validate96BlockContiguity } from '@/features/ingestion/csvParser';
+import { prepareCsvImport } from '@/features/ingestion/normalizer';
+import type { CsvSchemaMapping } from '@/features/ingestion/mappingTypes';
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,6 +12,8 @@ export async function POST(req: NextRequest) {
     let filename: string | null = null;
     let rawBuffer: Buffer | null = null;
     let rawCsvText = '';
+    let schemaMapping: CsvSchemaMapping = {};
+    let mappingConfirmed = false;
 
     const contentType = req.headers.get('content-type') || '';
 
@@ -18,6 +22,9 @@ export async function POST(req: NextRequest) {
       siteId = formData.get('siteId') as string;
       filename = (formData.get('filename') as string) || 'amr_upload.csv';
       const file = formData.get('file') as File | null;
+      const mappingJson = formData.get('mapping');
+      mappingConfirmed = formData.get('mappingConfirmed') === 'true';
+      if (typeof mappingJson === 'string' && mappingJson) schemaMapping = JSON.parse(mappingJson) as CsvSchemaMapping;
 
       if (!file) {
         return NextResponse.json(
@@ -33,6 +40,8 @@ export async function POST(req: NextRequest) {
     } else {
       // JSON payload support
       const body = await req.json();
+      schemaMapping = body.mapping || {};
+      mappingConfirmed = body.mappingConfirmed === true;
       siteId = body.siteId;
       filename = body.filename || 'amr_upload.csv';
       if (body.csvText) {
@@ -86,7 +95,24 @@ export async function POST(req: NextRequest) {
     const serverChecksum = crypto.createHash('sha256').update(rawBuffer).digest('hex');
 
     // 3. Authoritative Server-Side CSV Parsing & Schema Validation
-    const parseResult = parseAndValidateCsv(rawCsvText, siteId);
+    const prepared = prepareCsvImport(rawCsvText, siteId, schemaMapping, mappingConfirmed);
+    if (prepared.normalizationErrors.length > 0 || !prepared.validation) {
+      const confirmationRequired = prepared.normalizationErrors.every((error) => error.reason.startsWith('MAPPING_CONFIRMATION_REQUIRED'));
+      return NextResponse.json(
+        {
+          error: confirmationRequired ? 'CSV_MAPPING_CONFIRMATION_REQUIRED' : 'CSV_SCHEMA_MAPPING_FAILED',
+          message: confirmationRequired
+            ? 'Review and confirm the detected CSV mappings before ingestion.'
+            : 'CSV columns or values could not be safely normalized.',
+          detection: prepared.detection,
+          errors: prepared.normalizationErrors,
+          sampleRows: prepared.sampleRows,
+          totalRows: prepared.detection.totalRows,
+        },
+        { status: 422 }
+      );
+    }
+    const parseResult = prepared.validation;
     if (parseResult.isDuplicate) {
       return NextResponse.json(
         { error: 'DUPLICATE_FILE', message: 'File with identical content has already been processed for this site' },
