@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchGridForecast } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
-import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo } from '@/lib/analytics/domain-safety';
+import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo, validGridDemandForecast } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { loadGridHistoricalInput } from '@/lib/analytics/grid-input-evidence';
+
+const nextOperatingDate = (value: string) =>
+  new Date(Date.parse(`${value}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
 export async function GET(req: NextRequest) {
   try {
@@ -36,23 +40,53 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'SITE_NOT_FOUND', message: 'Site not found.' }, { status: 404 });
     }
 
-    const operatingDate = requestedOperatingDate || operatingToday();
+    let operatingDate = requestedOperatingDate || operatingToday();
 
-    // 2. Authoritative Server-side Quality Gate
+    // 2. Live demand forecasting uses only committed, tenant-authorized history.
     if (site.is_demo !== true) {
+      const historicalInput = await loadGridHistoricalInput(readClient, siteId);
+      const latestCompleteDate = historicalInput.complete_days.at(-1)?.operating_date;
+      if (!requestedOperatingDate && latestCompleteDate) operatingDate = nextOperatingDate(latestCompleteDate);
+
+      let forecastResult: any;
+      try {
+        forecastResult = await fetchGridForecast({
+          isDemo: false,
+          siteId,
+          operatingDate,
+          contractDemandKw: Number(site.contract_demand_value),
+          historicalDays: historicalInput.complete_days,
+          evaluationDate: operatingToday(),
+          latestInputComplete: historicalInput.latest_observed_complete,
+        });
+      } catch (apiErr) {
+        return NextResponse.json({
+          error: 'ANALYTICS_SERVICE_UNAVAILABLE',
+          details: apiErr instanceof Error ? apiErr.message : String(apiErr),
+        }, { status: 502 });
+      }
+
+      if (forecastResult?.forecast_available !== true) {
+        const validSuppression = forecastResult?.site_id === siteId &&
+          ['CALIBRATING', 'FAILED_VALIDATION', 'STALE_INPUT'].includes(forecastResult?.model_status) &&
+          forecastResult?.is_suppressed === true && Array.isArray(forecastResult?.blocks) && forecastResult.blocks.length === 0;
+        if (!validSuppression) {
+          return NextResponse.json({ error: 'INVALID_ANALYTICS_CONTRACT' }, { status: 502 });
+        }
+        return NextResponse.json({ ...forecastResult, organisation_id: authResult.organisationId, persisted: false });
+      }
+
+      if (!validGridDemandForecast(forecastResult, siteId, operatingDate)) {
+        return NextResponse.json({
+          error: 'INVALID_ANALYTICS_CONTRACT',
+          message: 'Validated demand forecast did not satisfy the 96-block, provenance, or no-price contract.',
+        }, { status: 502 });
+      }
       return NextResponse.json({
-        site_id: siteId,
+        ...forecastResult,
         organisation_id: authResult.organisationId,
-        operating_date: operatingDate,
-        forecast_available: false,
-        forecast_status: 'SUPPRESSED',
-        is_suppressed: true,
-        suppression_reason: LIVE_GRID_BLOCK,
-        blocks: [],
         persisted: false,
-        data_quality: 'UNVERIFIED',
-        confidence_status: 'UNAVAILABLE',
-        freshness: 'UNKNOWN',
+        recommendations_suppressed: true,
       });
     }
 

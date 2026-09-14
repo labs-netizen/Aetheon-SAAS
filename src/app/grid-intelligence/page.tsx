@@ -64,6 +64,9 @@ export default function GridIntelligencePage() {
 
   const isDemo = Boolean(currentSite?.is_demo);
   const hasValidForecast = Boolean(forecastResult && !forecastResult.is_suppressed && forecastResult.blocks?.length === 96);
+  const hasAuthoritativePriceFeed = Boolean(hasValidForecast && forecastResult?.price_status !== 'AUTHORITATIVE_PRICE_FEED_REQUIRED' &&
+    forecastResult.blocks.every((block: any) => block.forecast_price_inr_per_mwh != null &&
+      Number.isFinite(Number(block.forecast_price_inr_per_mwh))));
 
   // Load committed input evidence first, then load forecast output independently.
   useEffect(() => {
@@ -89,7 +92,6 @@ export default function GridIntelligencePage() {
           const evidenceResponse = await fetch(`/api/grid/input-evidence?site_id=${encodeURIComponent(currentSite.id)}`, { headers });
           const evidence = await evidenceResponse.json().catch(() => ({}));
           if (!evidenceResponse.ok) throw new Error(evidence.details || evidence.error || `HTTP ${evidenceResponse.status}`);
-          resolvedOperatingDate = evidence.operating_date;
           if (isMounted) setInputEvidence({ requestSiteId: currentSite.id, data: evidence });
         } catch (error) {
           if (isMounted) setInputEvidenceError(error instanceof Error ? error.message : String(error));
@@ -132,7 +134,9 @@ export default function GridIntelligencePage() {
         block_index: b.block_index,
         start_time: b.start_time || getBlockTimes(b.block_index).startTime,
         demand_kw: Math.round(b.forecast_demand_kw || b.demand_kw || 0),
-        price_mwh: Math.round(b.forecast_price_inr_per_mwh || b.price_mwh || 0),
+        price_mwh: Number.isFinite(Number(b.forecast_price_inr_per_mwh ?? b.price_mwh))
+          ? Math.round(Number(b.forecast_price_inr_per_mwh ?? b.price_mwh))
+          : undefined,
         solar_kw: Math.round(b.solar_generation_kw || 0),
         is_high_cost: Boolean(b.is_high_cost_window || (b.forecast_price_inr_per_mwh || 0) >= 7500),
       }));
@@ -208,6 +212,8 @@ export default function GridIntelligencePage() {
     if (forecastBlocks.length === 0) {
       return isDemo ? { windowText: 'Blocks 72–88 (18:00 - 22:00) [DEMO]', priceRangeText: '₹7,800 - ₹9,600/MWh [DEMO]' } : null;
     }
+    const pricedBlocks = forecastBlocks.filter((block) => block.price_mwh !== undefined);
+    if (pricedBlocks.length !== 96) return null;
     const highBlocks = forecastBlocks.filter((b) => b.is_high_cost);
     if (highBlocks.length === 0) {
       const sorted = [...forecastBlocks].sort((a, b) => (b.price_mwh || 0) - (a.price_mwh || 0));
@@ -229,7 +235,7 @@ export default function GridIntelligencePage() {
 
   // Cost Explorer calculations based on server-returned blocks and persisted approved tariff
   const explorerCalculations = useMemo(() => {
-    if (!isDemo && (!hasValidForecast || forecastBlocks.length === 0)) {
+    if (!isDemo && (!hasValidForecast || !hasAuthoritativePriceFeed || forecastBlocks.length === 0)) {
       return {
         totalDailyKwh: 0,
         baselineCostPaise: 0,
@@ -305,7 +311,7 @@ export default function GridIntelligencePage() {
       landedUnitCostInr: totalDailyKwh > 0 ? (scenarioCostPaise / (totalDailyKwh * 100)).toFixed(2) : '0.00',
       isDataGap: false,
     };
-  }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast, forecastResult]);
+  }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast, hasAuthoritativePriceFeed, forecastResult]);
 
   const handleExportCsv = () => {
     const headers = ['block_index', 'start_time', 'forecast_demand_kw', 'forecast_price_inr_per_mwh', 'solar_generation_kw', 'is_high_cost'];
@@ -349,7 +355,7 @@ export default function GridIntelligencePage() {
               )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Day-ahead 96-block price & demand forecast, high-cost window alerts, and scenario cost explorer.
+              Day-ahead 96-block demand forecasting with independently gated market-price readiness.
             </p>
           </div>
 
@@ -390,6 +396,23 @@ export default function GridIntelligencePage() {
             {inputEvidence.received_blocks}/{inputEvidence.expected_blocks} blocks ·{' '}
             {Number(inputEvidence.completeness_pct).toFixed(1)}% complete
             {!inputEvidence.data_available && ' · Upload interval data to continue'}
+          </div>
+        )}
+
+        {!isDemo && forecastResult && (
+          <div data-testid="grid-model-status" className="p-3 rounded bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1">
+            <div>Model: <strong>{forecastResult.validation_status || forecastResult.model_status}</strong></div>
+            <div>Latest data: <strong>{forecastResult.latest_input_date || inputEvidence?.operating_date || 'UNAVAILABLE'}</strong></div>
+            <div>Forecast target: <strong>{forecastResult.forecast_target_date || 'UNAVAILABLE'}</strong></div>
+            <div>Freshness: <strong>{forecastResult.model_status === 'STALE_INPUT' ? 'STALE' : (forecastResult.freshness || 'UNKNOWN')}</strong></div>
+            <div>Operational forecast: <strong>{forecastResult.forecast_available ? 'DEMAND FORECAST AVAILABLE' : `SUPPRESSED — ${forecastResult.suppression_reason || forecastResult.model_status}`}</strong></div>
+            <div>Market prices: <strong>{forecastResult.price_status || 'AUTHORITATIVE_PRICE_FEED_REQUIRED'}</strong></div>
+          </div>
+        )}
+
+        {!isDemo && !hasAuthoritativePriceFeed && (
+          <div className="p-3 rounded bg-amber-950/40 border border-amber-800 text-xs text-amber-300">
+            Price-dependent recommendations and cost optimisation are suppressed — AUTHORITATIVE_PRICE_FEED_REQUIRED.
           </div>
         )}
 
@@ -525,7 +548,7 @@ export default function GridIntelligencePage() {
                           <td className="py-2 px-3">{b.block_index}</td>
                           <td className="py-2 px-3">{b.start_time}</td>
                           <td className="py-2 px-3">{b.demand_kw} kW</td>
-                          <td className="py-2 px-3">₹{(b.price_mwh || 0).toLocaleString('en-IN')}/MWh</td>
+                          <td className="py-2 px-3">{b.price_mwh === undefined ? 'PRICE FEED REQUIRED' : `₹${b.price_mwh.toLocaleString('en-IN')}/MWh`}</td>
                           <td className="py-2 px-3 text-amber-400">{b.solar_kw} kW</td>
                           <td className="py-2 px-3">
                             {b.is_high_cost ? (

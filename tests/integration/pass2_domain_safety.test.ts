@@ -60,14 +60,21 @@ describe('Pass 2 domain publication and evidence regressions',()=>{
   afterEach(()=>{analytics.bad=false;analytics.grid.mockClear();analytics.bess.mockClear();analytics.dsm.mockClear();});
 
   it('suppresses live GRID POST and cached GET despite PUBLISHABLE quality and browser history',async()=>{
+    analytics.grid.mockImplementation(async(p:any)=>({site_id:p.siteId,operating_date:p.operatingDate,forecast_target_date:p.operatingDate,
+      model_status:'CALIBRATING',validation_status:'CALIBRATING',forecast_available:false,model_version:'GRID_HISTORICAL_LOAD_V1.0',
+      model_generation_time:'2026-09-15T00:00:00Z',latest_input_date:null,freshness_days:null,selected_model:null,
+      validation_metrics:null,baseline_metrics:{},blocks:[],is_suppressed:true,suppression_reason:'INSUFFICIENT_COMPLETE_HISTORY',
+      confidence_status:'UNAVAILABLE',data_quality:'UNVERIFIED',freshness:'UNKNOWN',price_status:'AUTHORITATIVE_PRICE_FEED_REQUIRED'}));
     await must(db.from('data_quality_evaluations').insert({site_id:site,evaluation_date:date,completeness_pct:100,validation_status:'PASSED',freshness_status:'RECENT',publication_gate_status:'PUBLISHABLE'}));
     await must(db.from('grid_forecast_runs').insert({site_id:site,operating_date:date,model_version:'GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0',
       model_generation_time:new Date().toISOString(),average_price_inr_per_mwh:9000,peak_demand_kw:1000,peak_demand_block:1,quality_status:'PUBLISHABLE',freshness_status:'RECENT'}));
-    for(const res of [await gridPost(request('/api/forecast',{siteId:site,operatingDate:date,isDemo:true,historicalLoadKw:Array(96).fill(99999)})),
-      await gridGet(request(`/api/forecast?siteId=${site}&operatingDate=${date}`))]){
-      expect(res.status).toBe(200);expect(await res.json()).toMatchObject({is_suppressed:true,blocks:[],data_quality:'UNVERIFIED'});
-    }
-    expect(analytics.grid).not.toHaveBeenCalled();
+    const postResponse=await gridPost(request('/api/forecast',{siteId:site,operatingDate:date,isDemo:true,historicalLoadKw:Array(96).fill(99999)}));
+    expect(postResponse.status,JSON.stringify(await postResponse.clone().json())).toBe(200);
+    expect(await postResponse.json()).toMatchObject({is_suppressed:true,blocks:[],data_quality:'UNVERIFIED'});
+    const getResponse=await gridGet(request(`/api/forecast?siteId=${site}&operatingDate=${date}`));
+    expect(getResponse.status,JSON.stringify(await getResponse.clone().json())).toBe(200);
+    expect(await getResponse.json()).toMatchObject({is_suppressed:true,blocks:[],data_quality:'UNVERIFIED'});
+    expect(analytics.grid).toHaveBeenCalledOnce();
     expect((await generate('GRID_DAILY_BRIEF')).status).toBe(422);
   });
   it('rejects impossible operating dates before invoking a solver',async()=>{

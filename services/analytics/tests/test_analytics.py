@@ -34,18 +34,20 @@ def test_health_check():
 
 
 def test_grid_forecast_96_blocks():
-    req = GridForecastRequest(
-        is_demo=True,
-        site_id="site-demo-001",
-        operating_date="2026-09-08",
-        contract_demand_kw=2000.0
-    )
+    from datetime import date, timedelta
+    from schemas import GridHistoricalDay
+    days = [GridHistoricalDay(
+        operating_date=(date(2026, 1, 1) + timedelta(days=day)).isoformat(),
+        load_kw=[1000.0 + block for block in range(96)],
+    ) for day in range(70)]
+    req = GridForecastRequest(site_id="site-real-001", operating_date="2026-03-12",
+        evaluation_date="2026-03-11", contract_demand_kw=2000.0, historical_days=days)
     res = solve_grid_forecast(req)
     assert len(res.blocks) == 96
     assert res.blocks[0].block_index == 1
     assert res.blocks[95].block_index == 96
     assert res.peak_demand_kw > 0
-    assert res.average_price_inr_per_mwh > 0
+    assert res.average_price_inr_per_mwh is None
     # Every block must have valid start and end times
     assert res.blocks[0].start_time == "00:00"
     assert res.blocks[95].end_time == "24:00"

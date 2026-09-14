@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 export const LIVE_GRID_BLOCK = 'LIVE_MODEL_AND_PRICE_FEED_REQUIRED: The installed GRID model uses synthetic demand, market prices and uncalibrated confidence bands.';
+export const AUTHORITATIVE_PRICE_FEED_REQUIRED = 'AUTHORITATIVE_PRICE_FEED_REQUIRED';
 export const LIVE_BESS_BLOCK = 'LIVE_PRICE_AND_INTERCONNECTION_AUTHORITY_REQUIRED: No verified live market-price feed or interconnection-limit evidence is configured.';
 export const DSM_MODEL = 'DSM_TECHNICAL_DEVIATION_v2.0';
 
@@ -25,6 +26,18 @@ export function validGridDemo(r: any, siteId: string, date: string): boolean {
     r.blocks.every((b: any,i: number) => b.start_time === hhmm(i*15) && b.end_time === hhmm((i+1)*15) &&
       ['forecast_demand_kw','forecast_price_inr_per_mwh','confidence_lower_kw','confidence_upper_kw'].every(k => finiteNumber(b[k])) &&
       Number(b.confidence_lower_kw) >= 0 && Number(b.confidence_lower_kw) <= Number(b.forecast_demand_kw) && Number(b.forecast_demand_kw) <= Number(b.confidence_upper_kw));
+}
+export function validGridDemandForecast(r: any, siteId: string, date: string): boolean {
+  const hhmm = (n: number) => n === 1440 ? '24:00' : `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
+  return r?.site_id === siteId && r.operating_date === date && r.forecast_target_date === date &&
+    r.model_status === 'VALIDATED' && r.validation_status === 'VALIDATED' && r.forecast_available === true &&
+    r.model_version === 'GRID_HISTORICAL_LOAD_V1.0' && blocks96(r.blocks) && r.average_price_inr_per_mwh == null &&
+    r.price_status === AUTHORITATIVE_PRICE_FEED_REQUIRED && r.blocks.every((b: any,i: number) =>
+      b.start_time === hhmm(i*15) && b.end_time === hhmm((i+1)*15) &&
+      ['forecast_demand_kw','confidence_lower_kw','confidence_upper_kw'].every(k => finiteNumber(b[k])) &&
+      b.forecast_price_inr_per_mwh == null && b.is_high_cost_window == null &&
+      Number(b.confidence_lower_kw) >= 0 && Number(b.confidence_lower_kw) <= Number(b.forecast_demand_kw) &&
+      Number(b.forecast_demand_kw) <= Number(b.confidence_upper_kw));
 }
 export function validIntervals(rows: any[], date: string, fields: string[], now = Date.now()): boolean {
   if (!validDate(date) || !blocks96(rows)) return false;

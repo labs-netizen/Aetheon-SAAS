@@ -3,7 +3,7 @@ Pydantic Schemas for Aetheon Analytics Microservice
 Defines strongly-typed request and response contracts for 96-block numerical processing.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict, field_validator
 from datetime import date
 
@@ -30,8 +30,44 @@ class GridForecastRequest(DatedNumericalRequest):
     site_id: str = Field(..., min_length=1)
     operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="YYYY-MM-DD")
     contract_demand_kw: float = Field(..., gt=0)
+    historical_days: List["GridHistoricalDay"] = Field(default_factory=list)
+    evaluation_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    latest_input_complete: bool = True
     historical_load_kw: Optional[List[float]] = None
     seed: Optional[int] = 42
+
+    @field_validator("evaluation_date")
+    @classmethod
+    def valid_evaluation_date(cls, value):
+        if value is not None:
+            date.fromisoformat(value)
+        return value
+
+    @model_validator(mode="after")
+    def unique_history_dates(self):
+        dates = [day.operating_date for day in self.historical_days]
+        if len(dates) != len(set(dates)):
+            raise ValueError("historical_days must contain unique operating dates")
+        return self
+
+
+class GridHistoricalDay(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    load_kw: List[float] = Field(..., min_length=96, max_length=96)
+
+    @field_validator("operating_date")
+    @classmethod
+    def valid_operating_date(cls, value):
+        date.fromisoformat(value)
+        return value
+
+    @field_validator("load_kw")
+    @classmethod
+    def nonnegative_load(cls, values):
+        if any(value < 0 for value in values):
+            raise ValueError("load_kw cannot contain negative values")
+        return values
 
 
 class GridForecastBlock(BaseModel):
@@ -39,26 +75,45 @@ class GridForecastBlock(BaseModel):
     start_time: str
     end_time: str
     forecast_demand_kw: float
-    forecast_price_inr_per_mwh: float
+    forecast_price_inr_per_mwh: Optional[float] = None
     confidence_lower_kw: float
     confidence_upper_kw: float
-    is_high_cost_window: bool
+    is_high_cost_window: Optional[bool] = None
+
+
+class GridValidationMetrics(BaseModel):
+    mae_kw: float
+    rmse_kw: float
+    smape_pct: float
+    observations: int
 
 
 class GridForecastResponse(BaseModel):
     site_id: str
     operating_date: str
-    model_version: str = "DEMO_BASELINE_v1.0"
+    model_status: str
+    validation_status: str
+    forecast_available: bool = False
+    model_version: str
     model_generation_time: str
+    training_start_date: Optional[str] = None
+    training_end_date: Optional[str] = None
+    latest_input_date: Optional[str] = None
+    forecast_target_date: Optional[str] = None
+    freshness_days: Optional[int] = None
+    selected_model: Optional[str] = None
+    validation_metrics: Optional[GridValidationMetrics] = None
+    baseline_metrics: Dict[str, GridValidationMetrics] = Field(default_factory=dict)
     average_price_inr_per_mwh: Optional[float] = None
     peak_demand_kw: Optional[float] = None
     peak_demand_block: Optional[int] = None
     blocks: List[GridForecastBlock]
     is_suppressed: bool = False
     suppression_reason: Optional[str] = None
-    confidence_status: str = "DEMO_UNCALIBRATED"
-    data_quality: str = "DEMO_UNVERIFIED"
-    freshness: str = "DEMO"
+    confidence_status: str = "UNAVAILABLE"
+    data_quality: str = "UNVERIFIED"
+    freshness: str = "UNKNOWN"
+    price_status: str = "AUTHORITATIVE_PRICE_FEED_REQUIRED"
 
 
 class DSMDeviationBlock(BaseModel):

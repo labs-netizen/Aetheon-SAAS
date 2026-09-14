@@ -10,7 +10,28 @@ import { POST as dsmPost } from '@/app/api/dsm/route';
 
 const analytics = vi.hoisted(() => ({
   dsm: vi.fn(async (_input: any) => ({})),
-  grid: vi.fn(async (_input: any) => ({})),
+  grid: vi.fn(async (input: any) => ({
+    site_id: input.siteId,
+    operating_date: input.operatingDate,
+    forecast_target_date: input.operatingDate,
+    model_status: 'STALE_INPUT',
+    validation_status: 'VALIDATED',
+    forecast_available: false,
+    model_version: 'GRID_HISTORICAL_LOAD_V1.0',
+    model_generation_time: '2026-09-15T00:00:00Z',
+    latest_input_date: input.historicalDays.at(-1)?.operating_date ?? null,
+    freshness_days: 1,
+    selected_model: 'PREVIOUS_WEEK_SAME_BLOCK',
+    validation_metrics: { mae_kw: 10, rmse_kw: 12, smape_pct: 1, observations: 1344 },
+    baseline_metrics: {},
+    blocks: [],
+    is_suppressed: true,
+    suppression_reason: 'STALE_INPUT',
+    confidence_status: 'UNAVAILABLE',
+    data_quality: 'UNVERIFIED',
+    freshness: 'STALE',
+    price_status: 'AUTHORITATIVE_PRICE_FEED_REQUIRED',
+  })),
 }));
 vi.mock('@/lib/analytics/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/analytics/client')>()),
@@ -116,7 +137,7 @@ describe('Grid visibility of committed interval data', () => {
 
   it('reads a committed own-site day as 96/96 independently from forecast output', async () => {
     const response = await inputEvidenceGet(evidenceRequest(completeSiteId, '2026-01-01'));
-    expect(response.status).toBe(200);
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
       site_id: completeSiteId,
@@ -216,6 +237,28 @@ describe('Grid visibility of committed interval data', () => {
       data_available: true,
     });
     expect(analytics.grid).not.toHaveBeenCalled();
+  });
+
+  it('passes all 426 complete days to forecasting and targets the next operating day', async () => {
+    analytics.grid.mockClear();
+    const response = await forecastGet(forecastRequest(historySiteId));
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    expect(await response.json()).toMatchObject({
+      site_id: historySiteId,
+      model_status: 'STALE_INPUT',
+      forecast_available: false,
+      blocks: [],
+      price_status: 'AUTHORITATIVE_PRICE_FEED_REQUIRED',
+    });
+    expect(analytics.grid).toHaveBeenCalledOnce();
+    const input = analytics.grid.mock.calls[0][0];
+    expect(input.historicalDays).toHaveLength(426);
+    expect(input.historicalDays.at(-1).operating_date).toBe(historyLatestDate);
+    const expectedTarget = new Date(`${historyLatestDate}T00:00:00Z`);
+    expectedTarget.setUTCDate(expectedTarget.getUTCDate() + 1);
+    expect(input.operatingDate).toBe(expectedTarget.toISOString().slice(0, 10));
+    expect(input.latestInputComplete).toBe(true);
+    expect(input.historicalDays.every((day: any) => day.load_kw.length === 96)).toBe(true);
   });
 
   it('gives DSM only the explicitly requested day from multi-day site history', async () => {

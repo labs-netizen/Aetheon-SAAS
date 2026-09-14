@@ -15,6 +15,17 @@ export interface GridInputEvidence {
   source: 'interval_data_96';
 }
 
+export interface GridHistoricalDay {
+  operating_date: string;
+  load_kw: number[];
+}
+
+export interface GridHistoricalInput {
+  complete_days: GridHistoricalDay[];
+  latest_observed_date: string | null;
+  latest_observed_complete: boolean;
+}
+
 const emptyEvidence = (): GridInputEvidence => ({
   operating_date: null,
   total_blocks_expected: 96,
@@ -121,4 +132,76 @@ export async function resolveGridInputEvidence(
     if (evidence.is_complete) return evidence;
     beforeDate = operatingDate;
   }
+}
+
+export async function loadGridHistoricalInput(
+  client: SupabaseClient,
+  siteId: string,
+  maximumCompleteDays = 426
+): Promise<GridHistoricalInput> {
+  const pageSize = 1000;
+  const maximumRows = 50000;
+  const rows: any[] = [];
+  let cursorDate: string | null = null;
+  let cursorBlock: number | null = null;
+  // PostgREST caps responses at 1,000 rows. Keyset pagination keeps every query
+  // index-bounded; large OFFSET scans can exceed the statement timeout under RLS.
+  while (rows.length < maximumRows) {
+    let query = client
+      .from('interval_data_96')
+      .select('operating_date, block_index, load_kw, data_quality')
+      .eq('site_id', siteId)
+      .order('operating_date', { ascending: false })
+      .order('block_index', { ascending: false })
+      .limit(Math.min(pageSize, maximumRows - rows.length));
+    if (cursorDate !== null && cursorBlock !== null) {
+      query = query.or(`operating_date.lt.${cursorDate},and(operating_date.eq.${cursorDate},block_index.lt.${cursorBlock})`);
+    }
+    const { data, error } = await query;
+    if (error) throw new Error(`GRID_HISTORY_LOOKUP_FAILED: ${error.message}`);
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+    const cursor = data.at(-1)!;
+    cursorDate = cursor.operating_date;
+    cursorBlock = Number(cursor.block_index);
+  }
+
+  const byDate = new Map<string, any[]>();
+  for (const row of rows) {
+    const dayRows = byDate.get(row.operating_date) || [];
+    dayRows.push(row);
+    byDate.set(row.operating_date, dayRows);
+  }
+  const dates = [...byDate.keys()].sort();
+  const latestObservedDate = dates.at(-1) || null;
+  const completeDays: GridHistoricalDay[] = [];
+  let latestObservedComplete = false;
+  for (const operatingDate of dates) {
+    const dayRows = byDate.get(operatingDate) || [];
+    const blocks = new Map<number, number>();
+    let qualityValid = true;
+    for (const row of dayRows) {
+      const blockIndex = Number(row.block_index);
+      const load = row.load_kw === null || row.load_kw === '' ? Number.NaN : Number(row.load_kw);
+      if (!Number.isInteger(blockIndex) || blockIndex < 1 || blockIndex > 96 || !Number.isFinite(load) || load < 0 || blocks.has(blockIndex)) {
+        qualityValid = false;
+        continue;
+      }
+      if (row.data_quality !== 'PASSED' && row.data_quality !== 'WARNING') qualityValid = false;
+      blocks.set(blockIndex, load);
+    }
+    const complete = qualityValid && dayRows.length === 96 && blocks.size === 96;
+    if (operatingDate === latestObservedDate) latestObservedComplete = complete;
+    if (complete) {
+      completeDays.push({
+        operating_date: operatingDate,
+        load_kw: Array.from({ length: 96 }, (_, index) => blocks.get(index + 1)!),
+      });
+    }
+  }
+  return {
+    complete_days: completeDays.slice(-maximumCompleteDays),
+    latest_observed_date: latestObservedDate,
+    latest_observed_complete: latestObservedComplete,
+  };
 }

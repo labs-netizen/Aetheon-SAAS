@@ -21,10 +21,10 @@ describe('Grid input and forecast UI independence', () => {
     expect(page).not.toMatch(/totalBlocksReceived:[^\n]*forecastBlocks/);
   });
 
-  it('keeps the forecast endpoint independent from committed-input queries', () => {
+  it('uses committed history for forecasting without returning it as UI completeness evidence', () => {
     expect(forecastRoute).not.toContain('resolveGridInputEvidence');
     expect(forecastRoute).not.toContain('input_evidence');
-    expect(forecastRoute).toContain("forecast_status: 'SUPPRESSED'");
-    expect(forecastRoute).toContain('blocks: []');
+    expect(forecastRoute).toContain('loadGridHistoricalInput');
+    expect(forecastRoute).toContain('historicalDays: historicalInput.complete_days');
   });
 });

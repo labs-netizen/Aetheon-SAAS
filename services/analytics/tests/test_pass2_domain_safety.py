@@ -24,11 +24,9 @@ def test_live_grid_never_fabricates_forecast_even_with_history():
     assert r.average_price_inr_per_mwh is None and r.confidence_status == 'UNAVAILABLE'
 
 
-def test_demo_grid_truth_and_block_alignment():
+def test_demo_flag_does_not_enable_synthetic_grid_output():
     r = solve_grid_forecast(GridForecastRequest(is_demo=True,site_id='site',operating_date='2026-09-07',contract_demand_kw=1000))
-    assert r.data_quality == 'DEMO_UNVERIFIED' and r.confidence_status == 'DEMO_UNCALIBRATED'
-    assert r.blocks[0].start_time == '00:00' and r.blocks[-1].end_time == '24:00'
-    assert [b.block_index for b in r.blocks] == list(range(1,97))
+    assert r.model_status == 'CALIBRATING' and r.is_suppressed and r.blocks == []
 
 
 def test_zero_schedule_drawal_is_critical_and_exposure_unknown():

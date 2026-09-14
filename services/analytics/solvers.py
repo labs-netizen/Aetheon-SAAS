@@ -13,6 +13,7 @@ from schemas import (
     BESSSolverRequest, BESSSolverResponse, BESSDispatchBlock,
     RenewableReconciliationRequest, RenewableReconciliationResponse
 )
+from grid_forecasting import solve_historical_grid_forecast
 
 
 def get_block_times(block_idx: int) -> Tuple[str, str]:
@@ -31,74 +32,8 @@ def get_block_times(block_idx: int) -> Tuple[str, str]:
 
 
 def solve_grid_forecast(req: GridForecastRequest) -> GridForecastResponse:
-    """Deterministic 96-block load and day-ahead clearing price forecast."""
-    if not req.is_demo:
-        return GridForecastResponse(
-            site_id=req.site_id, operating_date=req.operating_date,
-            model_version="LIVE_MODEL_UNAVAILABLE", model_generation_time=datetime.now(timezone.utc).isoformat(),
-            blocks=[], is_suppressed=True, suppression_reason="LIVE_MODEL_AND_PRICE_FEED_REQUIRED",
-            data_quality="UNVERIFIED", freshness="UNKNOWN", confidence_status="UNAVAILABLE")
-    np.random.seed(req.seed or 42)
-    blocks: List[GridForecastBlock] = []
-    
-    total_price = 0.0
-    peak_demand = 0.0
-    peak_block = 1
-    
-    for b in range(1, 97):
-        start_t, end_t = get_block_times(b)
-        
-        # Diurnal C&I load curve modeling: morning ramp up (blocks 32-48), evening peak (blocks 72-88)
-        hour = (b - 1) / 4.0
-        load_diurnal = 0.65 + 0.25 * math.sin((hour - 6) * math.pi / 12.0)
-        if 9.0 <= hour <= 13.0:
-            load_diurnal += 0.1  # Midday factory operations
-        elif 18.0 <= hour <= 22.0:
-            load_diurnal += 0.05 # Evening lighting/shift
-            
-        base_kw = req.contract_demand_kw * max(0.4, min(0.95, load_diurnal))
-        noise = (np.random.rand() - 0.5) * 0.04 * req.contract_demand_kw
-        forecast_kw = round(float(base_kw + noise), 2)
-        
-        # Indian Day-Ahead Market (DAM) price shape: higher during morning (8-10am) & evening peak (6-10pm)
-        if 32 <= b <= 44:  # 08:00 - 11:00
-            price_base = 5200.0 + (b - 32) * 120.0
-        elif 72 <= b <= 88: # 18:00 - 22:00
-            price_base = 6500.0 + math.sin((b - 72) / 16.0 * math.pi) * 2200.0
-        elif 1 <= b <= 24:   # Night hours
-            price_base = 2800.0 + (b % 5) * 40.0
-        else:
-            price_base = 4200.0 + (b % 7) * 50.0
-            
-        forecast_price = round(float(price_base + (np.random.rand() - 0.5) * 200.0), 2)
-        is_high_cost = forecast_price > 5800.0
-        
-        if forecast_kw > peak_demand:
-            peak_demand = forecast_kw
-            peak_block = b
-            
-        total_price += forecast_price
-        
-        blocks.append(GridForecastBlock(
-            block_index=b,
-            start_time=start_t,
-            end_time=end_t,
-            forecast_demand_kw=forecast_kw,
-            forecast_price_inr_per_mwh=forecast_price,
-            confidence_lower_kw=round(forecast_kw * 0.94, 2),
-            confidence_upper_kw=round(forecast_kw * 1.06, 2),
-            is_high_cost_window=is_high_cost
-        ))
-        
-    return GridForecastResponse(
-        site_id=req.site_id,
-        operating_date=req.operating_date,
-        model_generation_time=datetime.now(timezone.utc).isoformat(),
-        average_price_inr_per_mwh=round(total_price / 96.0, 2),
-        peak_demand_kw=peak_demand,
-        peak_demand_block=peak_block,
-        blocks=blocks
-    )
+    """Run leakage-safe historical-load forecasting with fail-closed publication."""
+    return solve_historical_grid_forecast(req)
 
 
 def solve_dsm_deviation(req: DSMCalculationRequest) -> DSMCalculationResponse:

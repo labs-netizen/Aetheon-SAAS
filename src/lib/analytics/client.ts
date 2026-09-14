@@ -18,7 +18,9 @@ export interface GridForecastParams {
   siteId: string;
   operatingDate: string;
   contractDemandKw: number;
-  historicalLoadKw?: number[];
+  historicalDays?: Array<{ operating_date: string; load_kw: number[] }>;
+  evaluationDate?: string;
+  latestInputComplete?: boolean;
   seed?: number;
 }
 
@@ -91,7 +93,9 @@ export async function fetchGridForecast(params: GridForecastParams) {
     site_id: params.siteId,
     operating_date: params.operatingDate,
     contract_demand_kw: params.contractDemandKw,
-    historical_load_kw: params.historicalLoadKw,
+    historical_days: params.historicalDays || [],
+    evaluation_date: params.evaluationDate,
+    latest_input_complete: params.latestInputComplete !== false,
     seed: params.seed,
   });
 }
