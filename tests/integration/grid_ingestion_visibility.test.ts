@@ -1,9 +1,17 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { GET as forecastGet } from '@/app/api/forecast/route';
 import { resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 import { checkServerEntitlement } from '@/lib/auth/entitlements';
+import { resolveSiteForAuthorization } from '@/lib/auth/api-guard';
+import { POST as dsmPost } from '@/app/api/dsm/route';
+
+const analytics = vi.hoisted(() => ({ dsm: vi.fn(async (_input: any) => ({})) }));
+vi.mock('@/lib/analytics/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/analytics/client')>()),
+  fetchDSMCalculation: analytics.dsm,
+}));
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -49,6 +57,9 @@ describe('Grid visibility of committed interval data', () => {
     await must(db.from('entitlements').insert([completeSiteId, zeroSiteId, incompleteSiteId].map((siteId) => ({
       organisation_id: orgId, site_id: siteId, product_id: 'GRID_INTELLIGENCE', is_active: true, granted_by: 'INTERNAL_TEST',
     }))));
+    await must(db.from('entitlements').insert({
+      organisation_id: orgId, site_id: completeSiteId, product_id: 'DSM_RISK', is_active: true, granted_by: 'INTERNAL_TEST',
+    }));
 
     const rowsFor = (siteId: string, date: string, count: number) => Array.from({ length: count }, (_, index) => ({
       site_id: siteId,
@@ -56,6 +67,8 @@ describe('Grid visibility of committed interval data', () => {
       block_index: index + 1,
       timestamp_utc: new Date(Date.parse(`${date}T00:00:00+05:30`) + index * 900000).toISOString(),
       load_kw: 900 + index,
+      scheduled_drawal_kw: date === '2026-01-01' ? 1000 : 2000,
+      actual_drawal_kw: date === '2026-01-01' ? 1100 : 2200,
       data_quality: 'PASSED',
     }));
     await must(db.from('interval_data_96').insert([
@@ -90,11 +103,47 @@ describe('Grid visibility of committed interval data', () => {
     expect(await checkServerEntitlement(orgId, completeSiteId, 'GRID_INTELLIGENCE')).toMatchObject({ entitled: true });
   });
 
+  it('uses the bearer JWT as authenticated and applies site RLS', async () => {
+    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+    expect(claims.role).toBe('authenticated');
+    const bearerClient = createClient(url, anonKey, { accessToken: async () => token });
+    expect(await must(bearerClient.from('sites').select('id,organisation_id').eq('id', completeSiteId).single()))
+      .toEqual({ id: completeSiteId, organisation_id: orgId });
+    expect(await must(bearerClient.from('sites').select('id').eq('id', foreignSiteId))).toEqual([]);
+    expect((await must(bearerClient.from('interval_data_96').select('block_index').eq('site_id', completeSiteId).eq('operating_date', '2026-01-01')))).toHaveLength(96);
+  });
+
+  it('classifies a PostgreSQL privilege error as lookup failure rather than not-found or RLS denial', async () => {
+    const deniedClient = {
+      from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'permission denied for table sites' } }) }) }) }),
+    } as unknown as SupabaseClient;
+    expect(await resolveSiteForAuthorization(deniedClient, db, completeSiteId)).toEqual({
+      status: 'LOOKUP_FAILED', source: 'authenticated', message: 'permission denied for table sites',
+    });
+  });
+
   it('resolves the latest committed day and honors an explicitly requested complete day', async () => {
     expect(await resolveGridInputEvidence(db, completeSiteId)).toMatchObject({ operating_date: '2026-01-02', total_blocks_received: 96, is_complete: true });
     expect(await resolveGridInputEvidence(db, completeSiteId, '2026-01-01')).toMatchObject({ operating_date: '2026-01-01', total_blocks_received: 96, is_complete: true });
     const body = await (await forecastGet(request(completeSiteId))).json();
     expect(body.input_evidence).toMatchObject({ operating_date: '2026-01-02', total_blocks_received: 96 });
+  });
+
+  it('gives DSM only the explicitly requested day from multi-day site history', async () => {
+    analytics.dsm.mockClear();
+    const response = await dsmPost(new NextRequest('http://localhost:3000/api/dsm', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteId: completeSiteId, operatingDate: '2026-01-01' }),
+    }));
+    expect(response.status).toBe(200);
+    expect(analytics.dsm).toHaveBeenCalledOnce();
+    expect(analytics.dsm.mock.calls[0][0]).toMatchObject({
+      siteId: completeSiteId,
+      operatingDate: '2026-01-01',
+      scheduledDrawalKw: Array(96).fill(1000),
+      actualDrawalKw: Array(96).fill(1100),
+    });
   });
 
   it('denies a foreign organisation site', async () => {

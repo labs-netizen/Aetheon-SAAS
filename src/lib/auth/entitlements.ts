@@ -3,6 +3,8 @@
  * Evaluates subscription status, subscription items, site scope, state scope, and manual grants.
  * Enforces access controls on all protected backend routes and API endpoints.
  */
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 
 export interface EntitlementCheckResult {
   entitled: boolean;
@@ -29,7 +31,8 @@ export interface EntitlementRecord {
 export async function checkServerEntitlement(
   organisationId: string,
   siteId: string,
-  productId: string
+  productId: string,
+  authenticatedClient?: SupabaseClient
 ): Promise<EntitlementCheckResult> {
   if (!organisationId || !productId) {
     return { entitled: false, reason: 'MISSING_CONTEXT: organisationId and productId are required.' };
@@ -37,8 +40,7 @@ export async function checkServerEntitlement(
 
   // Authoritative database check via Supabase admin client
   try {
-    const { createAdminClient } = await import('@/lib/supabase/admin');
-    const supabase = createAdminClient();
+    const supabase = authenticatedClient || (await import('@/lib/supabase/admin')).createAdminClient();
 
     if (siteId) {
       const { data: site, error: siteError } = await supabase.from('sites').select('organisation_id, is_demo')

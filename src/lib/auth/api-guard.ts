@@ -23,6 +23,7 @@ export interface GuardSuccess {
   siteId?: string;
   role: PlatformRole;
   isDemo: boolean;
+  authenticatedClient?: SupabaseClient;
 }
 
 export interface GuardFailure {
@@ -355,7 +356,8 @@ export async function authorizeApiRequest(
     const entitlement = await checkServerEntitlement(
       resolvedOrgId,
       options.siteId || '',
-      options.productId
+      options.productId,
+      authenticatedClient
     );
 
     if (!entitlement.entitled) {
@@ -380,5 +382,6 @@ export async function authorizeApiRequest(
     siteId: options.siteId,
     role: userRole,
     isDemo: siteIsDemo,
+    authenticatedClient,
   };
 }

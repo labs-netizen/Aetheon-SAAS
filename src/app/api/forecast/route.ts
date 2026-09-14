@@ -25,9 +25,10 @@ export async function GET(req: NextRequest) {
     }
 
     const adminClient = createAdminClient();
+    const readClient = authResult.authenticatedClient || adminClient;
 
     // 1. Fetch site authoritative configuration
-    const { data: site, error: siteErr } = await adminClient
+    const { data: site, error: siteErr } = await readClient
       .from('sites')
       .select('id, name, state, discom, voltage_category, is_demo, activation_status, contract_demand_value')
       .eq('id', siteId)
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'SITE_NOT_FOUND', message: 'Site not found.' }, { status: 404 });
     }
 
-    const inputEvidence = await resolveGridInputEvidence(adminClient, siteId, requestedOperatingDate);
+    const inputEvidence = await resolveGridInputEvidence(readClient, siteId, requestedOperatingDate);
     const operatingDate = inputEvidence.operating_date || requestedOperatingDate || operatingToday();
 
     // 2. Authoritative Server-side Quality Gate
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest) {
         input_suppression_reason: inputSuppressionReason,
         blocks: [],
         persisted: false,
-        data_quality: inputEvidence.is_complete ? 'PASSED' : 'FAILED',
+        data_quality: 'UNVERIFIED',
         confidence_status: 'UNAVAILABLE',
         freshness: inputEvidence.freshness,
         input_evidence: inputEvidence,
