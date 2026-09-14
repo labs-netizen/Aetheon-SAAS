@@ -27,4 +27,12 @@ describe('Grid input and forecast UI independence', () => {
     expect(forecastRoute).toContain('loadGridHistoricalInput');
     expect(forecastRoute).toContain('historicalDays: historicalInput.complete_days');
   });
+
+  it('keeps authoritative market-price readiness independent from demand output', () => {
+    expect(page).toContain('/api/grid/price-evidence');
+    expect(page).toContain("priceEvidence?.readiness_status === 'READY'");
+    expect(page).toContain('prices.get(b.block_index)');
+    expect(page).not.toContain('b.forecast_price_inr_per_mwh ?? b.price_mwh');
+    expect(page).toContain('IEX DAM MCP (₹/MWh)');
+  });
 });

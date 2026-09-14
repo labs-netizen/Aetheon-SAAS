@@ -19,10 +19,11 @@ import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Ca
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { useSite } from '@/components/layout/SiteContext';
+import { createClient } from '@/lib/supabase/client';
 
 export default function AdminPage() {
   const { activeRole } = useSite();
-  const [activeTab, setActiveTab] = useState<'checklist' | 'models' | 'audit'>('checklist');
+  const [activeTab, setActiveTab] = useState<'checklist' | 'models' | 'audit' | 'market'>('checklist');
 
   const isInternalAdmin =
     activeRole === 'AETHEON_ANALYST' ||
@@ -40,6 +41,29 @@ export default function AdminPage() {
     };
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [marketFile, setMarketFile] = useState<File | null>(null);
+  const [marketSource, setMarketSource] = useState('');
+  const [marketDateFormat, setMarketDateFormat] = useState<'AUTO' | 'DD/MM/YYYY' | 'DD-MM-YYYY'>('AUTO');
+  const [marketPublishedAt, setMarketPublishedAt] = useState('');
+  const [marketResult, setMarketResult] = useState<any>(null);
+  const [marketBusy, setMarketBusy] = useState(false);
+
+  const importMarketPrices = async () => {
+    if (!marketFile) return;
+    setMarketBusy(true);
+    const { data: { session } } = await createClient().auth.getSession();
+    const body = new FormData();
+    body.set('file', marketFile);
+    body.set('source_reference', marketSource);
+    body.set('official_source_confirmed', 'true');
+    body.set('date_format', marketDateFormat);
+    if (marketPublishedAt) body.set('published_at', new Date(marketPublishedAt).toISOString());
+    const response = await fetch('/api/admin/market-prices', {
+      method: 'POST', body, headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    });
+    setMarketResult(await response.json());
+    setMarketBusy(false);
+  };
 
   useEffect(() => {
     if (!canViewAuditAndHealth) return;
@@ -52,6 +76,15 @@ export default function AdminPage() {
       .catch((err) => console.warn('Error fetching admin data:', err))
       .finally(() => setIsLoading(false));
   }, [canViewAuditAndHealth]);
+
+  useEffect(() => {
+    if (activeTab !== 'market' || !canViewAuditAndHealth) return;
+    createClient().auth.getSession().then(async ({ data: { session } }) => {
+      if (!session?.access_token) return;
+      const response = await fetch('/api/admin/market-prices', { headers: { Authorization: `Bearer ${session.access_token}` } });
+      if (response.ok) setMarketResult(await response.json());
+    }).catch(() => undefined);
+  }, [activeTab, canViewAuditAndHealth]);
 
   const launchChecklist = [
     { title: 'Supported State Jurisdiction & DISCOMs', status: 'VERIFIED_LOCAL', desc: 'MSEDCL, UGVCL, PVVNL profiles active with verified voltage brackets.' },
@@ -126,6 +159,14 @@ export default function AdminPage() {
           >
             Audit Log
           </Button>
+          {canViewAuditAndHealth && <Button
+            variant={activeTab === 'market' ? 'primary' : 'outline'}
+            size="sm"
+            onClick={() => setActiveTab('market')}
+            className="text-xs"
+          >
+            IEX DAM Prices
+          </Button>}
           {isLoading && <RefreshCw className="w-4 h-4 text-teal-400 animate-spin" />}
         </div>
       </div>
@@ -284,6 +325,26 @@ export default function AdminPage() {
                 </tbody>
               </table>
             )}
+          </div>
+        </Card>
+      )}
+
+      {activeTab === 'market' && canViewAuditAndHealth && (
+        <Card variant="industrial">
+          <CardHeader>
+            <CardTitle className="text-slate-100 flex items-center gap-2"><FileCheck className="w-4 h-4 text-teal-400" />Official IEX DAM Price Import</CardTitle>
+            <CardDescription>Privileged import of the official exchange export. Every delivery day must contain exactly 96 MCP blocks.</CardDescription>
+          </CardHeader>
+          <div className="p-6 pt-0 space-y-3 text-xs">
+            <input data-testid="iex-dam-file" type="file" accept=".csv,text/csv" onChange={(event) => setMarketFile(event.target.files?.[0] || null)} className="block w-full text-slate-300" />
+            <input data-testid="iex-source-reference" value={marketSource} onChange={(event) => setMarketSource(event.target.value)} placeholder="Official IEX export URL" className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-200" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-slate-400">Export date format<select value={marketDateFormat} onChange={(event) => setMarketDateFormat(event.target.value as typeof marketDateFormat)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-200"><option value="AUTO">Auto (unambiguous only)</option><option value="DD/MM/YYYY">DD/MM/YYYY</option><option value="DD-MM-YYYY">DD-MM-YYYY</option></select></label>
+              <label className="text-slate-400">Exchange published at (if shown)<input type="datetime-local" value={marketPublishedAt} onChange={(event) => setMarketPublishedAt(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-200" /></label>
+            </div>
+            <p className="text-slate-400">By importing, the analyst confirms this file is an unmodified official IEX Day-Ahead Market export. SHA-256 provenance and the source URL are retained.</p>
+            <Button data-testid="iex-import-submit" disabled={!marketFile || !marketSource || marketBusy} onClick={importMarketPrices} size="sm">{marketBusy ? 'Importing…' : 'Validate & Import'}</Button>
+            {marketResult && <pre data-testid="iex-import-result" className="overflow-auto rounded bg-slate-950 p-3 text-[11px] text-slate-300">{JSON.stringify(marketResult, null, 2)}</pre>}
           </div>
         </Card>
       )}

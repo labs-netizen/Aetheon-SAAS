@@ -43,6 +43,23 @@ interface GridInputEvidenceResponse {
   data_available: boolean;
 }
 
+interface GridPriceEvidenceResponse {
+  site_id: string;
+  exchange: 'IEX';
+  market_product: 'DAM';
+  delivery_date: string | null;
+  expected_blocks: 96;
+  received_blocks: number;
+  completeness_pct: number;
+  readiness_status: 'READY' | 'MISSING' | 'STALE' | 'DATE_MISMATCH';
+  price_available: boolean;
+  suppression_reason: string | null;
+  blocks: Array<{ block_index: number; time_start: string; time_end: string; mcp_rs_per_mwh: number }>;
+}
+
+const nextOperatingDate = (value: string) =>
+  new Date(Date.parse(`${value}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+
 export default function GridIntelligencePage() {
   const { currentSite, isEntitled } = useSite();
   const [activeTab, setActiveTab] = useState<'chart' | 'table' | 'explorer'>('chart');
@@ -60,13 +77,15 @@ export default function GridIntelligencePage() {
     ? inputEvidenceResponse.data
     : null;
   const [inputEvidenceError, setInputEvidenceError] = useState<string | null>(null);
+  const [priceEvidenceResponse, setPriceEvidence] = useState<{ requestSiteId: string; data: GridPriceEvidenceResponse } | null>(null);
+  const priceEvidence = priceEvidenceResponse && priceEvidenceResponse.requestSiteId === currentSite?.id ? priceEvidenceResponse.data : null;
+  const [priceEvidenceError, setPriceEvidenceError] = useState<string | null>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const isDemo = Boolean(currentSite?.is_demo);
   const hasValidForecast = Boolean(forecastResult && !forecastResult.is_suppressed && forecastResult.blocks?.length === 96);
-  const hasAuthoritativePriceFeed = Boolean(hasValidForecast && forecastResult?.price_status !== 'AUTHORITATIVE_PRICE_FEED_REQUIRED' &&
-    forecastResult.blocks.every((block: any) => block.forecast_price_inr_per_mwh != null &&
-      Number.isFinite(Number(block.forecast_price_inr_per_mwh))));
+  const hasAuthoritativePriceFeed = Boolean(priceEvidence?.readiness_status === 'READY' &&
+    priceEvidence.price_available && priceEvidence.blocks.length === 96);
 
   // Load committed input evidence first, then load forecast output independently.
   useEffect(() => {
@@ -78,6 +97,8 @@ export default function GridIntelligencePage() {
     setForecastResult(null);
     setInputEvidenceError(null);
     setInputEvidence(null);
+    setPriceEvidenceError(null);
+    setPriceEvidence(null);
 
     const loadGridData = async () => {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
@@ -86,15 +107,29 @@ export default function GridIntelligencePage() {
       }
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
       let resolvedOperatingDate = currentSite.is_demo ? new Date().toISOString().substring(0, 10) : null;
+      let latestCommittedDate: string | null = null;
 
       if (!currentSite.is_demo) {
         try {
           const evidenceResponse = await fetch(`/api/grid/input-evidence?site_id=${encodeURIComponent(currentSite.id)}`, { headers });
           const evidence = await evidenceResponse.json().catch(() => ({}));
           if (!evidenceResponse.ok) throw new Error(evidence.details || evidence.error || `HTTP ${evidenceResponse.status}`);
+          latestCommittedDate = evidence.operating_date;
           if (isMounted) setInputEvidence({ requestSiteId: currentSite.id, data: evidence });
         } catch (error) {
           if (isMounted) setInputEvidenceError(error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      if (!currentSite.is_demo && latestCommittedDate) {
+        try {
+          const deliveryDate = nextOperatingDate(latestCommittedDate);
+          const priceResponse = await fetch(`/api/grid/price-evidence?site_id=${encodeURIComponent(currentSite.id)}&delivery_date=${encodeURIComponent(deliveryDate)}`, { headers });
+          const price = await priceResponse.json().catch(() => ({}));
+          if (!priceResponse.ok) throw new Error(price.details || price.error || `HTTP ${priceResponse.status}`);
+          if (isMounted) setPriceEvidence({ requestSiteId: currentSite.id, data: price });
+        } catch (error) {
+          if (isMounted) setPriceEvidenceError(error instanceof Error ? error.message : String(error));
         }
       }
 
@@ -130,15 +165,16 @@ export default function GridIntelligencePage() {
   // Transform backend blocks to Block96Point
   const forecastBlocks: Block96Point[] = useMemo(() => {
     if (forecastResult?.blocks && Array.isArray(forecastResult.blocks) && forecastResult.blocks.length > 0) {
+      const prices = new Map((priceEvidence?.blocks || []).map((block) => [block.block_index, block.mcp_rs_per_mwh]));
       return forecastResult.blocks.map((b: any) => ({
         block_index: b.block_index,
         start_time: b.start_time || getBlockTimes(b.block_index).startTime,
         demand_kw: Math.round(b.forecast_load_kw || 0),
-        price_mwh: Number.isFinite(Number(b.forecast_price_inr_per_mwh ?? b.price_mwh))
-          ? Math.round(Number(b.forecast_price_inr_per_mwh ?? b.price_mwh))
+        price_mwh: Number.isFinite(Number(prices.get(b.block_index)))
+          ? Number(prices.get(b.block_index))
           : undefined,
         solar_kw: Math.round(b.solar_generation_kw || 0),
-        is_high_cost: Boolean(b.is_high_cost_window || (b.forecast_price_inr_per_mwh || 0) >= 7500),
+        is_high_cost: Boolean(Number(prices.get(b.block_index) || 0) >= 7500),
       }));
     }
 
@@ -179,7 +215,7 @@ export default function GridIntelligencePage() {
       });
     }
     return pts;
-  }, [forecastResult, currentSite]);
+  }, [forecastResult, priceEvidence, currentSite]);
 
   // Quality gate evaluation
   const qualityGate = useMemo(() => {
@@ -232,6 +268,11 @@ export default function GridIntelligencePage() {
       priceRangeText: `₹${minPrice.toLocaleString('en-IN')} - ₹${maxPrice.toLocaleString('en-IN')}/MWh`,
     };
   }, [forecastBlocks, isDemo]);
+
+  const lowestPriceBlock = useMemo(() => {
+    if (forecastBlocks.length !== 96 || forecastBlocks.some((block) => block.price_mwh === undefined)) return null;
+    return forecastBlocks.reduce((lowest, block) => (block.price_mwh! < lowest.price_mwh! ? block : lowest));
+  }, [forecastBlocks]);
 
   // Cost Explorer calculations based on server-returned blocks and persisted approved tariff
   const explorerCalculations = useMemo(() => {
@@ -314,7 +355,7 @@ export default function GridIntelligencePage() {
   }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast, hasAuthoritativePriceFeed, forecastResult]);
 
   const handleExportCsv = () => {
-    const headers = ['block_index', 'start_time', 'forecast_load_kw', 'forecast_price_inr_per_mwh', 'solar_generation_kw', 'is_high_cost'];
+    const headers = ['block_index', 'start_time', 'forecast_load_kw', 'iex_dam_mcp_rs_per_mwh', 'solar_generation_kw', 'is_high_cost'];
     const rows = forecastBlocks.map((b) =>
       [b.block_index, b.start_time, b.demand_kw, b.price_mwh, b.solar_kw, b.is_high_cost ? 'YES' : 'NO'].join(',')
     );
@@ -330,7 +371,12 @@ export default function GridIntelligencePage() {
 
   const peakBlock = hasValidForecast ? forecastResult.peak_demand_block : (isDemo ? 38 : null);
   const peakKw = hasValidForecast ? forecastResult.peak_demand_kw : (isDemo ? 2180.5 : null);
-  const avgPrice = hasValidForecast ? forecastResult.average_price_inr_per_mwh : (isDemo ? 4560 : null);
+  const avgPrice = hasAuthoritativePriceFeed
+    ? priceEvidence!.blocks.reduce((sum, block) => sum + block.mcp_rs_per_mwh, 0) / 96
+    : (isDemo ? 4560 : null);
+  const marketEnergyExposureInr = hasValidForecast && hasAuthoritativePriceFeed
+    ? forecastBlocks.reduce((sum, block) => sum + (((block.demand_kw || 0) * 0.25 * (block.price_mwh || 0)) / 1000), 0)
+    : null;
 
   return (
     <ModuleGate
@@ -399,6 +445,17 @@ export default function GridIntelligencePage() {
           </div>
         )}
 
+        {!isDemo && priceEvidence && (
+          <div data-testid="grid-price-evidence" className="text-xs text-slate-300">
+            IEX DAM MCP (₹/MWh): {priceEvidence.delivery_date || 'No delivery date'} ·{' '}
+            {priceEvidence.received_blocks}/{priceEvidence.expected_blocks} blocks · {priceEvidence.readiness_status}
+          </div>
+        )}
+
+        {priceEvidenceError && (
+          <div className="text-xs text-rose-300">Market price evidence unavailable ({priceEvidenceError}).</div>
+        )}
+
         {!isDemo && forecastResult && (
           <div data-testid="grid-model-status" className="p-3 rounded bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1">
             <div>Model: <strong>{forecastResult.validation_status || forecastResult.model_status}</strong></div>
@@ -406,13 +463,13 @@ export default function GridIntelligencePage() {
             <div>Forecast target: <strong>{forecastResult.forecast_target_date || 'UNAVAILABLE'}</strong></div>
             <div>Freshness: <strong>{forecastResult.model_status === 'STALE_INPUT' ? 'STALE' : (forecastResult.freshness || 'UNKNOWN')}</strong></div>
             <div>Operational forecast: <strong>{forecastResult.forecast_available ? 'DEMAND FORECAST AVAILABLE' : `SUPPRESSED — ${forecastResult.suppression_reason || forecastResult.model_status}`}</strong></div>
-            <div>Market prices: <strong>{forecastResult.price_status || 'AUTHORITATIVE_PRICE_FEED_REQUIRED'}</strong></div>
+            <div>Market prices: <strong>{priceEvidence?.readiness_status || 'AUTHORITATIVE_PRICE_FEED_REQUIRED'}</strong></div>
           </div>
         )}
 
         {!isDemo && !hasAuthoritativePriceFeed && (
           <div className="p-3 rounded bg-amber-950/40 border border-amber-800 text-xs text-amber-300">
-            Price-dependent recommendations and cost optimisation are suppressed — AUTHORITATIVE_PRICE_FEED_REQUIRED.
+            Price-dependent recommendations and cost optimisation are suppressed — {priceEvidence?.suppression_reason || 'AUTHORITATIVE_PRICE_FEED_REQUIRED'}.
           </div>
         )}
 
@@ -440,12 +497,12 @@ export default function GridIntelligencePage() {
               </Card>
 
               <Card variant="industrial">
-                <span className="text-xs text-slate-400 block mb-1">Average Daily Clearing Price</span>
+                <span className="text-xs text-slate-400 block mb-1">Average IEX DAM MCP (₹/MWh)</span>
                 <div className="text-xl font-bold font-mono text-sky-400">
                   {avgPrice !== null ? `₹${avgPrice.toLocaleString('en-IN')} / MWh` : 'DATA GAP'}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Model: <span className="font-mono text-[10px] text-teal-300">{avgPrice !== null ? (forecastResult?.model_version || (isDemo ? 'DEMO_BASELINE_v1.0' : 'INTERNAL_VALIDATION')) : 'FORECAST UNAVAILABLE'}</span>
+                  Source: <span className="font-mono text-[10px] text-teal-300">{isDemo ? 'DEMO_BASELINE_v1.0' : (priceEvidence?.readiness_status === 'READY' ? 'OFFICIAL IEX EXPORT' : 'PRICE EVIDENCE UNAVAILABLE')}</span>
                 </p>
               </Card>
 
@@ -455,17 +512,18 @@ export default function GridIntelligencePage() {
                   {highCostWindow ? highCostWindow.windowText : (isDemo ? 'Blocks 72–88 (18:00 - 22:00) [DEMO]' : 'DATA GAP')}
                 </div>
                 <p className="text-xs text-rose-300 mt-1">
-                  Clearing price: <strong>{highCostWindow ? highCostWindow.priceRangeText : (isDemo ? '₹7,800 - ₹9,600/MWh [DEMO]' : 'FORECAST UNAVAILABLE')}</strong>
+                  IEX DAM MCP: <strong>{highCostWindow ? highCostWindow.priceRangeText : (isDemo ? '₹7,800 - ₹9,600/MWh [DEMO]' : 'FORECAST UNAVAILABLE')}</strong>
                 </p>
+                {lowestPriceBlock && <p className="text-xs text-slate-400 mt-1">Lowest MCP: Block {lowestPriceBlock.block_index} ({lowestPriceBlock.start_time}) · ₹{lowestPriceBlock.price_mwh!.toLocaleString('en-IN')}/MWh</p>}
               </Card>
 
               <Card variant="industrial">
-                <span className="text-xs text-slate-400 block mb-1">Avoided Cost Opportunity</span>
+                <span className="text-xs text-slate-400 block mb-1">Indicative IEX DAM Energy Exposure</span>
                 <div className="text-xl font-bold font-mono text-teal-300">
-                  {explorerCalculations.isDataGap ? 'DATA GAP' : `${formatPaiseToInr(explorerCalculations.dailyAvoidedPaise)} / day`}
+                  {marketEnergyExposureInr === null ? 'DATA GAP' : `₹${marketEnergyExposureInr.toLocaleString('en-IN', { maximumFractionDigits: 0 })} / day`}
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Monthly potential: <strong>{explorerCalculations.isDataGap ? 'CONFIGURATION REQUIRED' : formatPaiseToInr(explorerCalculations.monthlyAvoidedPaise)}</strong>
+                  Demand × MCP energy component only; excludes network charges, losses, taxes, and fees.
                 </p>
               </Card>
             </div>
