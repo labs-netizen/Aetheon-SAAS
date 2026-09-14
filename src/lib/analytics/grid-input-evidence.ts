@@ -11,6 +11,18 @@ export interface GridInputEvidence {
   source: 'interval_data_96';
 }
 
+export async function parseGridForecastResponse(response: Response): Promise<{ data: any; warning: string | null }> {
+  const payload = await response.json().catch(() => ({}));
+  const message = payload.message || payload.error || `HTTP ${response.status}`;
+  if (!response.ok) {
+    if (payload.is_suppressed === true && payload.input_evidence) {
+      return { data: payload, warning: message };
+    }
+    throw new Error(message);
+  }
+  return { data: payload, warning: null };
+}
+
 export async function resolveGridInputEvidence(
   client: SupabaseClient,
   siteId: string,

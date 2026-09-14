@@ -29,6 +29,7 @@ import { formatPower, formatEnergy, formatPercentage } from '@/lib/units/energy'
 import { formatPaiseToInr } from '@/lib/units/currency';
 import { PRODUCTS } from '@/types';
 import { createClient } from '@/lib/supabase/client';
+import { parseGridForecastResponse } from '@/lib/analytics/grid-input-evidence';
 
 export default function GridIntelligencePage() {
   const { currentSite, isEntitled } = useSite();
@@ -64,17 +65,14 @@ export default function GridIntelligencePage() {
       }
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
       const res = await fetch(`/api/forecast?${params.toString()}`, { headers });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || errData.error || `HTTP ${res.status}`);
-      }
-      return res.json();
+      return parseGridForecastResponse(res);
     };
 
     loadForecast()
-      .then((data) => {
+      .then(({ data, warning }) => {
         if (isMounted) {
           setForecastResult({ requestSiteId: currentSite.id, data });
+          setForecastError(warning);
         }
       })
       .catch((err) => {
@@ -342,6 +340,14 @@ export default function GridIntelligencePage() {
                 ? `FastAPI live forecast unavailable (${forecastError}); rendering validated internal baseline.`
                 : `Operational forecast unavailable (${forecastError}): DATA GAP / FORECAST UNAVAILABLE.`}
             </span>
+          </div>
+        )}
+
+        {forecastResult?.input_evidence && (
+          <div data-testid="grid-input-evidence" className="text-xs text-slate-300">
+            Committed input: {forecastResult.input_evidence.operating_date || 'No operating date'} ·{' '}
+            {forecastResult.input_evidence.total_blocks_received}/{forecastResult.input_evidence.total_blocks_expected} blocks ·{' '}
+            {Number(forecastResult.input_evidence.completeness_pct).toFixed(1)}% complete
           </div>
         )}
 

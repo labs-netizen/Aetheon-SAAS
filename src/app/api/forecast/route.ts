@@ -24,8 +24,7 @@ export async function GET(req: NextRequest) {
       return authResult.response;
     }
 
-    const adminClient = createAdminClient();
-    const readClient = authResult.authenticatedClient || adminClient;
+    const readClient = authResult.authenticatedClient || createAdminClient();
 
     // 1. Fetch site authoritative configuration
     const { data: site, error: siteErr } = await readClient
@@ -52,6 +51,8 @@ export async function GET(req: NextRequest) {
         site_id: siteId,
         organisation_id: authResult.organisationId,
         operating_date: operatingDate,
+        forecast_available: false,
+        forecast_status: 'SUPPRESSED',
         is_suppressed: true,
         suppression_reason: LIVE_GRID_BLOCK,
         input_suppression_reason: inputSuppressionReason,
@@ -63,6 +64,8 @@ export async function GET(req: NextRequest) {
         input_evidence: inputEvidence,
       });
     }
+
+    const adminClient = createAdminClient();
 
     // 3. Check if a forecast run already exists for this site and date
     const { data: existingRun } = await adminClient
