@@ -11,9 +11,15 @@ describe('Analytics API Contract Validation (Defect #42)', () => {
     const rawFastApiResponse: GridForecastResponseContract = {
       site_id: 'b0000000-0000-0000-0000-000000000001',
       operating_date: '2026-09-08',
-      model_version: 'GRID_FASTAPI_SOLVER_v2.4',
+      model_status: 'VALIDATED', validation_status: 'VALIDATED', forecast_available: true, forecast_status: 'AVAILABLE',
+      model_version: 'GRID_HISTORICAL_LOAD_V1.0',
       model_generation_time: '2026-09-08T06:00:00Z',
-      average_price_inr_per_mwh: 4872.45,
+      training_start_date: '2026-01-01', training_end_date: '2026-09-07', latest_input_date: '2026-09-07',
+      forecast_target_date: '2026-09-08', freshness_days: 1, selected_model: 'RIDGE_MULTI_LAG_CALENDAR',
+      validation_metrics: { mae_kw: 100, rmse_kw: 125, smape_pct: 5, observations: 2688 },
+      baseline_metrics: { PREVIOUS_WEEK_SAME_BLOCK: { mae_kw: 130, rmse_kw: 150, smape_pct: 6, observations: 2688 } },
+      provenance: { input_source: 'COMMITTED_INTERVAL_DATA_96', model_family: 'DAY_AHEAD_DEMAND', validation_method: 'CHRONOLOGICAL_HOLDOUT', price_source: null },
+      average_price_inr_per_mwh: null,
       peak_demand_kw: 2640.8,
       peak_demand_block: 39,
       data_quality: 'PASSED',
@@ -23,21 +29,23 @@ describe('Analytics API Contract Validation (Defect #42)', () => {
           block_index: 39,
           start_time: '09:30',
           end_time: '09:45',
-          forecast_demand_kw: 2640.8,
-          forecast_price_inr_per_mwh: 6120.5,
+          forecast_load_kw: 2640.8,
+          forecast_price_inr_per_mwh: null,
           confidence_lower_kw: 2480.0,
           confidence_upper_kw: 2800.0,
-          is_high_cost_window: false,
+          is_high_cost_window: null,
         },
       ],
+      is_suppressed: false, suppression_reason: null, confidence_status: 'VALIDATED_BACKTEST',
+      price_status: 'AUTHORITATIVE_PRICE_FEED_REQUIRED',
     };
 
-    expect(rawFastApiResponse.average_price_inr_per_mwh).toBe(4872.45);
+    expect(rawFastApiResponse.average_price_inr_per_mwh).toBeNull();
     expect(rawFastApiResponse.peak_demand_kw).toBe(2640.8);
     expect(rawFastApiResponse.peak_demand_block).toBe(39);
     expect(rawFastApiResponse.data_quality).toBe('PASSED');
-    expect(rawFastApiResponse.blocks[0].forecast_demand_kw).toBe(2640.8);
-    expect(rawFastApiResponse.blocks[0].forecast_price_inr_per_mwh).toBe(6120.5);
+    expect(rawFastApiResponse.blocks[0].forecast_load_kw).toBe(2640.8);
+    expect(rawFastApiResponse.blocks[0].forecast_price_inr_per_mwh).toBeNull();
   });
 
   it('2. BESS Contract maps gross_arbitrage_value_inr, degradation, and cycles correctly without zero fallback', () => {

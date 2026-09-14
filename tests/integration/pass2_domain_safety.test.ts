@@ -61,9 +61,10 @@ describe('Pass 2 domain publication and evidence regressions',()=>{
 
   it('suppresses live GRID POST and cached GET despite PUBLISHABLE quality and browser history',async()=>{
     analytics.grid.mockImplementation(async(p:any)=>({site_id:p.siteId,operating_date:p.operatingDate,forecast_target_date:p.operatingDate,
-      model_status:'CALIBRATING',validation_status:'CALIBRATING',forecast_available:false,model_version:'GRID_HISTORICAL_LOAD_V1.0',
-      model_generation_time:'2026-09-15T00:00:00Z',latest_input_date:null,freshness_days:null,selected_model:null,
-      validation_metrics:null,baseline_metrics:{},blocks:[],is_suppressed:true,suppression_reason:'INSUFFICIENT_COMPLETE_HISTORY',
+      model_status:'CALIBRATING',validation_status:'CALIBRATING',forecast_available:false,forecast_status:'SUPPRESSED',model_version:'GRID_HISTORICAL_LOAD_V1.0',
+      model_generation_time:'2026-09-15T00:00:00Z',training_start_date:null,training_end_date:null,latest_input_date:null,freshness_days:null,selected_model:null,
+      validation_metrics:null,baseline_metrics:{},provenance:{input_source:'COMMITTED_INTERVAL_DATA_96',model_family:'DAY_AHEAD_DEMAND',validation_method:'CHRONOLOGICAL_HOLDOUT',price_source:null},
+      average_price_inr_per_mwh:null,peak_demand_kw:null,peak_demand_block:null,blocks:[],is_suppressed:true,suppression_reason:'INSUFFICIENT_COMPLETE_HISTORY',
       confidence_status:'UNAVAILABLE',data_quality:'UNVERIFIED',freshness:'UNKNOWN',price_status:'AUTHORITATIVE_PRICE_FEED_REQUIRED'}));
     await must(db.from('data_quality_evaluations').insert({site_id:site,evaluation_date:date,completeness_pct:100,validation_status:'PASSED',freshness_status:'RECENT',publication_gate_status:'PUBLISHABLE'}));
     await must(db.from('grid_forecast_runs').insert({site_id:site,operating_date:date,model_version:'GRID_HEURISTIC_INTERNAL_VALIDATION_v1.0',

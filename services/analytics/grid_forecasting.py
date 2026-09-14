@@ -11,6 +11,7 @@ import numpy as np
 from schemas import (
     GridForecastBlock,
     GridForecastRequest,
+    GridForecastProvenance,
     GridForecastResponse,
     GridValidationMetrics,
 )
@@ -120,10 +121,11 @@ def _suppressed(
 ) -> GridForecastResponse:
     return GridForecastResponse(
         site_id=req.site_id,
-        operating_date=(target_date or date.fromisoformat(req.operating_date)).isoformat(),
+        operating_date=req.operating_date,
         model_status=status,
         validation_status=validation_status,
         forecast_available=False,
+        forecast_status="SUPPRESSED",
         model_version=MODEL_VERSION,
         model_generation_time=datetime.now(timezone.utc).isoformat(),
         training_start_date=training_dates[0].isoformat() if training_dates else None,
@@ -134,6 +136,12 @@ def _suppressed(
         selected_model=selected_model,
         validation_metrics=validation_metrics,
         baseline_metrics=baseline_metrics or {},
+        provenance=GridForecastProvenance(
+            input_source="COMMITTED_INTERVAL_DATA_96",
+            model_family="DAY_AHEAD_DEMAND",
+            validation_method="CHRONOLOGICAL_HOLDOUT",
+            price_source=None,
+        ),
         blocks=[],
         is_suppressed=True,
         suppression_reason=reason,
@@ -214,7 +222,7 @@ def solve_historical_grid_forecast(req: GridForecastRequest) -> GridForecastResp
     freshness_days = (evaluation_date - latest).days
     if freshness_days < 0:
         return _suppressed(req, "FAILED_VALIDATION", "LATEST_INPUT_DATE_IS_IN_THE_FUTURE", latest, target_date,
-                           freshness_days, "VALIDATED", training_dates, baseline_metrics, selected_metrics, selected_model)
+                           freshness_days, "FAILED_VALIDATION", training_dates, baseline_metrics, selected_metrics, selected_model)
     if freshness_days > MAX_FRESHNESS_DAYS:
         return _suppressed(req, "STALE_INPUT", "STALE_INPUT", latest, target_date, freshness_days, "VALIDATED",
                            training_dates, baseline_metrics, selected_metrics, selected_model)
@@ -238,7 +246,7 @@ def solve_historical_grid_forecast(req: GridForecastRequest) -> GridForecastResp
             block_index=block_index,
             start_time=f"{start_minutes // 60:02d}:{start_minutes % 60:02d}",
             end_time="24:00" if end_minutes == 1440 else f"{end_minutes // 60:02d}:{end_minutes % 60:02d}",
-            forecast_demand_kw=round(float(forecast_kw), 2),
+            forecast_load_kw=round(float(forecast_kw), 2),
             confidence_lower_kw=round(max(0.0, float(forecast_kw) - confidence_width), 2),
             confidence_upper_kw=round(float(forecast_kw) + confidence_width, 2),
         ))
@@ -249,6 +257,7 @@ def solve_historical_grid_forecast(req: GridForecastRequest) -> GridForecastResp
         model_status="VALIDATED",
         validation_status="VALIDATED",
         forecast_available=True,
+        forecast_status="AVAILABLE",
         model_version=MODEL_VERSION,
         model_generation_time=datetime.now(timezone.utc).isoformat(),
         training_start_date=training_dates[0].isoformat(),
@@ -259,6 +268,12 @@ def solve_historical_grid_forecast(req: GridForecastRequest) -> GridForecastResp
         selected_model=selected_model,
         validation_metrics=selected_metrics,
         baseline_metrics=baseline_metrics,
+        provenance=GridForecastProvenance(
+            input_source="COMMITTED_INTERVAL_DATA_96",
+            model_family="DAY_AHEAD_DEMAND",
+            validation_method="CHRONOLOGICAL_HOLDOUT",
+            price_source=None,
+        ),
         peak_demand_kw=round(float(forecast[peak_index]), 2),
         peak_demand_block=peak_index + 1,
         blocks=blocks,

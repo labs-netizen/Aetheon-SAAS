@@ -3,7 +3,7 @@ Pydantic Schemas for Aetheon Analytics Microservice
 Defines strongly-typed request and response contracts for 96-block numerical processing.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict, field_validator
 from datetime import date
 
@@ -74,7 +74,7 @@ class GridForecastBlock(BaseModel):
     block_index: int = Field(..., ge=1, le=96)
     start_time: str
     end_time: str
-    forecast_demand_kw: float
+    forecast_load_kw: float
     forecast_price_inr_per_mwh: Optional[float] = None
     confidence_lower_kw: float
     confidence_upper_kw: float
@@ -88,12 +88,20 @@ class GridValidationMetrics(BaseModel):
     observations: int
 
 
+class GridForecastProvenance(BaseModel):
+    input_source: Literal["COMMITTED_INTERVAL_DATA_96"]
+    model_family: Literal["DAY_AHEAD_DEMAND"]
+    validation_method: Literal["CHRONOLOGICAL_HOLDOUT"]
+    price_source: None = None
+
+
 class GridForecastResponse(BaseModel):
     site_id: str
     operating_date: str
-    model_status: str
-    validation_status: str
+    model_status: Literal["VALIDATED", "CALIBRATING", "FAILED_VALIDATION", "STALE_INPUT"]
+    validation_status: Literal["VALIDATED", "CALIBRATING", "FAILED_VALIDATION"]
     forecast_available: bool = False
+    forecast_status: Literal["AVAILABLE", "SUPPRESSED"]
     model_version: str
     model_generation_time: str
     training_start_date: Optional[str] = None
@@ -104,6 +112,7 @@ class GridForecastResponse(BaseModel):
     selected_model: Optional[str] = None
     validation_metrics: Optional[GridValidationMetrics] = None
     baseline_metrics: Dict[str, GridValidationMetrics] = Field(default_factory=dict)
+    provenance: GridForecastProvenance
     average_price_inr_per_mwh: Optional[float] = None
     peak_demand_kw: Optional[float] = None
     peak_demand_block: Optional[int] = None

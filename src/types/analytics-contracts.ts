@@ -6,24 +6,53 @@ export interface GridForecastBlockContract {
   block_index: number;
   start_time: string;
   end_time: string;
-  forecast_demand_kw: number;
-  forecast_price_inr_per_mwh: number;
+  forecast_load_kw: number;
+  forecast_price_inr_per_mwh: number | null;
   confidence_lower_kw: number;
   confidence_upper_kw: number;
-  is_high_cost_window: boolean;
+  is_high_cost_window: boolean | null;
+}
+
+export interface GridValidationMetricsContract {
+  mae_kw: number;
+  rmse_kw: number;
+  smape_pct: number;
+  observations: number;
 }
 
 export interface GridForecastResponseContract {
   site_id: string;
   operating_date: string;
-  model_version: string;
+  model_status: 'VALIDATED' | 'CALIBRATING' | 'FAILED_VALIDATION' | 'STALE_INPUT';
+  validation_status: 'VALIDATED' | 'CALIBRATING' | 'FAILED_VALIDATION';
+  forecast_available: boolean;
+  forecast_status: 'AVAILABLE' | 'SUPPRESSED';
+  model_version: 'GRID_HISTORICAL_LOAD_V1.0';
   model_generation_time: string;
-  average_price_inr_per_mwh: number;
-  peak_demand_kw: number;
-  peak_demand_block: number;
+  training_start_date: string | null;
+  training_end_date: string | null;
+  latest_input_date: string | null;
+  forecast_target_date: string | null;
+  freshness_days: number | null;
+  selected_model: string | null;
+  validation_metrics: GridValidationMetricsContract | null;
+  baseline_metrics: Record<string, GridValidationMetricsContract>;
+  provenance: {
+    input_source: 'COMMITTED_INTERVAL_DATA_96';
+    model_family: 'DAY_AHEAD_DEMAND';
+    validation_method: 'CHRONOLOGICAL_HOLDOUT';
+    price_source: null;
+  };
+  average_price_inr_per_mwh: null;
+  peak_demand_kw: number | null;
+  peak_demand_block: number | null;
   blocks: GridForecastBlockContract[];
-  data_quality: string;
-  freshness: string;
+  is_suppressed: boolean;
+  suppression_reason: string | null;
+  confidence_status: string;
+  data_quality: 'PASSED' | 'UNVERIFIED';
+  freshness: 'RECENT' | 'STALE' | 'UNKNOWN';
+  price_status: 'AUTHORITATIVE_PRICE_FEED_REQUIRED';
   run_id?: string;
   persisted?: boolean;
 }

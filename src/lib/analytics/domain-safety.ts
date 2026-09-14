@@ -27,17 +27,56 @@ export function validGridDemo(r: any, siteId: string, date: string): boolean {
       ['forecast_demand_kw','forecast_price_inr_per_mwh','confidence_lower_kw','confidence_upper_kw'].every(k => finiteNumber(b[k])) &&
       Number(b.confidence_lower_kw) >= 0 && Number(b.confidence_lower_kw) <= Number(b.forecast_demand_kw) && Number(b.forecast_demand_kw) <= Number(b.confidence_upper_kw));
 }
-export function validGridDemandForecast(r: any, siteId: string, date: string): boolean {
+function validGridMetrics(value: any): boolean {
+  return value !== null && typeof value === 'object' &&
+    ['mae_kw','rmse_kw','smape_pct','observations'].every(key => finiteNumber(value[key])) &&
+    Number(value.mae_kw) >= 0 && Number(value.rmse_kw) >= 0 && Number(value.smape_pct) >= 0 &&
+    Number.isInteger(Number(value.observations)) && Number(value.observations) > 0;
+}
+function validGridProvenance(value: any): boolean {
+  return value?.input_source === 'COMMITTED_INTERVAL_DATA_96' &&
+    value.model_family === 'DAY_AHEAD_DEMAND' &&
+    value.validation_method === 'CHRONOLOGICAL_HOLDOUT' && value.price_source === null;
+}
+export function validGridAnalyticsResponse(r: any, siteId: string, date: string): boolean {
   const hhmm = (n: number) => n === 1440 ? '24:00' : `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
-  return r?.site_id === siteId && r.operating_date === date && r.forecast_target_date === date &&
-    r.model_status === 'VALIDATED' && r.validation_status === 'VALIDATED' && r.forecast_available === true &&
-    r.model_version === 'GRID_HISTORICAL_LOAD_V1.0' && blocks96(r.blocks) && r.average_price_inr_per_mwh == null &&
-    r.price_status === AUTHORITATIVE_PRICE_FEED_REQUIRED && r.blocks.every((b: any,i: number) =>
+  if (r?.site_id !== siteId || r.operating_date !== date || r.model_version !== 'GRID_HISTORICAL_LOAD_V1.0' ||
+      !validDate(r.operating_date) || typeof r.model_generation_time !== 'string' || !Number.isFinite(Date.parse(r.model_generation_time)) ||
+      ![r.training_start_date,r.training_end_date,r.latest_input_date,r.forecast_target_date]
+        .every(value => value === null || validDate(value)) ||
+      !(r.freshness_days === null || Number.isInteger(r.freshness_days)) ||
+      !(r.selected_model === null || typeof r.selected_model === 'string') ||
+      !(r.validation_metrics === null || validGridMetrics(r.validation_metrics)) ||
+      r.baseline_metrics === null || typeof r.baseline_metrics !== 'object' || Array.isArray(r.baseline_metrics) ||
+      !Object.values(r.baseline_metrics).every(validGridMetrics) || !validGridProvenance(r.provenance) ||
+      r.average_price_inr_per_mwh !== null || r.price_status !== AUTHORITATIVE_PRICE_FEED_REQUIRED ||
+      !Array.isArray(r.blocks) || typeof r.forecast_available !== 'boolean' || typeof r.is_suppressed !== 'boolean' ||
+      typeof r.confidence_status !== 'string' || !['PASSED','UNVERIFIED'].includes(r.data_quality) ||
+      !['RECENT','STALE','UNKNOWN'].includes(r.freshness)) return false;
+
+  if (r.forecast_available === false) {
+    const validStatus = r.forecast_status === 'SUPPRESSED' && r.is_suppressed === true && r.blocks.length === 0 &&
+      typeof r.suppression_reason === 'string' && r.suppression_reason.length > 0 &&
+      ['CALIBRATING','FAILED_VALIDATION','STALE_INPUT'].includes(r.model_status) &&
+      r.peak_demand_kw === null && r.peak_demand_block === null && r.data_quality === 'UNVERIFIED' &&
+      ((r.model_status === 'CALIBRATING' && r.validation_status === 'CALIBRATING' && r.freshness === 'UNKNOWN') ||
+       (r.model_status === 'FAILED_VALIDATION' && r.validation_status === 'FAILED_VALIDATION' && r.freshness === 'UNKNOWN') ||
+       (r.model_status === 'STALE_INPUT' && r.validation_status === 'VALIDATED' && r.freshness === 'STALE' &&
+        Number.isInteger(r.freshness_days) && r.freshness_days > 1 && validGridMetrics(r.validation_metrics)));
+    return validStatus;
+  }
+
+  return r.forecast_status === 'AVAILABLE' && r.is_suppressed === false && r.suppression_reason === null &&
+    r.forecast_target_date === date && r.model_status === 'VALIDATED' && r.validation_status === 'VALIDATED' &&
+    r.data_quality === 'PASSED' && r.freshness === 'RECENT' && finiteNumber(r.peak_demand_kw) &&
+    Number.isInteger(r.peak_demand_block) && r.peak_demand_block >= 1 && r.peak_demand_block <= 96 &&
+    validGridMetrics(r.validation_metrics) && typeof r.selected_model === 'string' && blocks96(r.blocks) &&
+    r.blocks.every((b: any,i: number) =>
       b.start_time === hhmm(i*15) && b.end_time === hhmm((i+1)*15) &&
-      ['forecast_demand_kw','confidence_lower_kw','confidence_upper_kw'].every(k => finiteNumber(b[k])) &&
-      b.forecast_price_inr_per_mwh == null && b.is_high_cost_window == null &&
-      Number(b.confidence_lower_kw) >= 0 && Number(b.confidence_lower_kw) <= Number(b.forecast_demand_kw) &&
-      Number(b.forecast_demand_kw) <= Number(b.confidence_upper_kw));
+      ['forecast_load_kw','confidence_lower_kw','confidence_upper_kw'].every(k => finiteNumber(b[k])) &&
+      b.forecast_price_inr_per_mwh === null && b.is_high_cost_window === null &&
+      Number(b.confidence_lower_kw) >= 0 && Number(b.confidence_lower_kw) <= Number(b.forecast_load_kw) &&
+      Number(b.forecast_load_kw) <= Number(b.confidence_upper_kw));
 }
 export function validIntervals(rows: any[], date: string, fields: string[], now = Date.now()): boolean {
   if (!validDate(date) || !blocks96(rows)) return false;

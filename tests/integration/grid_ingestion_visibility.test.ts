@@ -17,13 +17,20 @@ const analytics = vi.hoisted(() => ({
     model_status: 'STALE_INPUT',
     validation_status: 'VALIDATED',
     forecast_available: false,
+    forecast_status: 'SUPPRESSED',
     model_version: 'GRID_HISTORICAL_LOAD_V1.0',
     model_generation_time: '2026-09-15T00:00:00Z',
+    training_start_date: input.historicalDays.at(0)?.operating_date ?? null,
+    training_end_date: input.historicalDays.at(-1)?.operating_date ?? null,
     latest_input_date: input.historicalDays.at(-1)?.operating_date ?? null,
-    freshness_days: 1,
+    freshness_days: 138,
     selected_model: 'PREVIOUS_WEEK_SAME_BLOCK',
     validation_metrics: { mae_kw: 10, rmse_kw: 12, smape_pct: 1, observations: 1344 },
     baseline_metrics: {},
+    provenance: { input_source: 'COMMITTED_INTERVAL_DATA_96', model_family: 'DAY_AHEAD_DEMAND', validation_method: 'CHRONOLOGICAL_HOLDOUT', price_source: null },
+    average_price_inr_per_mwh: null,
+    peak_demand_kw: null,
+    peak_demand_block: null,
     blocks: [],
     is_suppressed: true,
     suppression_reason: 'STALE_INPUT',
@@ -166,6 +173,13 @@ describe('Grid visibility of committed interval data', () => {
     expect(evidence).toMatchObject({ operating_date: '2026-01-01', received_blocks: 96, completeness_pct: 100 });
   });
 
+  it('rejects a malformed analytics response as INVALID_ANALYTICS_CONTRACT', async () => {
+    analytics.grid.mockResolvedValueOnce({ site_id: completeSiteId, forecast_available: false } as any);
+    const response = await forecastGet(forecastRequest(completeSiteId, '2026-01-01'));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: 'INVALID_ANALYTICS_CONTRACT' });
+  });
+
   it('requires an explicit bearer token for input evidence', async () => {
     const response = await inputEvidenceGet(new NextRequest(
       `http://localhost:3000/api/grid/input-evidence?site_id=${completeSiteId}`
@@ -246,6 +260,7 @@ describe('Grid visibility of committed interval data', () => {
     expect(await response.json()).toMatchObject({
       site_id: historySiteId,
       model_status: 'STALE_INPUT',
+      forecast_status: 'SUPPRESSED',
       forecast_available: false,
       blocks: [],
       price_status: 'AUTHORITATIVE_PRICE_FEED_REQUIRED',

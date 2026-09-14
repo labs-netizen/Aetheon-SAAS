@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchGridForecast } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
-import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo, validGridDemandForecast } from '@/lib/analytics/domain-safety';
+import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo, validGridAnalyticsResponse } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadGridHistoricalInput } from '@/lib/analytics/grid-input-evidence';
 
@@ -66,21 +66,11 @@ export async function GET(req: NextRequest) {
         }, { status: 502 });
       }
 
-      if (forecastResult?.forecast_available !== true) {
-        const validSuppression = forecastResult?.site_id === siteId &&
-          ['CALIBRATING', 'FAILED_VALIDATION', 'STALE_INPUT'].includes(forecastResult?.model_status) &&
-          forecastResult?.is_suppressed === true && Array.isArray(forecastResult?.blocks) && forecastResult.blocks.length === 0;
-        if (!validSuppression) {
-          return NextResponse.json({ error: 'INVALID_ANALYTICS_CONTRACT' }, { status: 502 });
-        }
-        return NextResponse.json({ ...forecastResult, organisation_id: authResult.organisationId, persisted: false });
+      if (!validGridAnalyticsResponse(forecastResult, siteId, operatingDate)) {
+        return NextResponse.json({ error: 'INVALID_ANALYTICS_CONTRACT' }, { status: 502 });
       }
-
-      if (!validGridDemandForecast(forecastResult, siteId, operatingDate)) {
-        return NextResponse.json({
-          error: 'INVALID_ANALYTICS_CONTRACT',
-          message: 'Validated demand forecast did not satisfy the 96-block, provenance, or no-price contract.',
-        }, { status: 502 });
+      if (forecastResult.forecast_available === false) {
+        return NextResponse.json({ ...forecastResult, organisation_id: authResult.organisationId, persisted: false });
       }
       return NextResponse.json({
         ...forecastResult,

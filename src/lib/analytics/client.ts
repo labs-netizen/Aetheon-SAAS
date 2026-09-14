@@ -3,6 +3,7 @@
  * Communicates server-to-server: Next.js API/Server Actions -> FastAPI (port 8000)
  * Secret tokens are held exclusively on the server and never exposed to client browsers.
  */
+import type { GridForecastResponseContract } from '@/types/analytics-contracts';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const ANALYTICS_BASE_URL = process.env.ANALYTICS_SERVICE_URL || 'http://127.0.0.1:8000';
@@ -88,7 +89,7 @@ async function callAnalyticsEndpoint<TResponse>(endpoint: string, payload: unkno
 }
 
 export async function fetchGridForecast(params: GridForecastParams) {
-  return callAnalyticsEndpoint('/v1/grid/forecast', {
+  return callAnalyticsEndpoint<GridForecastResponseContract>('/v1/grid/forecast', {
     is_demo: params.isDemo === true,
     site_id: params.siteId,
     operating_date: params.operatingDate,

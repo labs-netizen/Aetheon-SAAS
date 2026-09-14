@@ -133,7 +133,7 @@ export default function GridIntelligencePage() {
       return forecastResult.blocks.map((b: any) => ({
         block_index: b.block_index,
         start_time: b.start_time || getBlockTimes(b.block_index).startTime,
-        demand_kw: Math.round(b.forecast_demand_kw || b.demand_kw || 0),
+        demand_kw: Math.round(b.forecast_load_kw || 0),
         price_mwh: Number.isFinite(Number(b.forecast_price_inr_per_mwh ?? b.price_mwh))
           ? Math.round(Number(b.forecast_price_inr_per_mwh ?? b.price_mwh))
           : undefined,
@@ -314,7 +314,7 @@ export default function GridIntelligencePage() {
   }, [forecastBlocks, solarEnabled, bessEnabled, oaEnabled, isDemo, hasValidForecast, hasAuthoritativePriceFeed, forecastResult]);
 
   const handleExportCsv = () => {
-    const headers = ['block_index', 'start_time', 'forecast_demand_kw', 'forecast_price_inr_per_mwh', 'solar_generation_kw', 'is_high_cost'];
+    const headers = ['block_index', 'start_time', 'forecast_load_kw', 'forecast_price_inr_per_mwh', 'solar_generation_kw', 'is_high_cost'];
     const rows = forecastBlocks.map((b) =>
       [b.block_index, b.start_time, b.demand_kw, b.price_mwh, b.solar_kw, b.is_high_cost ? 'YES' : 'NO'].join(',')
     );

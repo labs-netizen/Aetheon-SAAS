@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 import math
 import os
+import json
+from pathlib import Path
 import sys
 
 from fastapi.testclient import TestClient
@@ -45,6 +47,7 @@ def test_426_day_history_trains_backtests_and_emits_exactly_96_demand_blocks():
     assert response.model_status == "VALIDATED"
     assert response.validation_status == "VALIDATED"
     assert response.forecast_available
+    assert response.forecast_status == "AVAILABLE"
     assert len(response.blocks) == 96
     assert [block.block_index for block in response.blocks] == list(range(1, 97))
     assert response.validation_metrics.observations >= 14 * 96
@@ -54,6 +57,8 @@ def test_426_day_history_trains_backtests_and_emits_exactly_96_demand_blocks():
     }
     assert response.average_price_inr_per_mwh is None
     assert response.price_status == "AUTHORITATIVE_PRICE_FEED_REQUIRED"
+    assert response.provenance.input_source == "COMMITTED_INTERVAL_DATA_96"
+    assert all(block.forecast_load_kw >= 0 for block in response.blocks)
     assert all(block.forecast_price_inr_per_mwh is None and block.is_high_cost_window is None for block in response.blocks)
 
 
@@ -70,13 +75,47 @@ def test_stale_april_history_is_validated_but_operationally_suppressed():
     assert response.latest_input_date == days[-1].operating_date
     assert response.validation_status == "VALIDATED"
     assert response.model_status == "STALE_INPUT"
+    assert response.forecast_status == "SUPPRESSED"
     assert response.freshness_days > 1
     assert response.is_suppressed and not response.forecast_available and response.blocks == []
+
+
+def test_captured_stale_fastapi_json_matches_shared_typescript_fixture():
+    days = history(426, date(2025, 3, 1))
+    payload = request(days, evaluation_date=date(2026, 9, 15)).model_dump()
+    response = TestClient(app).post(
+        "/v1/grid/forecast",
+        json=payload,
+        headers={"Authorization": "Bearer fixture-test-analytics-token"},
+    )
+    assert response.status_code == 200
+    actual = response.json()
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "grid_forecast_stale_response.json"
+    expected = json.loads(fixture_path.read_text(encoding="utf-8"))
+    actual["model_generation_time"] = expected["model_generation_time"]
+    assert actual == expected
+
+
+def test_captured_validated_fastapi_json_matches_shared_typescript_fixture():
+    days = history(80, date(2026, 1, 1))
+    payload = request(days).model_dump()
+    response = TestClient(app).post(
+        "/v1/grid/forecast",
+        json=payload,
+        headers={"Authorization": "Bearer fixture-test-analytics-token"},
+    )
+    assert response.status_code == 200
+    actual = response.json()
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "grid_forecast_validated_response.json"
+    expected = json.loads(fixture_path.read_text(encoding="utf-8"))
+    actual["model_generation_time"] = expected["model_generation_time"]
+    assert actual == expected
 
 
 def test_incomplete_latest_day_suppresses_even_with_valid_training_history():
     response = solve_grid_forecast(request(latest_input_complete=False))
     assert response.model_status == "CALIBRATING"
+    assert response.forecast_status == "SUPPRESSED"
     assert response.suppression_reason == "INCOMPLETE_LATEST_OPERATING_DAY"
     assert response.blocks == []
 
@@ -97,6 +136,7 @@ def test_failed_chronological_validation_suppresses_unreliable_forecast():
     response = solve_grid_forecast(request(days))
     assert response.model_status == "FAILED_VALIDATION"
     assert response.validation_status == "FAILED_VALIDATION"
+    assert response.forecast_status == "SUPPRESSED"
     assert response.suppression_reason == "MODEL_VALIDATION_THRESHOLDS_NOT_MET"
     assert response.validation_metrics is not None
     assert response.blocks == []
