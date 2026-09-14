@@ -14,6 +14,7 @@ from grid_forecasting import chronological_split
 from main import app
 from schemas import GridForecastRequest, GridHistoricalDay
 from solvers import solve_grid_forecast
+from grid_contract_fixture_generator import generate_contract_responses
 
 
 def history(day_count=426, start=date(2025, 1, 1)):
@@ -80,36 +81,18 @@ def test_stale_april_history_is_validated_but_operationally_suppressed():
     assert response.is_suppressed and not response.forecast_available and response.blocks == []
 
 
-def test_captured_stale_fastapi_json_matches_shared_typescript_fixture():
-    days = history(426, date(2025, 3, 1))
-    payload = request(days, evaluation_date=date(2026, 9, 15)).model_dump()
-    response = TestClient(app).post(
-        "/v1/grid/forecast",
-        json=payload,
-        headers={"Authorization": "Bearer fixture-test-analytics-token"},
-    )
-    assert response.status_code == 200
-    actual = response.json()
-    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "grid_forecast_stale_response.json"
-    expected = json.loads(fixture_path.read_text(encoding="utf-8"))
-    actual["model_generation_time"] = expected["model_generation_time"]
-    assert actual == expected
-
-
-def test_captured_validated_fastapi_json_matches_shared_typescript_fixture():
-    days = history(80, date(2026, 1, 1))
-    payload = request(days).model_dump()
-    response = TestClient(app).post(
-        "/v1/grid/forecast",
-        json=payload,
-        headers={"Authorization": "Bearer fixture-test-analytics-token"},
-    )
-    assert response.status_code == 200
-    actual = response.json()
-    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "grid_forecast_validated_response.json"
-    expected = json.loads(fixture_path.read_text(encoding="utf-8"))
-    actual["model_generation_time"] = expected["model_generation_time"]
-    assert actual == expected
+def test_fastapi_generates_all_shared_cross_language_contract_outcomes():
+    responses = generate_contract_responses()
+    fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "grid_forecast_contract_responses.json"
+    assert responses == json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert responses["validated"]["forecast_status"] == "AVAILABLE"
+    assert responses["validated"]["forecast_available"] is True
+    assert len(responses["validated"]["blocks"]) == 96
+    assert responses["stale_input"]["model_status"] == "STALE_INPUT"
+    assert responses["stale_input"]["validation_status"] == "VALIDATED"
+    assert responses["stale_input"]["blocks"] == []
+    assert responses["calibrating"]["model_status"] == "CALIBRATING"
+    assert responses["failed_validation"]["model_status"] == "FAILED_VALIDATION"
 
 
 def test_incomplete_latest_day_suppresses_even_with_valid_training_history():
