@@ -28,12 +28,14 @@ import { prepareCsvImport } from '@/features/ingestion/normalizer';
 import type { CsvSchemaMapping, SchemaDetectionResult } from '@/features/ingestion/mappingTypes';
 import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants';
+import { createClient } from '@/lib/supabase/client';
 
 function SettingsContent() {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get('tab') === 'billing' ? 'billing' : 'upload';
 
   const { currentSite, activeRole, refreshSites } = useSite();
+  const supabase = createClient();
   const [activeSubTab, setActiveSubTab] = useState<'upload' | 'site' | 'readiness' | 'billing'>(initialTab);
 
   // CSV Upload State
@@ -46,6 +48,7 @@ function SettingsContent() {
   const [mappingConfirmed, setMappingConfirmed] = useState(false);
   const [mappingErrors, setMappingErrors] = useState<string[]>([]);
   const [sampleRows, setSampleRows] = useState<Array<{ operating_date: string; block_index: number; load_kw: number }>>([]);
+  const [validatedSiteId, setValidatedSiteId] = useState<string | null>(null);
 
   // Commit State
   const [isCommitting, setIsCommitting] = useState(false);
@@ -177,6 +180,7 @@ function SettingsContent() {
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setFileContent(content);
+      setValidatedSiteId(currentSite.id);
       const prepared = prepareCsvImport(content, currentSite.id);
       setSchemaDetection(prepared.detection);
       setSchemaMapping(prepared.mapping);
@@ -218,6 +222,13 @@ function SettingsContent() {
     setCommitFeedback(null);
 
     try {
+      if (validatedSiteId !== currentSite.id) {
+        throw new Error('The selected site changed after validation. Re-select the CSV to validate it for the current site.');
+      }
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session?.access_token) {
+        throw new Error('Your authenticated session could not be verified. Please sign in again.');
+      }
       const formData = new FormData();
       formData.append('siteId', currentSite.id);
       if (selectedFile) {
@@ -235,6 +246,7 @@ function SettingsContent() {
 
       const res = await fetch('/api/ingestion/commit', {
         method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
         body: formData,
       });
 

@@ -74,6 +74,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    console.info('Ingestion commit scope', {
+      siteId,
+      bearerPresent: req.headers.get('authorization')?.startsWith('Bearer ') === true,
+    });
+
     // 1. Authorize: Authentication, Org membership, Site access, and Role permission
     const authResult = await authorizeApiRequest(req, {
       siteId,

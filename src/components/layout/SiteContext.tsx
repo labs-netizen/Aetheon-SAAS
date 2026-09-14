@@ -84,6 +84,10 @@ const ALL_PRODUCT_ENTITLEMENTS = [
 
 const SiteContext = createContext<SiteContextValue | undefined>(undefined);
 
+export function resolveCurrentSite(sites: Site[], currentSiteId: string): Site | null {
+  return sites.find((site) => site.id === currentSiteId) || sites[0] || null;
+}
+
 export function SiteProvider({
   children,
   initialDemoMode,
@@ -248,7 +252,7 @@ export function SiteProvider({
     };
   }, [loadUserData, supabase]);
 
-  const currentSite = sites.find((s) => s.id === currentSiteId) || sites[0] || null;
+  const currentSite = resolveCurrentSite(sites, currentSiteId);
 
   const switchSite = (siteId: string) => {
     setCurrentSiteId(siteId);

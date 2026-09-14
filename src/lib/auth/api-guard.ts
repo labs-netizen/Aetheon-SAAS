@@ -32,6 +32,53 @@ export interface GuardFailure {
 
 export type GuardResult = GuardSuccess | GuardFailure;
 
+type SiteScope = {
+  id: string;
+  organisation_id: string;
+  name: string;
+  state: string;
+  discom: string;
+  is_demo: boolean;
+};
+
+export type SiteLookupResult =
+  | { status: 'FOUND'; site: SiteScope; source: 'authenticated' | 'service_role' }
+  | { status: 'NOT_FOUND' }
+  | { status: 'LOOKUP_FAILED'; source: 'authenticated' | 'service_role'; message: string };
+
+export async function resolveSiteForAuthorization(
+  authenticatedClient: SupabaseClient,
+  adminClient: SupabaseClient,
+  siteId: string
+): Promise<SiteLookupResult> {
+  const authenticatedLookup = await authenticatedClient
+    .from('sites')
+    .select('id, organisation_id, name, state, discom, is_demo')
+    .eq('id', siteId)
+    .maybeSingle();
+
+  if (authenticatedLookup.error) {
+    return { status: 'LOOKUP_FAILED', source: 'authenticated', message: authenticatedLookup.error.message };
+  }
+  if (authenticatedLookup.data) {
+    return { status: 'FOUND', site: authenticatedLookup.data as SiteScope, source: 'authenticated' };
+  }
+
+  // RLS intentionally hides foreign sites. A server-only existence check lets
+  // the guard preserve foreign-site 403 versus genuinely nonexistent-site 404.
+  const privilegedLookup = await adminClient
+    .from('sites')
+    .select('id, organisation_id, name, state, discom, is_demo')
+    .eq('id', siteId)
+    .maybeSingle();
+
+  if (privilegedLookup.error) {
+    return { status: 'LOOKUP_FAILED', source: 'service_role', message: privilegedLookup.error.message };
+  }
+  if (!privilegedLookup.data) return { status: 'NOT_FOUND' };
+  return { status: 'FOUND', site: privilegedLookup.data as SiteScope, source: 'service_role' };
+}
+
 const DEMO_ORG_IDS = [
   'a0000000-0000-0000-0000-000000000001',
   'org-demo-001',
@@ -76,13 +123,14 @@ export async function authorizeApiRequest(
     const token = authHeader.substring(7);
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://mock-aetheon.supabase.co';
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'mock-anon-key-placeholder';
-    const tokenClient = createClient(supabaseUrl, supabaseAnonKey, {
+    const tokenVerifier = createClient(supabaseUrl, supabaseAnonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
-      global: { headers: { Authorization: authHeader } },
     });
-    const { data: authData, error: authError } = await tokenClient.auth.getUser(token);
+    const { data: authData, error: authError } = await tokenVerifier.auth.getUser(token);
     if (!authError && authData?.user) {
-      authenticatedClient = tokenClient;
+      authenticatedClient = createClient(supabaseUrl, supabaseAnonKey, {
+        accessToken: async () => token,
+      });
       user = {
         id: authData.user.id,
         email: authData.user.email,
@@ -177,13 +225,22 @@ export async function authorizeApiRequest(
   let resolvedOrgId = options.organisationId;
   let siteIsDemo = false;
   if (options.siteId) {
-    const { data: siteData, error: siteError } = await adminClient
-      .from('sites')
-      .select('id, organisation_id, name, state, discom, is_demo')
-      .eq('id', options.siteId)
-      .maybeSingle();
-
-    if (siteError || !siteData) {
+    const siteLookup = await resolveSiteForAuthorization(authenticatedClient, adminClient, options.siteId);
+    if (siteLookup.status === 'LOOKUP_FAILED') {
+      console.error('Site authorization lookup failed', {
+        siteId: options.siteId,
+        source: siteLookup.source,
+        message: siteLookup.message,
+      });
+      return {
+        authorized: false,
+        response: NextResponse.json(
+          { error: 'SITE_LOOKUP_FAILED', message: 'The selected site could not be verified because its authorization lookup failed.' },
+          { status: 500 }
+        ),
+      };
+    }
+    if (siteLookup.status === 'NOT_FOUND') {
       return {
         authorized: false,
         response: NextResponse.json(
@@ -192,6 +249,7 @@ export async function authorizeApiRequest(
         ),
       };
     }
+    const siteData = siteLookup.site;
 
     if (resolvedOrgId && resolvedOrgId !== siteData.organisation_id) {
       return { authorized: false, response: NextResponse.json({ error: 'SITE_ORGANISATION_MISMATCH' }, { status: 403 }) };
