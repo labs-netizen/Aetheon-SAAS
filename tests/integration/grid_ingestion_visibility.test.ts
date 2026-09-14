@@ -161,6 +161,31 @@ describe('Grid visibility of committed interval data', () => {
       .toEqual({ id: completeSiteId, organisation_id: orgId });
     expect(await must(bearerClient.from('sites').select('id').eq('id', foreignSiteId))).toEqual([]);
     expect((await must(bearerClient.from('interval_data_96').select('block_index').eq('site_id', completeSiteId).eq('operating_date', '2026-01-01')))).toHaveLength(96);
+    expect(await must(bearerClient.from('interval_data_96').select('block_index').eq('site_id', foreignSiteId))).toEqual([]);
+  });
+
+  it('keeps anonymous and authenticated direct writes blocked', async () => {
+    const anonymousClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    expect(await must(anonymousClient.from('interval_data_96').select('block_index').eq('site_id', completeSiteId))).toEqual([]);
+
+    const bearerClient = createClient(url, anonKey, { accessToken: async () => token });
+    const unauthorizedRow = {
+      site_id: completeSiteId,
+      operating_date: '2030-01-01',
+      block_index: 1,
+      timestamp_utc: '2029-12-31T18:30:00.000Z',
+      load_kw: 1,
+      data_quality: 'PASSED',
+    };
+    expect((await bearerClient.from('interval_data_96').insert(unauthorizedRow)).error).toBeTruthy();
+    const update = await bearerClient.from('interval_data_96').update({ load_kw: 1 }).eq('site_id', completeSiteId).select('id');
+    const deletion = await bearerClient.from('interval_data_96').delete().eq('site_id', completeSiteId).select('id');
+    expect(update.error || (update.data || []).length === 0).toBeTruthy();
+    expect(deletion.error || (deletion.data || []).length === 0).toBeTruthy();
+    const unchanged = await db.from('interval_data_96').select('id', { count: 'exact', head: true })
+      .eq('site_id', completeSiteId).eq('operating_date', '2026-01-01');
+    expect(unchanged.error).toBeNull();
+    expect(unchanged.count).toBe(96);
   });
 
   it('classifies a PostgreSQL privilege error as lookup failure rather than not-found or RLS denial', async () => {
