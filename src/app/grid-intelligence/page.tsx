@@ -28,6 +28,7 @@ import { getBlockTimes } from '@/lib/dates/blocks96';
 import { formatPower, formatEnergy, formatPercentage } from '@/lib/units/energy';
 import { formatPaiseToInr } from '@/lib/units/currency';
 import { PRODUCTS } from '@/types';
+import { createClient } from '@/lib/supabase/client';
 
 export default function GridIntelligencePage() {
   const { currentSite, isEntitled } = useSite();
@@ -41,6 +42,7 @@ export default function GridIntelligencePage() {
   const forecastResult = forecastResultResponse && forecastResultResponse.requestSiteId === currentSite?.id ? forecastResultResponse.data : null;
   const [isLoadingForecast, setIsLoadingForecast] = useState<boolean>(false);
   const [forecastError, setForecastError] = useState<string | null>(null);
+  const supabase = useMemo(() => createClient(), []);
 
   const isDemo = Boolean(currentSite?.is_demo);
   const hasValidForecast = Boolean(forecastResult && !forecastResult.is_suppressed && forecastResult.blocks?.length === 96);
@@ -53,15 +55,23 @@ export default function GridIntelligencePage() {
     setIsLoadingForecast(true);
     setForecastError(null);
 
-    const targetDate = new Date().toISOString().substring(0, 10);
-    fetch(`/api/forecast?siteId=${currentSite.id}&operatingDate=${targetDate}`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.message || errData.error || `HTTP ${res.status}`);
-        }
-        return res.json();
-      })
+    const loadForecast = async () => {
+      const params = new URLSearchParams({ siteId: currentSite.id });
+      if (currentSite.is_demo) params.set('operatingDate', new Date().toISOString().substring(0, 10));
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (!currentSite.is_demo && (sessionError || !session?.access_token)) {
+        throw new Error('AUTHENTICATED_SESSION_REQUIRED');
+      }
+      const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
+      const res = await fetch(`/api/forecast?${params.toString()}`, { headers });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || errData.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    };
+
+    loadForecast()
       .then((data) => {
         if (isMounted) {
           setForecastResult({ requestSiteId: currentSite.id, data });
@@ -81,7 +91,7 @@ export default function GridIntelligencePage() {
     return () => {
       isMounted = false;
     };
-  }, [currentSite?.id]);
+  }, [currentSite?.id, currentSite?.is_demo, supabase]);
 
   // Transform backend blocks to Block96Point
   const forecastBlocks: Block96Point[] = useMemo(() => {
@@ -139,11 +149,11 @@ export default function GridIntelligencePage() {
   // Quality gate evaluation
   const qualityGate = useMemo(() => {
     const evaluated = evaluateQualityGate({
-      sourceTimestamp: forecastResult?.model_generation_time || '2026-09-07T00:00:00Z',
+      sourceTimestamp: forecastResult?.model_generation_time || forecastResult?.input_evidence?.latest_timestamp_utc || '2026-09-07T00:00:00Z',
       sourceType: forecastResult?.persisted ? 'PostgreSQL Persisted Model Forecast' : (isDemo ? 'DEMO / SYNTHETIC' : 'INTERNAL_VALIDATION'),
-      completenessPct: currentSite?.activation_status === 'ACTIVE' ? 100.0 : (isDemo ? 95.0 : 0.0),
+      completenessPct: forecastResult?.input_evidence?.completeness_pct ?? (isDemo ? 95.0 : 0.0),
       totalBlocksExpected: 96,
-      totalBlocksReceived: forecastBlocks.length,
+      totalBlocksReceived: forecastResult?.input_evidence?.total_blocks_received ?? forecastBlocks.length,
       validationStatus: forecastResult?.data_quality || (isDemo ? 'PASSED' : (hasValidForecast ? (forecastResult?.data_quality || 'UNKNOWN') : 'FAILED')),
       freshnessStatus: forecastResult?.freshness || (isDemo ? 'RECENT' : 'UNKNOWN'),
       modelVersion: forecastResult?.model_version || (isDemo ? 'DEMO_BASELINE_v1.0' : 'INTERNAL_VALIDATION'),

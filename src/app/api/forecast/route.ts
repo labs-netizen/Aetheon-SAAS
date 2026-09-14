@@ -3,14 +3,15 @@ import { fetchGridForecast } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get('siteId');
-    const operatingDate = searchParams.get('operatingDate') || operatingToday();
+    const requestedOperatingDate = searchParams.get('operatingDate');
 
-    if (!siteId || !validDate(operatingDate)) {
+    if (!siteId || (requestedOperatingDate !== null && !validDate(requestedOperatingDate))) {
       return NextResponse.json({ error: 'siteId query parameter is required' }, { status: 400 });
     }
 
@@ -36,9 +37,30 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'SITE_NOT_FOUND', message: 'Site not found.' }, { status: 404 });
     }
 
+    const inputEvidence = await resolveGridInputEvidence(adminClient, siteId, requestedOperatingDate);
+    const operatingDate = inputEvidence.operating_date || requestedOperatingDate || operatingToday();
+
     // 2. Authoritative Server-side Quality Gate
     if (site.is_demo !== true) {
-      return NextResponse.json({ site_id: siteId, operating_date: operatingDate, is_suppressed: true, suppression_reason: LIVE_GRID_BLOCK, blocks: [], persisted: false, data_quality: 'UNVERIFIED', confidence_status: 'UNAVAILABLE', freshness: 'UNKNOWN' });
+      const inputSuppressionReason = !inputEvidence.is_complete
+        ? `INCOMPLETE_INTERVAL_DAY: ${inputEvidence.total_blocks_received}/96 valid load blocks are available for ${operatingDate}.`
+        : inputEvidence.freshness === 'STALE'
+          ? `STALE_INTERVAL_DATA: The latest complete operating day (${operatingDate}) is stale.`
+          : null;
+      return NextResponse.json({
+        site_id: siteId,
+        organisation_id: authResult.organisationId,
+        operating_date: operatingDate,
+        is_suppressed: true,
+        suppression_reason: LIVE_GRID_BLOCK,
+        input_suppression_reason: inputSuppressionReason,
+        blocks: [],
+        persisted: false,
+        data_quality: inputEvidence.is_complete ? 'PASSED' : 'FAILED',
+        confidence_status: 'UNAVAILABLE',
+        freshness: inputEvidence.freshness,
+        input_evidence: inputEvidence,
+      });
     }
 
     // 3. Check if a forecast run already exists for this site and date

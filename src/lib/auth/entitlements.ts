@@ -41,11 +41,19 @@ export async function checkServerEntitlement(
     const supabase = createAdminClient();
 
     if (siteId) {
-      const { data: site } = await supabase.from('sites').select('organisation_id, is_demo')
+      const { data: site, error: siteError } = await supabase.from('sites').select('organisation_id, is_demo')
         .eq('id', siteId).maybeSingle();
-      if (!site || site.organisation_id !== organisationId ||
-          (site.is_demo && process.env.NEXT_PUBLIC_DEMO_MODE !== 'true')) {
+      if (siteError) {
+        return { entitled: false, reason: `SITE_LOOKUP_FAILED: ${siteError.message}` };
+      }
+      if (!site) {
+        return { entitled: false, reason: 'SITE_NOT_FOUND' };
+      }
+      if (site.organisation_id !== organisationId) {
         return { entitled: false, reason: 'SITE_ORGANISATION_MISMATCH' };
+      }
+      if (site.is_demo && process.env.NEXT_PUBLIC_DEMO_MODE !== 'true') {
+        return { entitled: false, reason: 'DEMO_DISABLED' };
       }
     }
     const now = new Date().toISOString();
