@@ -1,48 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { parseGridForecastResponse } from '@/lib/analytics/grid-input-evidence';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-const evidence = {
-  operating_date: '2026-01-02',
-  total_blocks_expected: 96,
-  total_blocks_received: 96,
-  completeness_pct: 100,
-  is_complete: true,
-  freshness: 'STALE',
-  latest_timestamp_utc: '2026-01-02T18:15:00.000Z',
-  source: 'interval_data_96',
-};
+const source = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 
-describe('Grid forecast HTTP response contract', () => {
-  it('retains committed input evidence when forecast output is suppressed', async () => {
-    const payload = {
-      forecast_available: false,
-      forecast_status: 'SUPPRESSED',
-      is_suppressed: true,
-      suppression_reason: 'LIVE_MODEL_AND_PRICE_FEED_REQUIRED',
-      input_evidence: evidence,
-      blocks: [],
-    };
-    const result = await parseGridForecastResponse(new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
-    expect(result).toEqual({ data: payload, warning: null });
-    expect(result.data.input_evidence).toMatchObject({ operating_date: '2026-01-02', total_blocks_received: 96, completeness_pct: 100 });
-    expect(result.data.blocks).toEqual([]);
+describe('Grid input and forecast UI independence', () => {
+  const page = source('src/app/grid-intelligence/page.tsx');
+  const forecastRoute = source('src/app/api/forecast/route.ts');
+
+  it('loads committed input evidence before forecast output', () => {
+    expect(page.indexOf('/api/grid/input-evidence')).toBeGreaterThan(-1);
+    expect(page.indexOf('/api/grid/input-evidence')).toBeLessThan(page.indexOf('/api/forecast'));
   });
 
-  it('does not discard evidence from a structured suppressed non-2xx response', async () => {
-    const payload = { error: 'FORECAST_UNAVAILABLE', is_suppressed: true, input_evidence: evidence, blocks: [] };
-    await expect(parseGridForecastResponse(new Response(JSON.stringify(payload), {
-      status: 502,
-      headers: { 'Content-Type': 'application/json' },
-    }))).resolves.toEqual({ data: payload, warning: 'FORECAST_UNAVAILABLE' });
+  it('derives live completeness only from the independent evidence state', () => {
+    expect(page).toContain('inputEvidence?.completeness_pct ?? 0.0');
+    expect(page).toContain('inputEvidence?.received_blocks ?? 0');
+    expect(page).toContain('inputEvidence?.quality_status || \'NO_DATA\'');
+    expect(page).not.toContain('forecastResult?.input_evidence');
+    expect(page).not.toMatch(/totalBlocksReceived:[^\n]*forecastBlocks/);
   });
 
-  it('keeps genuine authentication and database failures as errors', async () => {
-    await expect(parseGridForecastResponse(new Response(JSON.stringify({ error: 'GRID_INPUT_LOOKUP_FAILED' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    }))).rejects.toThrow('GRID_INPUT_LOOKUP_FAILED');
+  it('keeps the forecast endpoint independent from committed-input queries', () => {
+    expect(forecastRoute).not.toContain('resolveGridInputEvidence');
+    expect(forecastRoute).not.toContain('input_evidence');
+    expect(forecastRoute).toContain("forecast_status: 'SUPPRESSED'");
+    expect(forecastRoute).toContain('blocks: []');
   });
 });

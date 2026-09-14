@@ -23,7 +23,8 @@ describe('multi-day analytics date scoping', () => {
 
   it('keeps Grid input completeness separate from forecast output length', () => {
     const page = source('src/app/grid-intelligence/page.tsx');
-    expect(page).toContain('forecastResult?.input_evidence?.total_blocks_received ?? forecastBlocks.length');
-    expect(page).toContain('forecastResult?.input_evidence?.completeness_pct');
+    expect(page).toContain('inputEvidence?.received_blocks ?? 0');
+    expect(page).toContain('inputEvidence?.completeness_pct ?? 0.0');
+    expect(page).not.toMatch(/totalBlocksReceived:[^\n]*forecastBlocks/);
   });
 });

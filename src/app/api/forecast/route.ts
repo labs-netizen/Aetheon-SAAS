@@ -3,7 +3,6 @@ import { fetchGridForecast } from '@/lib/analytics/client';
 import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 
 export async function GET(req: NextRequest) {
   try {
@@ -37,16 +36,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'SITE_NOT_FOUND', message: 'Site not found.' }, { status: 404 });
     }
 
-    const inputEvidence = await resolveGridInputEvidence(readClient, siteId, requestedOperatingDate);
-    const operatingDate = inputEvidence.operating_date || requestedOperatingDate || operatingToday();
+    const operatingDate = requestedOperatingDate || operatingToday();
 
     // 2. Authoritative Server-side Quality Gate
     if (site.is_demo !== true) {
-      const inputSuppressionReason = !inputEvidence.is_complete
-        ? `INCOMPLETE_INTERVAL_DAY: ${inputEvidence.total_blocks_received}/96 valid load blocks are available for ${operatingDate}.`
-        : inputEvidence.freshness === 'STALE'
-          ? `STALE_INTERVAL_DATA: The latest complete operating day (${operatingDate}) is stale.`
-          : null;
       return NextResponse.json({
         site_id: siteId,
         organisation_id: authResult.organisationId,
@@ -55,13 +48,11 @@ export async function GET(req: NextRequest) {
         forecast_status: 'SUPPRESSED',
         is_suppressed: true,
         suppression_reason: LIVE_GRID_BLOCK,
-        input_suppression_reason: inputSuppressionReason,
         blocks: [],
         persisted: false,
         data_quality: 'UNVERIFIED',
         confidence_status: 'UNAVAILABLE',
-        freshness: inputEvidence.freshness,
-        input_evidence: inputEvidence,
+        freshness: 'UNKNOWN',
       });
     }
 

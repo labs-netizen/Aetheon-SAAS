@@ -29,7 +29,19 @@ import { formatPower, formatEnergy, formatPercentage } from '@/lib/units/energy'
 import { formatPaiseToInr } from '@/lib/units/currency';
 import { PRODUCTS } from '@/types';
 import { createClient } from '@/lib/supabase/client';
-import { parseGridForecastResponse } from '@/lib/analytics/grid-input-evidence';
+
+interface GridInputEvidenceResponse {
+  site_id: string;
+  operating_date: string | null;
+  expected_blocks: 96;
+  received_blocks: number;
+  completeness_pct: number;
+  duplicate_blocks: number[];
+  missing_blocks: number[];
+  quality_status: 'PASSED' | 'WARNING' | 'FAILED' | 'NO_DATA';
+  freshness_status: 'RECENT' | 'DELAYED' | 'STALE' | 'UNKNOWN';
+  data_available: boolean;
+}
 
 export default function GridIntelligencePage() {
   const { currentSite, isEntitled } = useSite();
@@ -43,38 +55,60 @@ export default function GridIntelligencePage() {
   const forecastResult = forecastResultResponse && forecastResultResponse.requestSiteId === currentSite?.id ? forecastResultResponse.data : null;
   const [isLoadingForecast, setIsLoadingForecast] = useState<boolean>(false);
   const [forecastError, setForecastError] = useState<string | null>(null);
+  const [inputEvidenceResponse, setInputEvidence] = useState<{ requestSiteId: string; data: GridInputEvidenceResponse } | null>(null);
+  const inputEvidence = inputEvidenceResponse && inputEvidenceResponse.requestSiteId === currentSite?.id
+    ? inputEvidenceResponse.data
+    : null;
+  const [inputEvidenceError, setInputEvidenceError] = useState<string | null>(null);
   const supabase = useMemo(() => createClient(), []);
 
   const isDemo = Boolean(currentSite?.is_demo);
   const hasValidForecast = Boolean(forecastResult && !forecastResult.is_suppressed && forecastResult.blocks?.length === 96);
 
-  // Load backend forecast from /api/forecast
+  // Load committed input evidence first, then load forecast output independently.
   useEffect(() => {
     if (!currentSite?.id) return;
 
     let isMounted = true;
     setIsLoadingForecast(true);
     setForecastError(null);
+    setForecastResult(null);
+    setInputEvidenceError(null);
+    setInputEvidence(null);
 
-    const loadForecast = async () => {
-      const params = new URLSearchParams({ siteId: currentSite.id });
-      if (currentSite.is_demo) params.set('operatingDate', new Date().toISOString().substring(0, 10));
+    const loadGridData = async () => {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (!currentSite.is_demo && (sessionError || !session?.access_token)) {
         throw new Error('AUTHENTICATED_SESSION_REQUIRED');
       }
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined;
-      const res = await fetch(`/api/forecast?${params.toString()}`, { headers });
-      return parseGridForecastResponse(res);
+      let resolvedOperatingDate = currentSite.is_demo ? new Date().toISOString().substring(0, 10) : null;
+
+      if (!currentSite.is_demo) {
+        try {
+          const evidenceResponse = await fetch(`/api/grid/input-evidence?site_id=${encodeURIComponent(currentSite.id)}`, { headers });
+          const evidence = await evidenceResponse.json().catch(() => ({}));
+          if (!evidenceResponse.ok) throw new Error(evidence.details || evidence.error || `HTTP ${evidenceResponse.status}`);
+          resolvedOperatingDate = evidence.operating_date;
+          if (isMounted) setInputEvidence({ requestSiteId: currentSite.id, data: evidence });
+        } catch (error) {
+          if (isMounted) setInputEvidenceError(error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      const params = new URLSearchParams({ siteId: currentSite.id });
+      if (resolvedOperatingDate) params.set('operatingDate', resolvedOperatingDate);
+      try {
+        const response = await fetch(`/api/forecast?${params.toString()}`, { headers });
+        const forecast = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(forecast.details || forecast.message || forecast.error || `HTTP ${response.status}`);
+        if (isMounted) setForecastResult({ requestSiteId: currentSite.id, data: forecast });
+      } catch (error) {
+        if (isMounted) setForecastError(error instanceof Error ? error.message : String(error));
+      }
     };
 
-    loadForecast()
-      .then(({ data, warning }) => {
-        if (isMounted) {
-          setForecastResult({ requestSiteId: currentSite.id, data });
-          setForecastError(warning);
-        }
-      })
+    loadGridData()
       .catch((err) => {
         if (isMounted) {
           setForecastError(err.message);
@@ -144,29 +178,30 @@ export default function GridIntelligencePage() {
   }, [forecastResult, currentSite]);
 
   // Quality gate evaluation
-  // Quality gate evaluation
   const qualityGate = useMemo(() => {
     const evaluated = evaluateQualityGate({
-      sourceTimestamp: forecastResult?.model_generation_time || forecastResult?.input_evidence?.latest_timestamp_utc || '2026-09-07T00:00:00Z',
+      sourceTimestamp: isDemo
+        ? (forecastResult?.model_generation_time || '2026-09-07T00:00:00Z')
+        : (inputEvidence?.operating_date ? `${inputEvidence.operating_date}T00:00:00+05:30` : '1970-01-01T00:00:00Z'),
       sourceType: forecastResult?.persisted ? 'PostgreSQL Persisted Model Forecast' : (isDemo ? 'DEMO / SYNTHETIC' : 'INTERNAL_VALIDATION'),
-      completenessPct: forecastResult?.input_evidence?.completeness_pct ?? (isDemo ? 95.0 : 0.0),
-      totalBlocksExpected: 96,
-      totalBlocksReceived: forecastResult?.input_evidence?.total_blocks_received ?? forecastBlocks.length,
-      validationStatus: forecastResult?.data_quality || (isDemo ? 'PASSED' : (hasValidForecast ? (forecastResult?.data_quality || 'UNKNOWN') : 'FAILED')),
-      freshnessStatus: forecastResult?.freshness || (isDemo ? 'RECENT' : 'UNKNOWN'),
+      completenessPct: isDemo ? 95.0 : (inputEvidence?.completeness_pct ?? 0.0),
+      totalBlocksExpected: isDemo ? 96 : (inputEvidence?.expected_blocks ?? 96),
+      totalBlocksReceived: isDemo ? 96 : (inputEvidence?.received_blocks ?? 0),
+      validationStatus: isDemo ? (forecastResult?.data_quality || 'PASSED') : (inputEvidence?.quality_status || 'NO_DATA'),
+      freshnessStatus: isDemo ? (forecastResult?.freshness || 'RECENT') : (inputEvidence?.freshness_status || 'UNKNOWN'),
       modelVersion: forecastResult?.model_version || (isDemo ? 'DEMO_BASELINE_v1.0' : 'INTERNAL_VALIDATION'),
       modelGenerationTime: forecastResult?.model_generation_time || new Date().toISOString(),
       tariffVersion: isDemo ? 'MSEDCL_HT1_TOD_DEMO' : (forecastResult?.tariff_version || 'CONFIGURATION_REQUIRED'),
     });
-    return forecastResult?.is_suppressed ? {
+    return forecastResult?.is_suppressed || (!isDemo && !hasValidForecast) ? {
       ...evaluated,
       gateStatus: 'BLOCKED_INVALID_CONFIGURATION' as const,
       isPublishable: false,
       isSuppressed: true,
-      suppressionReason: forecastResult.suppression_reason || 'Live forecast authority is unavailable.',
+      suppressionReason: forecastResult?.suppression_reason || forecastError || 'Live forecast authority is unavailable.',
       remediationAdvice: 'Configure and validate the live forecasting model and market price feed before publishing operational output.',
     } : evaluated;
-  }, [forecastResult, currentSite, forecastBlocks.length, isDemo, hasValidForecast]);
+  }, [forecastResult, inputEvidence, forecastError, isDemo, hasValidForecast]);
 
   // Derived highest-cost window and price range from returned 96 blocks
   const highCostWindow = useMemo(() => {
@@ -343,11 +378,18 @@ export default function GridIntelligencePage() {
           </div>
         )}
 
-        {forecastResult?.input_evidence && (
+        {inputEvidenceError && (
+          <div className="p-3 rounded bg-rose-950/40 border border-rose-800 text-xs text-rose-300">
+            Committed input evidence unavailable ({inputEvidenceError}).
+          </div>
+        )}
+
+        {inputEvidence && (
           <div data-testid="grid-input-evidence" className="text-xs text-slate-300">
-            Committed input: {forecastResult.input_evidence.operating_date || 'No operating date'} ·{' '}
-            {forecastResult.input_evidence.total_blocks_received}/{forecastResult.input_evidence.total_blocks_expected} blocks ·{' '}
-            {Number(forecastResult.input_evidence.completeness_pct).toFixed(1)}% complete
+            Committed input: {inputEvidence.operating_date || 'No operating date'} ·{' '}
+            {inputEvidence.received_blocks}/{inputEvidence.expected_blocks} blocks ·{' '}
+            {Number(inputEvidence.completeness_pct).toFixed(1)}% complete
+            {!inputEvidence.data_available && ' · Upload interval data to continue'}
           </div>
         )}
 
