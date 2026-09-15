@@ -143,29 +143,60 @@ export async function loadGridHistoricalInput(
   const pageSize = 1000;
   const maximumRows = 50000;
   const rows: any[] = [];
-  let cursorDate: string | null = null;
-  let cursorBlock: number | null = null;
-  // PostgREST caps responses at 1,000 rows. Keyset pagination keeps every query
-  // index-bounded; large OFFSET scans can exceed the statement timeout under RLS.
-  while (rows.length < maximumRows) {
-    let query = client
-      .from('interval_data_96')
-      .select('operating_date, block_index, load_kw, data_quality')
-      .eq('site_id', siteId)
-      .order('operating_date', { ascending: false })
-      .order('block_index', { ascending: false })
-      .limit(Math.min(pageSize, maximumRows - rows.length));
-    if (throughDate) query = query.lte('operating_date', throughDate);
-    if (cursorDate !== null && cursorBlock !== null) {
-      query = query.or(`operating_date.lt.${cursorDate},and(operating_date.eq.${cursorDate},block_index.lt.${cursorBlock})`);
+  if (throughDate) {
+    // The replay read remains bearer-authenticated. Eight-day windows stay below
+    // PostgREST's 1,000-row cap for canonical 96-block days and avoid a large
+    // RLS/keyset statement; an overflowing window fails closed.
+    const { data: oldest, error: oldestError } = await client.from('interval_data_96')
+      .select('operating_date').eq('site_id', siteId).lte('operating_date', throughDate)
+      .order('operating_date', { ascending: true }).limit(1).maybeSingle();
+    if (oldestError) throw new Error(`GRID_HISTORY_LOOKUP_FAILED: ${oldestError.message}`);
+    if (oldest?.operating_date) {
+      const oldestMs = Date.parse(`${oldest.operating_date}T00:00:00Z`);
+      const windows: Array<{ from: string; to: string }> = [];
+      let toMs = Date.parse(`${throughDate}T00:00:00Z`);
+      while (toMs >= oldestMs && windows.length < 1000) {
+        const fromMs = Math.max(oldestMs, toMs - 7 * 86400000);
+        windows.push({ from: new Date(fromMs).toISOString().slice(0, 10), to: new Date(toMs).toISOString().slice(0, 10) });
+        toMs = fromMs - 86400000;
+      }
+      if (toMs >= oldestMs) throw new Error('GRID_HISTORY_LOOKUP_FAILED: historical date range exceeds safe replay limit');
+      for (let index = 0; index < windows.length && rows.length < maximumRows; index += 4) {
+        const batch = await Promise.all(windows.slice(index, index + 4).map(async (window) => {
+          const { data, error } = await client.from('interval_data_96')
+            .select('operating_date, block_index, load_kw, data_quality').eq('site_id', siteId)
+            .gte('operating_date', window.from).lte('operating_date', window.to)
+            .order('operating_date', { ascending: false }).order('block_index', { ascending: false }).limit(pageSize);
+          if (error) throw new Error(`GRID_HISTORY_LOOKUP_FAILED: ${error.message}`);
+          if (data?.length === pageSize) throw new Error('GRID_HISTORY_LOOKUP_FAILED: replay date window exceeds safe row cap');
+          return data || [];
+        }));
+        rows.push(...batch.flat());
+      }
     }
-    const { data, error } = await query;
-    if (error) throw new Error(`GRID_HISTORY_LOOKUP_FAILED: ${error.message}`);
-    rows.push(...(data || []));
-    if (!data || data.length < pageSize) break;
-    const cursor = data.at(-1)!;
-    cursorDate = cursor.operating_date;
-    cursorBlock = Number(cursor.block_index);
+  } else {
+    let cursorDate: string | null = null;
+    let cursorBlock: number | null = null;
+    // Live history keeps its existing keyset pagination and safety behavior.
+    while (rows.length < maximumRows) {
+      let query = client
+        .from('interval_data_96')
+        .select('operating_date, block_index, load_kw, data_quality')
+        .eq('site_id', siteId)
+        .order('operating_date', { ascending: false })
+        .order('block_index', { ascending: false })
+        .limit(Math.min(pageSize, maximumRows - rows.length));
+      if (cursorDate !== null && cursorBlock !== null) {
+        query = query.or(`operating_date.lt.${cursorDate},and(operating_date.eq.${cursorDate},block_index.lt.${cursorBlock})`);
+      }
+      const { data, error } = await query;
+      if (error) throw new Error(`GRID_HISTORY_LOOKUP_FAILED: ${error.message}`);
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+      const cursor = data.at(-1)!;
+      cursorDate = cursor.operating_date;
+      cursorBlock = Number(cursor.block_index);
+    }
   }
 
   const byDate = new Map<string, any[]>();

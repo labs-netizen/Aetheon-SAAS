@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const targetDate = nextDate(inputDate);
   if (targetDate >= operatingToday()) return NextResponse.json({ error: 'HISTORICAL_TARGET_DATE_REQUIRED' }, { status: 400 });
 
-  const auth = await authorizeApiRequest(req, { siteId, productId: 'GRID_INTELLIGENCE' });
+  const auth = await authorizeApiRequest(req, { siteId, productId: 'GRID_INTELLIGENCE', requireBearer: true });
   if (!auth.authorized) return auth.response;
   if (!auth.authenticatedClient || auth.isDemo) return NextResponse.json({ error: 'LIVE_TENANT_BEARER_REQUIRED' }, { status: 403 });
   const client = auth.authenticatedClient;
@@ -42,13 +42,20 @@ export async function GET(req: NextRequest) {
     const loadStatus = input.is_complete && input.quality_status === 'PASSED' ? 'PASSED' : 'INCOMPLETE_OR_FAILED_QUALITY';
     if (loadStatus !== 'PASSED') return suppressed('INCOMPLETE_OR_FAILED_LOAD_DAY', { load_status: loadStatus, input_evidence: input });
 
-    // The bearer client proves ownership of D. Bulk history is then read by the
-    // server-only client, scoped to that checked site and capped at D.
-    const db = createAdminClient();
-    const history = await loadGridHistoricalInput(db, siteId, 426, inputDate);
+    // Reuse the same bearer-authenticated client that resolved the selected day.
+    // RLS remains authoritative across the date-scoped historical read.
+    let history: Awaited<ReturnType<typeof loadGridHistoricalInput>>;
+    try {
+      history = await loadGridHistoricalInput(client, siteId, 426, inputDate);
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      return NextResponse.json({ error: /permission denied|42501/i.test(details)
+        ? 'REPLAY_HISTORY_PERMISSION_DENIED' : 'REPLAY_HISTORY_LOOKUP_FAILED', details }, { status: 500 });
+    }
     if (history.latest_observed_date !== inputDate || !history.latest_observed_complete ||
         history.complete_days.at(-1)?.operating_date !== inputDate) {
-      return suppressed('SELECTED_LOAD_DAY_NOT_IN_VALID_HISTORY', { load_status: loadStatus, input_evidence: input });
+      return NextResponse.json({ error: 'REPLAY_HISTORY_CONSISTENCY_FAILURE',
+        details: 'The bearer-visible completed input day was not present in the date-scoped history.' }, { status: 500 });
     }
     const forecast = await fetchGridForecast({ isDemo: false, siteId, operatingDate: targetDate,
       contractDemandKw: Number(site.contract_demand_value), historicalDays: history.complete_days,
@@ -66,6 +73,7 @@ export async function GET(req: NextRequest) {
       input_evidence: input, forecast: historicalForecast,
     });
 
+    const db = createAdminClient();
     const { data: priceRows, error: priceError } = await db.from('market_price_blocks')
       .select('delivery_date,block_index,time_start,time_end,mcp_rs_per_mwh,source_type,source_reference,source_file_hash,provenance_status,verification_status')
       .eq('exchange', 'IEX').eq('market_product', 'DAM').eq('delivery_date', targetDate).order('block_index');

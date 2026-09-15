@@ -10,6 +10,7 @@ export interface GuardOptions {
   organisationId?: string;
   productId?: string;
   requiredRoles?: PlatformRole[];
+  requireBearer?: boolean;
 }
 
 export interface GuardSuccess {
@@ -138,6 +139,12 @@ export async function authorizeApiRequest(
         is_platform_admin: false,
       };
     }
+  }
+
+  // A route requiring the supplied bearer must never fall back to a different
+  // cookie session when that bearer cannot be validated.
+  if (options.requireBearer && (!user || !authenticatedClient)) {
+    return { authorized: false, response: NextResponse.json({ error: 'INVALID_BEARER_TOKEN' }, { status: 401 }) };
   }
 
   if (!user || !authenticatedClient) {

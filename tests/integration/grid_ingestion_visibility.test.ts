@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { GET as forecastGet } from '@/app/api/forecast/route';
 import { GET as inputEvidenceGet } from '@/app/api/grid/input-evidence/route';
+import { GET as replayGet } from '@/app/api/grid/replay/route';
 import { loadGridHistoricalInput, resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 import { checkServerEntitlement } from '@/lib/auth/entitlements';
 import { resolveSiteForAuthorization } from '@/lib/auth/api-guard';
@@ -65,6 +66,7 @@ describe('Grid visibility of committed interval data', () => {
   let completeSiteId: string;
   let zeroSiteId: string;
   let incompleteSiteId: string;
+  let unentitledSiteId: string;
   let foreignSiteId: string;
   let historySiteId: string;
   let historyLatestDate: string;
@@ -87,6 +89,7 @@ describe('Grid visibility of committed interval data', () => {
     completeSiteId = await createSite(orgId, 'Complete history');
     zeroSiteId = await createSite(orgId, 'Zero history');
     incompleteSiteId = await createSite(orgId, 'Incomplete history');
+    unentitledSiteId = await createSite(orgId, 'No Grid entitlement');
     foreignSiteId = await createSite(foreignOrgId, 'Foreign history');
     historySiteId = await createSite(orgId, '426-day history');
 
@@ -276,16 +279,43 @@ describe('Grid visibility of committed interval data', () => {
     expect(input.historicalDays.every((day: any) => day.load_kw.length === 96)).toBe(true);
   });
 
-  it('reads 426 replay history days through the guarded server-side bulk path and never includes later dates', async () => {
-    const history = await loadGridHistoricalInput(db, historySiteId, 426, historyLatestDate);
-    expect(history.complete_days).toHaveLength(426);
-    expect(history.complete_days.at(-1)?.operating_date).toBe(historyLatestDate);
-    expect(history.complete_days.every((day) => day.load_kw.length === 96 && day.operating_date <= historyLatestDate)).toBe(true);
-    const priorDate = history.complete_days.at(-2)!.operating_date;
-    const truncated = await loadGridHistoricalInput(db, historySiteId, 426, priorDate);
-    expect(truncated.complete_days).toHaveLength(425);
-    expect(truncated.complete_days.at(-1)?.operating_date).toBe(priorDate);
+  it('loads completed replay history with the same bearer client and excludes later days', async () => {
+    const bearerClient = createClient(url, anonKey, { accessToken: async () => token });
+    const history = await loadGridHistoricalInput(bearerClient, completeSiteId, 426, '2026-01-02');
+    expect(history.complete_days.map((day) => day.operating_date)).toEqual(['2026-01-01', '2026-01-02']);
+    expect(history.complete_days.every((day) => day.load_kw.length === 96)).toBe(true);
+  });
+
+  it('replay route reads its own 96-block selected day and passes bearer-visible history to analytics', async () => {
+    analytics.grid.mockClear();
+    const request = new NextRequest(`http://localhost:3000/api/grid/replay?site_id=${historySiteId}&operating_date=${historyLatestDate}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const response = await replayGet(request);
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ site_id: historySiteId, mode: 'HISTORICAL_REPLAY',
+      replay_input_date: historyLatestDate, load_status: 'PASSED', replay_ready: false,
+      input_evidence: { total_blocks_received: 96, quality_status: 'PASSED' } });
+    expect(analytics.grid).toHaveBeenCalledWith(expect.objectContaining({ historicalReplay: true, siteId: historySiteId,
+      historicalDays: expect.arrayContaining([expect.objectContaining({ operating_date: historyLatestDate, load_kw: expect.any(Array) })]) }));
   }, 60000);
+
+  it('replay denies an invalid bearer, a foreign site and an own site without Grid entitlement', async () => {
+    const replayRequest = (id: string, bearer: string) => new NextRequest(
+      `http://localhost:3000/api/grid/replay?site_id=${id}&operating_date=2026-01-01`,
+      { headers: { Authorization: `Bearer ${bearer}` } }
+    );
+    const invalid = await replayGet(replayRequest(completeSiteId, 'invalid-token'));
+    expect(invalid.status).toBe(401);
+    expect((await invalid.json()).error).toBe('INVALID_BEARER_TOKEN');
+    const foreign = await replayGet(replayRequest(foreignSiteId, token));
+    expect(foreign.status).toBe(403);
+    expect((await foreign.json()).error).toBe('FORBIDDEN_ORGANISATION');
+    const unsubscribed = await replayGet(replayRequest(unentitledSiteId, token));
+    expect(unsubscribed.status).toBe(403);
+    expect((await unsubscribed.json()).error).toBe('UNSUBSCRIBED');
+  });
 
   it('gives DSM only the explicitly requested day from multi-day site history', async () => {
     analytics.dsm.mockClear();

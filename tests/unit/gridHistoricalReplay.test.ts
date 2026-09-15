@@ -40,6 +40,7 @@ const request = (date = inputDate, id = siteId, bearer = true) => new NextReques
 describe('historical Grid replay safety', () => {
   let priceRows: ReplayPriceRow[];
   let actualRows: Array<{ block_index: number; load_kw: number; data_quality: string }>;
+  let bearerClient: unknown;
   beforeEach(() => {
     vi.clearAllMocks();
     priceRows = prices();
@@ -48,6 +49,7 @@ describe('historical Grid replay safety', () => {
       select: () => ({ eq: () => ({ eq: () => ({ order: async () => ({ data: table === 'interval_data_96' ? actualRows : null, error: null }) }),
         maybeSingle: async () => ({ data: { id: siteId, organisation_id: orgId, is_demo: false, contract_demand_value: 1000 }, error: null }) }) }),
     }) };
+    bearerClient = client;
     mocks.authorize.mockResolvedValue({ authorized: true, organisationId: orgId, isDemo: false, authenticatedClient: client });
     mocks.input.mockResolvedValue({ operating_date: inputDate, total_blocks_received: 96, total_blocks_expected: 96,
       quality_status: 'PASSED', is_complete: true, freshness: 'STALE' });
@@ -73,9 +75,9 @@ describe('historical Grid replay safety', () => {
     expect(body.forecast.recommendations_suppressed).toBe(true);
     expect(body.price_evidence.blocks).toHaveLength(96);
     expect(body.outputs.indicative_iex_energy_component_inr).toBeGreaterThan(0);
-    expect(mocks.history).toHaveBeenCalledWith(expect.anything(), siteId, 426, inputDate);
+    expect(mocks.history).toHaveBeenCalledWith(bearerClient, siteId, 426, inputDate);
     expect(mocks.analytics).toHaveBeenCalledWith(expect.objectContaining({ historicalReplay: true, operatingDate: targetDate }));
-    expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), { siteId, productId: 'GRID_INTELLIGENCE' });
+    expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), { siteId, productId: 'GRID_INTELLIGENCE', requireBearer: true });
   });
 
   it('computes target-day actual errors only when 96 committed PASSED blocks exist', async () => {
@@ -99,6 +101,23 @@ describe('historical Grid replay safety', () => {
     const response = await replayGet(request());
     expect(response.status).toBe(502);
     expect((await response.json()).error).toBe('INVALID_REPLAY_ANALYTICS_CONTRACT');
+  });
+
+  it('reports a bearer history permission failure explicitly and never substitutes the server client', async () => {
+    mocks.history.mockRejectedValueOnce(new Error('GRID_HISTORY_LOOKUP_FAILED: permission denied for table interval_data_96'));
+    const response = await replayGet(request());
+    expect(response.status).toBe(500);
+    expect((await response.json()).error).toBe('REPLAY_HISTORY_PERMISSION_DENIED');
+    expect(mocks.history).toHaveBeenCalledWith(bearerClient, siteId, 426, inputDate);
+    expect(mocks.admin).not.toHaveBeenCalled();
+    expect(mocks.analytics).not.toHaveBeenCalled();
+  });
+
+  it('reports bearer-visible input missing from history as a consistency failure, not an absent day', async () => {
+    mocks.history.mockResolvedValueOnce({ latest_observed_date: null, latest_observed_complete: false, complete_days: [] });
+    const response = await replayGet(request());
+    expect(response.status).toBe(500);
+    expect((await response.json()).error).toBe('REPLAY_HISTORY_CONSISTENCY_FAILURE');
   });
 
   it('does not treat wall-clock stale evidence as replay failure, but exact price date and provenance are mandatory', async () => {
