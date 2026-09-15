@@ -24,12 +24,15 @@ import { createClient } from '@/lib/supabase/client';
 export default function AdminPage() {
   const { activeRole } = useSite();
   const [activeTab, setActiveTab] = useState<'checklist' | 'models' | 'audit' | 'market'>('checklist');
+  const [serverInternalRole, setServerInternalRole] = useState<'PLATFORM_ADMIN' | 'AETHEON_ANALYST' | null>(null);
 
   const isInternalAdmin =
     activeRole === 'AETHEON_ANALYST' ||
-    activeRole === 'AETHEON_REGULATORY_REVIEWER';
+    activeRole === 'AETHEON_REGULATORY_REVIEWER' ||
+    serverInternalRole !== null;
 
   const canViewAuditAndHealth = activeRole === 'AETHEON_ANALYST';
+  const canImportMarketPrices = activeRole === 'AETHEON_ANALYST' || serverInternalRole !== null;
 
   const [adminData, setAdminData] = useState<{
     auditEvents: any[];
@@ -66,6 +69,14 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
+    createClient().auth.getSession().then(async ({ data: { session } }) => {
+      if (!session?.access_token) return;
+      const response = await fetch('/api/admin/access', { headers: { Authorization: `Bearer ${session.access_token}` } });
+      if (response.ok) setServerInternalRole((await response.json()).role);
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (!canViewAuditAndHealth) return;
     setIsLoading(true);
     fetch('/api/admin/audit')
@@ -78,13 +89,13 @@ export default function AdminPage() {
   }, [canViewAuditAndHealth]);
 
   useEffect(() => {
-    if (activeTab !== 'market' || !canViewAuditAndHealth) return;
+    if (activeTab !== 'market' || !canImportMarketPrices) return;
     createClient().auth.getSession().then(async ({ data: { session } }) => {
       if (!session?.access_token) return;
       const response = await fetch('/api/admin/market-prices', { headers: { Authorization: `Bearer ${session.access_token}` } });
       if (response.ok) setMarketResult(await response.json());
     }).catch(() => undefined);
-  }, [activeTab, canViewAuditAndHealth]);
+  }, [activeTab, canImportMarketPrices]);
 
   const launchChecklist = [
     { title: 'Supported State Jurisdiction & DISCOMs', status: 'VERIFIED_LOCAL', desc: 'MSEDCL, UGVCL, PVVNL profiles active with verified voltage brackets.' },
@@ -159,7 +170,7 @@ export default function AdminPage() {
           >
             Audit Log
           </Button>
-          {canViewAuditAndHealth && <Button
+          {canImportMarketPrices && <Button
             variant={activeTab === 'market' ? 'primary' : 'outline'}
             size="sm"
             onClick={() => setActiveTab('market')}
@@ -329,7 +340,7 @@ export default function AdminPage() {
         </Card>
       )}
 
-      {activeTab === 'market' && canViewAuditAndHealth && (
+      {activeTab === 'market' && canImportMarketPrices && (
         <Card variant="industrial">
           <CardHeader>
             <CardTitle className="text-slate-100 flex items-center gap-2"><FileCheck className="w-4 h-4 text-teal-400" />Official IEX DAM Price Import</CardTitle>

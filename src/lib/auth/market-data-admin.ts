@@ -9,13 +9,20 @@ export async function authorizeMarketDataAdmin(req: NextRequest) {
   const adminClient = createAdminClient();
   const { data: { user }, error } = await adminClient.auth.getUser(authorization.slice(7));
   if (error || !user) return { authorized: false as const, response: NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 }) };
-  const [{ data: profile }, { data: membership }] = await Promise.all([
+  const [{ data: profile }, { data: membership }, { data: temporaryGrant }] = await Promise.all([
     adminClient.from('user_profiles').select('is_platform_admin').eq('id', user.id).maybeSingle(),
-    adminClient.from('memberships').select('role,is_active,expires_at').eq('user_id', user.id).eq('is_active', true).eq('role', 'AETHEON_ANALYST').maybeSingle(),
+    adminClient.from('memberships').select('role,is_active,expires_at').eq('user_id', user.id).eq('is_active', true).eq('role', 'AETHEON_ANALYST').limit(1).maybeSingle(),
+    adminClient.from('internal_access_grants').select('role,is_active,valid_from,expires_at').eq('user_id', user.id)
+      .eq('role', 'AETHEON_ANALYST').eq('is_active', true).limit(1).maybeSingle(),
   ]);
-  const analystValid = membership?.role === 'AETHEON_ANALYST' && membership.expires_at && new Date(membership.expires_at) > new Date();
+  const now = Date.now();
+  const membershipAnalystValid = membership?.role === 'AETHEON_ANALYST' && membership.expires_at && Date.parse(membership.expires_at) > now;
+  const temporaryAnalystValid = temporaryGrant?.role === 'AETHEON_ANALYST' && temporaryGrant.is_active &&
+    Date.parse(temporaryGrant.valid_from) <= now && Date.parse(temporaryGrant.expires_at) > now;
+  const analystValid = Boolean(membershipAnalystValid || temporaryAnalystValid);
   if (!profile?.is_platform_admin && !analystValid) {
     return { authorized: false as const, response: NextResponse.json({ error: 'PLATFORM_MARKET_DATA_ADMIN_REQUIRED' }, { status: 403 }) };
   }
-  return { authorized: true as const, actorId: user.id, adminClient };
+  return { authorized: true as const, actorId: user.id, adminClient,
+    accessRole: profile?.is_platform_admin ? 'PLATFORM_ADMIN' as const : 'AETHEON_ANALYST' as const };
 }
