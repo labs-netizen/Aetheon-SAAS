@@ -2,7 +2,7 @@
 
 - **Status**: `INTERNAL_VALIDATION` (Pricing: ₹19,900/site/month).
 - **Authoritative UI**: `src/app/grid-intelligence/page.tsx`
-- **Authoritative API**: `src/app/api/forecast/route.ts`
+- **Authoritative API**: `src/app/api/forecast/route.ts` (live); `src/app/api/grid/replay/route.ts` (explicit historical backtest)
 - **Auth/Entitlement**: Requires valid session, `has_site_access(siteId)`, and `GRID_INTELLIGENCE` product entitlement.
 - **Reads**: `sites`, `interval_data_96` (96-block meter load), `discom_tariffs`.
 - **Writes**: `grid_forecast_runs`, `grid_forecast_blocks` (canonical FK: `run_id`). Client writes blocked by RLS.
@@ -18,6 +18,7 @@
 - **Alerts**: Manual acknowledgment verified local. Automated `PEAK_DEMAND_WARNING` dispatch is `NOT_IMPLEMENTED` in V1.
 - **Demo Behavior**: Loads deterministic 96-block profile explicitly flagged with `DEMO DATA / UNVERIFIED`.
 - **Live Behavior**: Strictly derived from persisted 15-minute AMR meter telemetry in `interval_data_96` and server-authoritative forecast runs.
+- **Historical Replay**: Explicit `HISTORICAL_REPLAY` selection is separate from live publication. A bearer-authenticated, site-entitled user selects a completed 96-block date D; the server caps committed model history at D and requires verified, official-source IEX DAM blocks for exactly D+1. Only wall-clock freshness is waived for backtesting. Outputs are marked `HISTORICAL BACKTEST — NOT LIVE OPERATIONAL ADVICE`, are not persisted as live runs, and cannot become live recommendations. Actual comparison uses committed D+1 load only when that day has 96 PASSED blocks.
 - **Tests**: `services/analytics/tests/test_analytics.py` (`test_grid_forecast_96_blocks`), `tests/integration/adversarial_api.test.ts` (Test 1, 4, 5, 20), `tests/e2e/demo_smoke.spec.ts` (Test 3, 4), `tests/e2e/real_auth_workflows.spec.ts` (Test 3), `tests/e2e/persistence_journey.spec.ts`.
 - **External Requirements**: Live IEX DAM price clearing feed connector and state-specific weather forecasting calibration.
 - **Known Limitations**: Day-ahead forecast uses baseline model until 30 days of AMR load history are accumulated.

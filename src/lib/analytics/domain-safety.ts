@@ -38,7 +38,7 @@ function validGridProvenance(value: any): boolean {
     value.model_family === 'DAY_AHEAD_DEMAND' &&
     value.validation_method === 'CHRONOLOGICAL_HOLDOUT' && value.price_source === null;
 }
-export function validGridAnalyticsResponse(r: any, siteId: string, date: string): boolean {
+export function validGridAnalyticsResponse(r: any, siteId: string, date: string, mode: 'LIVE' | 'HISTORICAL_REPLAY' = 'LIVE'): boolean {
   const hhmm = (n: number) => n === 1440 ? '24:00' : `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
   if (r?.site_id !== siteId || r.operating_date !== date || r.model_version !== 'GRID_HISTORICAL_LOAD_V1.0' ||
       !validDate(r.operating_date) || typeof r.model_generation_time !== 'string' || !Number.isFinite(Date.parse(r.model_generation_time)) ||
@@ -68,7 +68,8 @@ export function validGridAnalyticsResponse(r: any, siteId: string, date: string)
 
   return r.forecast_status === 'AVAILABLE' && r.is_suppressed === false && r.suppression_reason === null &&
     r.forecast_target_date === date && r.model_status === 'VALIDATED' && r.validation_status === 'VALIDATED' &&
-    r.data_quality === 'PASSED' && r.freshness === 'RECENT' && finiteNumber(r.peak_demand_kw) &&
+    r.data_quality === 'PASSED' && (mode === 'LIVE' ? r.freshness === 'RECENT' :
+      r.latest_input_date !== null && r.freshness === (r.freshness_days > 1 ? 'STALE' : 'RECENT')) && finiteNumber(r.peak_demand_kw) &&
     Number.isInteger(r.peak_demand_block) && r.peak_demand_block >= 1 && r.peak_demand_block <= 96 &&
     validGridMetrics(r.validation_metrics) && typeof r.selected_model === 'string' && blocks96(r.blocks) &&
     r.blocks.every((b: any,i: number) =>

@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { GET as forecastGet } from '@/app/api/forecast/route';
 import { GET as inputEvidenceGet } from '@/app/api/grid/input-evidence/route';
-import { resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
+import { loadGridHistoricalInput, resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 import { checkServerEntitlement } from '@/lib/auth/entitlements';
 import { resolveSiteForAuthorization } from '@/lib/auth/api-guard';
 import { POST as dsmPost } from '@/app/api/dsm/route';
@@ -275,6 +275,17 @@ describe('Grid visibility of committed interval data', () => {
     expect(input.latestInputComplete).toBe(true);
     expect(input.historicalDays.every((day: any) => day.load_kw.length === 96)).toBe(true);
   });
+
+  it('reads 426 replay history days through the guarded server-side bulk path and never includes later dates', async () => {
+    const history = await loadGridHistoricalInput(db, historySiteId, 426, historyLatestDate);
+    expect(history.complete_days).toHaveLength(426);
+    expect(history.complete_days.at(-1)?.operating_date).toBe(historyLatestDate);
+    expect(history.complete_days.every((day) => day.load_kw.length === 96 && day.operating_date <= historyLatestDate)).toBe(true);
+    const priorDate = history.complete_days.at(-2)!.operating_date;
+    const truncated = await loadGridHistoricalInput(db, historySiteId, 426, priorDate);
+    expect(truncated.complete_days).toHaveLength(425);
+    expect(truncated.complete_days.at(-1)?.operating_date).toBe(priorDate);
+  }, 60000);
 
   it('gives DSM only the explicitly requested day from multi-day site history', async () => {
     analytics.dsm.mockClear();

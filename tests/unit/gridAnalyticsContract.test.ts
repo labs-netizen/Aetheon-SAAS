@@ -35,6 +35,13 @@ describe('authoritative Grid analytics response contract', () => {
     expect(validGridAnalyticsResponse({ ...eligible, blocks: eligible.blocks.slice(0, 95) }, eligible.site_id, eligible.operating_date)).toBe(false);
   });
 
+  it('accepts stale but validated 96-block output only in replay context', () => {
+    const replay = { ...eligible, freshness: 'STALE', freshness_days: 138 };
+    expect(validGridAnalyticsResponse(replay, replay.site_id, replay.operating_date)).toBe(false);
+    expect(validGridAnalyticsResponse(replay, replay.site_id, replay.operating_date, 'HISTORICAL_REPLAY')).toBe(true);
+    expect(validGridAnalyticsResponse({ ...replay, blocks: replay.blocks.slice(0, 95) }, replay.site_id, replay.operating_date, 'HISTORICAL_REPLAY')).toBe(false);
+  });
+
   it.each(['calibrating', 'failed_validation'])('accepts the real FastAPI %s suppression', (key) => {
     const response = responses[key];
     expect(validGridAnalyticsResponse(response, response.site_id, response.operating_date)).toBe(true);

@@ -29,6 +29,7 @@ import { formatPower, formatEnergy, formatPercentage } from '@/lib/units/energy'
 import { formatPaiseToInr } from '@/lib/units/currency';
 import { PRODUCTS } from '@/types';
 import { createClient } from '@/lib/supabase/client';
+import { HistoricalReplayPanel } from './HistoricalReplayPanel';
 
 interface GridInputEvidenceResponse {
   site_id: string;
@@ -63,6 +64,7 @@ const nextOperatingDate = (value: string) =>
 export default function GridIntelligencePage() {
   const { currentSite, isEntitled } = useSite();
   const [activeTab, setActiveTab] = useState<'chart' | 'table' | 'explorer'>('chart');
+  const [mode, setMode] = useState<'LIVE' | 'HISTORICAL_REPLAY'>('LIVE');
   const [solarEnabled, setSolarEnabled] = useState(true);
   const [bessEnabled, setBessEnabled] = useState(true);
   const [oaEnabled, setOaEnabled] = useState(false);
@@ -89,7 +91,7 @@ export default function GridIntelligencePage() {
 
   // Load committed input evidence first, then load forecast output independently.
   useEffect(() => {
-    if (!currentSite?.id) return;
+    if (!currentSite?.id || mode !== 'LIVE') return;
 
     let isMounted = true;
     setIsLoadingForecast(true);
@@ -160,7 +162,7 @@ export default function GridIntelligencePage() {
     return () => {
       isMounted = false;
     };
-  }, [currentSite?.id, currentSite?.is_demo, supabase]);
+  }, [currentSite?.id, currentSite?.is_demo, supabase, mode]);
 
   // Transform backend blocks to Block96Point
   const forecastBlocks: Block96Point[] = useMemo(() => {
@@ -387,6 +389,17 @@ export default function GridIntelligencePage() {
       isEntitled={isEntitled('GRID_INTELLIGENCE')}
     >
       <div className="space-y-6">
+        <div className="flex items-center gap-3 text-xs" data-testid="grid-mode-selector">
+          <span className="font-semibold text-slate-300">Mode</span>
+          <button type="button" onClick={() => setMode('LIVE')} aria-pressed={mode === 'LIVE'}
+            className={mode === 'LIVE' ? 'rounded border border-teal-500 px-3 py-1 text-teal-200' : 'rounded border border-slate-700 px-3 py-1 text-slate-300'}>LIVE</button>
+          <button type="button" onClick={() => setMode('HISTORICAL_REPLAY')} aria-pressed={mode === 'HISTORICAL_REPLAY'}
+            disabled={isDemo} className={mode === 'HISTORICAL_REPLAY' ? 'rounded border border-amber-500 px-3 py-1 text-amber-200' : 'rounded border border-slate-700 px-3 py-1 text-slate-300'}>HISTORICAL REPLAY</button>
+        </div>
+        {mode === 'HISTORICAL_REPLAY' && currentSite?.id ? (
+          <HistoricalReplayPanel siteId={currentSite.id} suggestedInputDate={inputEvidence?.operating_date || null} />
+        ) : (
+          <>
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -753,6 +766,8 @@ export default function GridIntelligencePage() {
               modelVersion={qualityGate.qualityMetadata.modelVersion}
               tariffVersion={qualityGate.qualityMetadata.tariffVersion}
             />
+          </>
+        )}
           </>
         )}
       </div>

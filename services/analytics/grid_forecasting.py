@@ -223,7 +223,7 @@ def solve_historical_grid_forecast(req: GridForecastRequest) -> GridForecastResp
     if freshness_days < 0:
         return _suppressed(req, "FAILED_VALIDATION", "LATEST_INPUT_DATE_IS_IN_THE_FUTURE", latest, target_date,
                            freshness_days, "FAILED_VALIDATION", training_dates, baseline_metrics, selected_metrics, selected_model)
-    if freshness_days > MAX_FRESHNESS_DAYS:
+    if freshness_days > MAX_FRESHNESS_DAYS and not req.historical_replay:
         return _suppressed(req, "STALE_INPUT", "STALE_INPUT", latest, target_date, freshness_days, "VALIDATED",
                            training_dates, baseline_metrics, selected_metrics, selected_model)
 
@@ -279,6 +279,6 @@ def solve_historical_grid_forecast(req: GridForecastRequest) -> GridForecastResp
         blocks=blocks,
         confidence_status="VALIDATED_BACKTEST",
         data_quality="PASSED",
-        freshness="RECENT",
+        freshness="STALE" if freshness_days > MAX_FRESHNESS_DAYS else "RECENT",
         price_status="AUTHORITATIVE_PRICE_FEED_REQUIRED",
     )

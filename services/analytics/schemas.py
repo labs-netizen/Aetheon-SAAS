@@ -33,6 +33,7 @@ class GridForecastRequest(DatedNumericalRequest):
     historical_days: List["GridHistoricalDay"] = Field(default_factory=list)
     evaluation_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     latest_input_complete: bool = True
+    historical_replay: bool = False
     historical_load_kw: Optional[List[float]] = None
     seed: Optional[int] = 42
 

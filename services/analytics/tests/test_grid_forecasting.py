@@ -81,6 +81,22 @@ def test_stale_april_history_is_validated_but_operationally_suppressed():
     assert response.is_suppressed and not response.forecast_available and response.blocks == []
 
 
+def test_explicit_historical_replay_uses_april_30_only_and_emits_may_1_without_live_freshness():
+    days = history(426, date(2026, 4, 30) - timedelta(days=425))
+    live = request(days, evaluation_date=date(2026, 9, 15))
+    assert solve_grid_forecast(live).model_status == "STALE_INPUT"
+    replay = live.model_copy(update={"historical_replay": True})
+    response = solve_grid_forecast(replay)
+    assert days[-1].operating_date == "2026-04-30"
+    assert response.latest_input_date == "2026-04-30"
+    assert response.forecast_target_date == "2026-05-01"
+    assert response.training_end_date <= "2026-04-30"
+    assert response.validation_status == "VALIDATED"
+    assert response.forecast_available and len(response.blocks) == 96
+    assert response.freshness == "STALE"
+    assert all(block.forecast_price_inr_per_mwh is None for block in response.blocks)
+
+
 def test_fastapi_generates_all_shared_cross_language_contract_outcomes():
     responses = generate_contract_responses()
     fixture_path = Path(__file__).parents[3] / "tests" / "fixtures" / "grid_forecast_contract_responses.json"

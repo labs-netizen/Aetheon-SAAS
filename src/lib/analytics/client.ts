@@ -22,6 +22,7 @@ export interface GridForecastParams {
   historicalDays?: Array<{ operating_date: string; load_kw: number[] }>;
   evaluationDate?: string;
   latestInputComplete?: boolean;
+  historicalReplay?: boolean;
   seed?: number;
 }
 
@@ -97,6 +98,7 @@ export async function fetchGridForecast(params: GridForecastParams) {
     historical_days: params.historicalDays || [],
     evaluation_date: params.evaluationDate,
     latest_input_complete: params.latestInputComplete !== false,
+    historical_replay: params.historicalReplay === true,
     seed: params.seed,
   });
 }

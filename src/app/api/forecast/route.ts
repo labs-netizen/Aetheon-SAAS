@@ -32,19 +32,24 @@ export async function GET(req: NextRequest) {
     // 1. Fetch site authoritative configuration
     const { data: site, error: siteErr } = await readClient
       .from('sites')
-      .select('id, name, state, discom, voltage_category, is_demo, activation_status, contract_demand_value')
+      .select('id, organisation_id, name, state, discom, voltage_category, is_demo, activation_status, contract_demand_value')
       .eq('id', siteId)
       .single();
 
     if (siteErr || !site) {
       return NextResponse.json({ error: 'SITE_NOT_FOUND', message: 'Site not found.' }, { status: 404 });
     }
+    if (site.organisation_id !== authResult.organisationId) {
+      return NextResponse.json({ error: 'SITE_ORGANISATION_MISMATCH' }, { status: 403 });
+    }
 
     let operatingDate = requestedOperatingDate || operatingToday();
 
     // 2. Live demand forecasting uses only committed, tenant-authorized history.
     if (site.is_demo !== true) {
-      const historicalInput = await loadGridHistoricalInput(readClient, siteId);
+      // Authenticated ownership is checked above; the server-only bulk read
+      // avoids RLS statement timeouts across multi-day committed history.
+      const historicalInput = await loadGridHistoricalInput(createAdminClient(), siteId);
       const latestCompleteDate = historicalInput.complete_days.at(-1)?.operating_date;
       if (!requestedOperatingDate && latestCompleteDate) operatingDate = nextOperatingDate(latestCompleteDate);
 

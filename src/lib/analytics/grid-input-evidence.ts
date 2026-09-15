@@ -137,7 +137,8 @@ export async function resolveGridInputEvidence(
 export async function loadGridHistoricalInput(
   client: SupabaseClient,
   siteId: string,
-  maximumCompleteDays = 426
+  maximumCompleteDays = 426,
+  throughDate?: string
 ): Promise<GridHistoricalInput> {
   const pageSize = 1000;
   const maximumRows = 50000;
@@ -154,6 +155,7 @@ export async function loadGridHistoricalInput(
       .order('operating_date', { ascending: false })
       .order('block_index', { ascending: false })
       .limit(Math.min(pageSize, maximumRows - rows.length));
+    if (throughDate) query = query.lte('operating_date', throughDate);
     if (cursorDate !== null && cursorBlock !== null) {
       query = query.or(`operating_date.lt.${cursorDate},and(operating_date.eq.${cursorDate},block_index.lt.${cursorBlock})`);
     }
