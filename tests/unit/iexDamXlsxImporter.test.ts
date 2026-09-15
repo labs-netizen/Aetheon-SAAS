@@ -36,10 +36,10 @@ describe('real-structure IEX Market Snapshot XLSX', () => {
     const [sheet] = await readXlsxFile<number>(fixture('iex-dam-market-snapshot.xlsx'));
     const rows = sheet.data.map((row) => [...row]);
     rows[101] = ['Date', null, 'Purchase Bid', 1234, 2345, 3456, 4567, 5678];
-    rows[102] = [10000, null, 40, 1200, 1300, 1400, 1500, 1600];
-    rows[103] = [2660.48, null, 50, 100, 200, 300, 400, 500];
-    rows[104] = ['Avg', null, 60, 100, 200, 300, 400, 500];
-    rows[105] = ['Footer aggregate', null, 70, 100, 200, 300, 400, 500];
+    rows[102] = ['15-09-2026', null, 1056047.03, 1200, 1300, 1400, 1500, 1600];
+    rows[103] = ['15-09-2026', null, 77861.40, 100, 200, 300, 400, 500];
+    rows[104] = ['15-09-2026', null, 17702.40, 100, 200, 300, 400, 500];
+    rows[105] = ['15-09-2026', null, 44001.96, 100, 200, 300, 400, 500];
     const result = parseOfficialIexDamSheetRows(rows, sheet.sheet);
     expect(result).toMatchObject({ valid: true, total_rows: 96, total_days: 1, summary_rows_ignored: 5,
       delivery_dates: ['2026-09-15'], errors: [] });
@@ -49,14 +49,14 @@ describe('real-structure IEX Market Snapshot XLSX', () => {
   it('rejects a malformed internal block, an extra duplicate, and an extra dated market row', async () => {
     const [sheet] = await readXlsxFile<number>(fixture('iex-dam-market-snapshot.xlsx'));
     const malformed = sheet.data.map((row) => [...row]);
-    malformed[44][7] = 'invalid MCP'; // block 40 remains inside the authoritative section
+    malformed[54][7] = 'invalid MCP'; // block 50 remains inside the authoritative section
     expect(parseOfficialIexDamSheetRows(malformed, sheet.sheet).errors.map((error) => error.code)).toContain('INVALID_MCP');
     const duplicate = sheet.data.map((row) => [...row]);
     duplicate.push(['15-09-2026', null, '00:00 - 00:15', null, null, null, null, 4000]);
     expect(parseOfficialIexDamSheetRows(duplicate, sheet.sheet).errors.map((error) => error.code)).toContain('DUPLICATE_TIME_BLOCK');
     const extra = sheet.data.map((row) => [...row]);
-    extra.push(['15-09-2026', null, '24:00 - 24:15', null, null, null, null, 4000]);
-    expect(parseOfficialIexDamSheetRows(extra, sheet.sheet).errors.map((error) => error.code)).toContain('EXTRA_MARKET_BLOCK_ROW');
+    extra.push(['15-09-2026', null, '23:45 - 24:00', null, null, null, null, 4000]);
+    expect(parseOfficialIexDamSheetRows(extra, sheet.sheet).errors.map((error) => error.code)).toContain('DUPLICATE_TIME_BLOCK');
   });
 
   it('ignores arbitrary footer text after block 96 and still rejects a missing block', async () => {

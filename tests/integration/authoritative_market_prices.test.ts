@@ -4,6 +4,9 @@ import { NextRequest } from 'next/server';
 import { POST as importPrices } from '@/app/api/admin/market-prices/route';
 import { GET as priceEvidence } from '@/app/api/grid/price-evidence/route';
 import { getBlockTimes } from '@/lib/dates/blocks96';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -24,6 +27,7 @@ describe('authoritative IEX DAM market price boundary', () => {
   let foreignOrgId: string;
   let siteId: string;
   let foreignSiteId: string;
+  let sampleXlsxImported = false;
   const deliveryDate = new Date(Date.UTC(2090, 0, 1 + (Number.parseInt(stamp.replace(/-/g, '').slice(0, 8), 16) % 365))).toISOString().slice(0, 10);
 
   beforeAll(async () => {
@@ -50,6 +54,10 @@ describe('authoritative IEX DAM market price boundary', () => {
     if (db) {
       await db.from('market_price_blocks').delete().eq('delivery_date', deliveryDate).eq('exchange', 'IEX').eq('market_product', 'DAM');
       await db.from('market_price_imports').delete().eq('delivery_date_start', deliveryDate).eq('delivery_date_end', deliveryDate);
+      if (sampleXlsxImported) {
+        await db.from('market_price_blocks').delete().eq('delivery_date', '2026-09-15').eq('exchange', 'IEX').eq('market_product', 'DAM');
+        await db.from('market_price_imports').delete().eq('delivery_date_start', '2026-09-15').eq('delivery_date_end', '2026-09-15');
+      }
     }
     if (db && orgId) await db.from('organisations').delete().eq('id', orgId);
     if (db && foreignOrgId) await db.from('organisations').delete().eq('id', foreignOrgId);
@@ -63,6 +71,7 @@ describe('authoritative IEX DAM market price boundary', () => {
       ['file', { name: 'iex-dam.csv', arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }],
       ['source_reference', 'https://www.iexindia.com/market-data/day-ahead-market'],
       ['official_source_confirmed', 'true'],
+      ['preview_checksum_sha256', createHash('sha256').update(bytes).digest('hex')],
     ]);
     return { headers: new Headers({ Authorization: `Bearer ${token}` }), formData: async () => ({ get: (name: string) => values.get(name) ?? null }) } as unknown as NextRequest;
   };
@@ -84,6 +93,39 @@ describe('authoritative IEX DAM market price boundary', () => {
     expect((await priceEvidence(req(siteId, nextDate))).status).toBe(200);
     expect(await (await priceEvidence(req(siteId, nextDate))).json()).toMatchObject({ readiness_status: 'DATE_MISMATCH', price_available: false, blocks: [] });
     expect((await priceEvidence(req(foreignSiteId, deliveryDate))).status).toBe(403);
+  });
+
+  it('previews the real official XLSX before committing and keeps a May target date suppressed', async () => {
+    const bytes = readFileSync(resolve(process.cwd(), 'tests/fixtures/market-prices/iex-dam-market-snapshot.xlsx'));
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const values = new Map<string, any>([
+      ['file', { name: 'DAM_Market Snapshot.xlsx', arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }],
+      ['source_reference', 'https://www.iexindia.com/market-data/day-ahead-market'],
+      ['official_source_confirmed', 'true'], ['action', 'preview'],
+    ]);
+    const req = () => ({ headers: new Headers({ Authorization: `Bearer ${adminToken}` }),
+      formData: async () => ({ get: (name: string) => values.get(name) ?? null }) }) as unknown as NextRequest;
+    const previewResponse = await importPrices(req());
+    expect(previewResponse.status, JSON.stringify(await previewResponse.clone().json())).toBe(200);
+    expect(await previewResponse.json()).toMatchObject({ preview: { detected_sheet: 'Sheet1', delivery_dates: ['2026-09-15'],
+      received_blocks: 96, expected_blocks: 96, summary_rows_ignored: 5, source_format: 'XLSX', checksum_sha256: hash,
+      verification_status: 'PENDING_CONFIRMATION' } });
+    values.set('action', 'commit');
+    expect((await importPrices(req())).status).toBe(400);
+    values.set('preview_checksum_sha256', hash);
+    const committed = await importPrices(req());
+    expect([200, 409], JSON.stringify(await committed.clone().json())).toContain(committed.status);
+    if (committed.status === 409) {
+      expect((await committed.json()).details).toContain('DUPLICATE_MARKET_PRICE_FILE');
+      expect(await must(db.from('market_price_imports').select('source_file_hash,total_rows,delivery_date_start')
+        .eq('source_file_hash', hash).single())).toMatchObject({ source_file_hash: hash, total_rows: 96, delivery_date_start: '2026-09-15' });
+    } else sampleXlsxImported = true;
+    const mayRequest = new NextRequest(`http://localhost/api/grid/price-evidence?site_id=${siteId}&delivery_date=2026-05-01`,
+      { headers: { Authorization: `Bearer ${customerToken}` } });
+    const mayEvidence = await priceEvidence(mayRequest);
+    expect(mayEvidence.status).toBe(200);
+    expect(await mayEvidence.json()).toMatchObject({ delivery_date: '2026-05-01', readiness_status: 'DATE_MISMATCH',
+      suppression_reason: 'PRICE_DATE_MISMATCH', price_available: false, blocks: [] });
   });
 
   it('keeps raw tables and the commit RPC inaccessible to anon/authenticated roles', async () => {

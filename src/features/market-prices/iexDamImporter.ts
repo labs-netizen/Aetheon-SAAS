@@ -149,12 +149,9 @@ export function parseOfficialIexDamSheetRows(sheetRows: XlsxRow[], sheetName: st
     const blank = cells.every((cell) => cell === null || String(cell).trim() === '');
     const parsedDate = canonicalDate(date, dateFormat);
     const parsedBlock = blockFromValue(block);
-    // After a contiguous 1..96 section, footer text and aggregate numbers are
-    // evidence-free summaries. A dated row or canonical time range remains a
-    // market-row attempt and is validated, including duplicate block 96/1 rows.
-    const canonicalTimeRange = /^\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}$/.test(String(block ?? '').trim());
-    const marketLike = parsedDate !== null || canonicalTimeRange;
-    if (completedSection && (blank || !marketLike)) { ignored++; continue; }
+    // Once blocks 1..96 are complete, only a canonical Time Block can start
+    // another market row. Footer dates may be carried forward by the workbook.
+    if (completedSection && parsedBlock === null) { ignored++; continue; }
     if (blank && expectedBlock === 1 && marketRows.length === 0) { ignored++; continue; }
     marketRows.push({ date, timeBlock: block, mcp, rowNumber: index + 1 });
     if (parsedDate && parsedBlock === 1 && completedSection && parsedDate !== sectionDate) {
