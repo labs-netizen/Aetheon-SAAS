@@ -88,8 +88,11 @@ function validateMarketRows(sourceRows: MarketSourceRow[], format: IexDateFormat
   for (const row of rows) byDate.set(row.delivery_date, [...(byDate.get(row.delivery_date) || []), row]);
   for (const [date, dayRows] of byDate) {
     const blocks = new Set(dayRows.map((row) => row.block_index));
-    if (dayRows.length !== 96 || blocks.size !== 96 || sourceRows.filter((row) => canonicalDate(row.date, format) === date).length !== 96) {
+    const marketLikeCount = sourceRows.filter((row) => canonicalDate(row.date, format) === date).length;
+    if (dayRows.length !== 96 || blocks.size !== 96) {
       errors.push({ delivery_date: date, code: blocks.size < dayRows.length ? 'DUPLICATE_TIME_BLOCK' : 'INCOMPLETE_96_BLOCK_DAY', message: `${date} has ${blocks.size} unique blocks; exactly 96 valid rows are required.` });
+    } else if (marketLikeCount > 96) {
+      errors.push({ delivery_date: date, code: 'EXTRA_MARKET_BLOCK_ROW', message: `${date} has ${marketLikeCount} market-like rows; exactly 96 are required.` });
     }
   }
   const mcps = rows.map((row) => row.mcp_rs_per_mwh);
@@ -127,6 +130,46 @@ const requiredHeaderIndex = (cells: XlsxRow) => {
   return indices.every((index) => index >= 0) ? indices : null;
 };
 
+export function parseOfficialIexDamSheetRows(sheetRows: XlsxRow[], sheetName: string, dateFormat: IexDateFormat = 'AUTO'): IexDamParseResult {
+  const headers = sheetRows.map((cells, index) => ({ index, indices: requiredHeaderIndex(cells) })).filter((row) => row.indices !== null);
+  if (headers.length !== 1) return { valid: false, rows: [], total_rows: 0, total_days: 0,
+    errors: [{ code: headers.length ? 'AMBIGUOUS_IEX_DAM_SHEET' : 'INVALID_IEX_DAM_SCHEMA', message: 'Exactly one authoritative header row is required.' }], source_format: 'XLSX', detected_sheet: sheetName };
+  const { index: headerRow, indices } = headers[0];
+  const [dateIndex, blockIndex, mcpIndex] = indices!;
+  const marketRows: MarketSourceRow[] = [];
+  let ignored = 0;
+  let completedSection = false;
+  let expectedBlock = 1;
+  let sectionDate: string | null = null;
+  for (let index = headerRow + 1; index < sheetRows.length; index++) {
+    const cells = sheetRows[index];
+    const date = cells[dateIndex];
+    const block = cells[blockIndex];
+    const mcp = cells[mcpIndex];
+    const blank = cells.every((cell) => cell === null || String(cell).trim() === '');
+    const parsedDate = canonicalDate(date, dateFormat);
+    const parsedBlock = blockFromValue(block);
+    // After a contiguous 1..96 section, footer text and aggregate numbers are
+    // evidence-free summaries. A dated row or canonical time range remains a
+    // market-row attempt and is validated, including duplicate block 96/1 rows.
+    const canonicalTimeRange = /^\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}$/.test(String(block ?? '').trim());
+    const marketLike = parsedDate !== null || canonicalTimeRange;
+    if (completedSection && (blank || !marketLike)) { ignored++; continue; }
+    if (blank && expectedBlock === 1 && marketRows.length === 0) { ignored++; continue; }
+    marketRows.push({ date, timeBlock: block, mcp, rowNumber: index + 1 });
+    if (parsedDate && parsedBlock === 1 && completedSection && parsedDate !== sectionDate) {
+      completedSection = false; expectedBlock = 1; sectionDate = null;
+    }
+    if (!completedSection && parsedDate && parsedBlock === expectedBlock && (sectionDate === null || parsedDate === sectionDate)) {
+      sectionDate = parsedDate;
+      expectedBlock++;
+      if (expectedBlock === 97) { completedSection = true; expectedBlock = 1; }
+    }
+  }
+  const validated = validateMarketRows(marketRows, dateFormat);
+  return { ...validated, source_format: 'XLSX', detected_sheet: sheetName, summary_rows_ignored: ignored };
+}
+
 export async function parseOfficialIexDamXlsx(bytes: Buffer, dateFormat: IexDateFormat = 'AUTO'): Promise<IexDamParseResult> {
   let sheets: Awaited<ReturnType<typeof readXlsxFile<number>>>;
   try { sheets = await readXlsxFile<number>(bytes); }
@@ -135,23 +178,6 @@ export async function parseOfficialIexDamXlsx(bytes: Buffer, dateFormat: IexDate
     .filter((candidate) => candidate.indices !== null));
   if (candidates.length !== 1) return { valid: false, rows: [], total_rows: 0, total_days: 0,
     errors: [{ code: candidates.length ? 'AMBIGUOUS_IEX_DAM_SHEET' : 'INVALID_IEX_DAM_SCHEMA', message: 'Exactly one sheet with official Date, Time Block and MCP (Rs/MWh) headers is required.' }], source_format: 'XLSX' };
-  const { sheet, headerRow, indices } = candidates[0];
-  const [dateIndex, blockIndex, mcpIndex] = indices!;
-  const marketRows: MarketSourceRow[] = [];
-  let ignored = 0;
-  let inSummary = false;
-  for (let index = headerRow + 1; index < sheet.data.length; index++) {
-    const cells = sheet.data[index];
-    const date = cells[dateIndex];
-    const block = cells[blockIndex];
-    const mcp = cells[mcpIndex];
-    if (cells.every((cell) => cell === null || String(cell).trim() === '')) { ignored++; continue; }
-    const summary = /^(total|maximum|max|minimum|min|average|avg|notes?|summary)\b/i.test(String(date ?? '').trim());
-    if (summary) { inSummary = true; ignored++; continue; }
-    if (inSummary) { ignored++; continue; }
-    if (date === null && block === null && mcp === null) { ignored++; continue; }
-    marketRows.push({ date, timeBlock: block, mcp, rowNumber: index + 1 });
-  }
-  const validated = validateMarketRows(marketRows, dateFormat);
-  return { ...validated, source_format: 'XLSX', detected_sheet: sheet.sheet, summary_rows_ignored: ignored };
+  const { sheet } = candidates[0];
+  return parseOfficialIexDamSheetRows(sheet.data, sheet.sheet, dateFormat);
 }
