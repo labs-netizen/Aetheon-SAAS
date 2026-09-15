@@ -8,8 +8,10 @@ export interface GridForecastBlockContract {
   end_time: string;
   forecast_load_kw: number;
   forecast_price_inr_per_mwh: number | null;
-  confidence_lower_kw: number;
-  confidence_upper_kw: number;
+  confidence_lower_kw: number | null;
+  confidence_upper_kw: number | null;
+  lower_bound_kw?: number | null;
+  upper_bound_kw?: number | null;
   is_high_cost_window: boolean | null;
 }
 
@@ -18,6 +20,11 @@ export interface GridValidationMetricsContract {
   rmse_kw: number;
   smape_pct: number;
   observations: number;
+  normalized_mae?: number | null;
+  peak_magnitude_error_kw?: number | null;
+  peak_timing_error_minutes?: number | null;
+  daily_mae_mean_kw?: number | null;
+  daily_mae_median_kw?: number | null;
 }
 
 export interface GridForecastResponseContract {
@@ -27,7 +34,7 @@ export interface GridForecastResponseContract {
   validation_status: 'VALIDATED' | 'CALIBRATING' | 'FAILED_VALIDATION';
   forecast_available: boolean;
   forecast_status: 'AVAILABLE' | 'SUPPRESSED';
-  model_version: 'GRID_HISTORICAL_LOAD_V1.0';
+  model_version: 'GRID_HISTORICAL_LOAD_V1.0' | 'GRID_HISTORICAL_LOAD_V2.0';
   model_generation_time: string;
   training_start_date: string | null;
   training_end_date: string | null;
@@ -37,10 +44,18 @@ export interface GridForecastResponseContract {
   selected_model: string | null;
   validation_metrics: GridValidationMetricsContract | null;
   baseline_metrics: Record<string, GridValidationMetricsContract>;
+  runner_up?: string | null;
+  baseline_model?: string | null;
+  model_comparison_metrics?: Record<string, GridValidationMetricsContract>;
+  improvement_vs_baseline_percent?: number | null;
+  validation_days?: number;
+  ensemble_weights?: Record<string, number>;
+  empirical_interval_status?: 'AVAILABLE' | 'INSUFFICIENT_EVIDENCE';
+  drift_status?: 'NORMAL' | 'DRIFT_WARNING' | 'INSUFFICIENT_EVIDENCE';
   provenance: {
     input_source: 'COMMITTED_INTERVAL_DATA_96';
     model_family: 'DAY_AHEAD_DEMAND';
-    validation_method: 'CHRONOLOGICAL_HOLDOUT';
+    validation_method: 'CHRONOLOGICAL_HOLDOUT' | 'WALK_FORWARD';
     price_source: null;
   };
   average_price_inr_per_mwh: null;

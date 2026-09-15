@@ -3,6 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 import json
 import math
+import random
 import os
 from pathlib import Path
 import sys
@@ -24,10 +25,11 @@ class FrozenDateTime(datetime):
 
 def _history(day_count: int, start: date, noisy: bool = False):
     days = []
+    rng = random.Random(42)
     for day_index in range(day_count):
         operating_date = start + timedelta(days=day_index)
         if noisy:
-            loads = [100.0 if ((day_index * 37 + block * 53) % 11) < 5 else 1900.0 for block in range(96)]
+            loads = [rng.uniform(100.0, 1900.0) for _ in range(96)]
         else:
             weekday_factor = 80 if operating_date.weekday() < 5 else -60
             loads = [

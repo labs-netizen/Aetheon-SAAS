@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import math
+import random
 import os
 import json
 from pathlib import Path
@@ -54,8 +55,19 @@ def test_426_day_history_trains_backtests_and_emits_exactly_96_demand_blocks():
     assert response.validation_metrics.observations >= 14 * 96
     assert set(response.baseline_metrics) == {"PREVIOUS_DAY_SAME_BLOCK", "PREVIOUS_WEEK_SAME_BLOCK"}
     assert response.selected_model in {
-        "PREVIOUS_DAY_SAME_BLOCK", "PREVIOUS_WEEK_SAME_BLOCK", "RIDGE_MULTI_LAG_CALENDAR"
+        "PREVIOUS_DAY_SAME_BLOCK", "PREVIOUS_WEEK_SAME_BLOCK", "ROLLING_7_DAY_SAME_BLOCK",
+        "RIDGE_MULTI_LAG_CALENDAR", "ELASTIC_NET_MULTI_LAG_CALENDAR",
+        "HIST_GRADIENT_BOOSTING", "VALIDATED_WEIGHTED_ENSEMBLE"
     }
+    assert response.model_version == "GRID_HISTORICAL_LOAD_V2.0"
+    assert response.provenance.validation_method == "WALK_FORWARD"
+    assert response.validation_days >= 14
+    assert response.baseline_model in response.model_comparison_metrics
+    assert response.selected_model in response.model_comparison_metrics
+    assert response.empirical_interval_status == "AVAILABLE"
+    assert all(block.lower_bound_kw is not None and block.upper_bound_kw is not None and
+               block.confidence_lower_kw is None and block.confidence_upper_kw is None and
+               block.lower_bound_kw <= block.forecast_load_kw <= block.upper_bound_kw for block in response.blocks)
     assert response.average_price_inr_per_mwh is None
     assert response.price_status == "AUTHORITATIVE_PRICE_FEED_REQUIRED"
     assert response.provenance.input_source == "COMMITTED_INTERVAL_DATA_96"
@@ -79,6 +91,7 @@ def test_stale_april_history_is_validated_but_operationally_suppressed():
     assert response.forecast_status == "SUPPRESSED"
     assert response.freshness_days > 1
     assert response.is_suppressed and not response.forecast_available and response.blocks == []
+    assert response.model_comparison_metrics and response.validation_days >= 14
 
 
 def test_explicit_historical_replay_uses_april_30_only_and_emits_may_1_without_live_freshness():
@@ -126,11 +139,14 @@ def test_insufficient_history_suppresses_without_fabrication():
     assert response.blocks == []
 
 
-def test_failed_chronological_validation_suppresses_unreliable_forecast():
+def test_failed_walk_forward_validation_suppresses_unpredictable_forecast():
     days = []
     start = date(2026, 1, 1)
+    rng = random.Random(42)
     for day_index in range(80):
-        loads = [100.0 if ((day_index * 37 + block * 53) % 11) < 5 else 1900.0 for block in range(96)]
+        # Independent random load has no usable previous-day signal. The old
+        # modular pattern was learnable by the added nonlinear candidate.
+        loads = [rng.uniform(100.0, 1900.0) for _ in range(96)]
         days.append(GridHistoricalDay(operating_date=(start + timedelta(days=day_index)).isoformat(), load_kw=loads))
     response = solve_grid_forecast(request(days))
     assert response.model_status == "FAILED_VALIDATION"

@@ -5,6 +5,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 export type CurvePoint = { block_index?: number; time?: string; operating_date?: string; load_kw?: number | null;
   average_kw?: number | null; peak_kw?: number | null; forecast_kw?: number | null; actual_kw?: number | null;
   mcp_rs_per_mwh?: number | null; weekday_kw?: number | null; weekend_kw?: number | null;
+  empirical_lower_kw?: number | null; empirical_upper_kw?: number | null;
   price_window?: 'LOW' | 'HIGH' | null };
 
 export function EvidenceCurve({ data, title, unit, series, height = 280, testId }: {

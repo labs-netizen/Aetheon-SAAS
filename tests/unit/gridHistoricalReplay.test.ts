@@ -188,6 +188,7 @@ describe('historical Grid replay safety', () => {
       await act(async () => (container.querySelector('[data-testid="run-historical-replay"]') as HTMLButtonElement).click());
       expect(container.querySelector('[data-testid="replay-historical-outputs"]')?.textContent).toContain(REPLAY_LABEL);
       expect(container.querySelector('[data-testid="replay-visualizations"]')?.textContent).toContain(REPLAY_LABEL);
+      expect(container.querySelector('[data-testid="replay-model-tournament"]')?.textContent).toContain('WALK-FORWARD MODEL TOURNAMENT');
       expect(container.querySelector('[data-testid="replay-actual-unavailable"]')?.textContent).toContain('no actual series is drawn');
       const table = container.querySelector('[data-testid="replay-block-table"]');
       expect(table?.querySelectorAll('tbody tr')).toHaveLength(96);

@@ -1,7 +1,8 @@
 import { REPLAY_LABEL } from './grid-replay';
 
 export function replayCurvePoints(
-  forecast: Array<{ block_index: number; forecast_load_kw: number }> | null,
+  forecast: Array<{ block_index: number; forecast_load_kw: number; confidence_lower_kw?: number | null;
+    confidence_upper_kw?: number | null; lower_bound_kw?: number | null; upper_bound_kw?: number | null }> | null,
   prices: Array<{ block_index: number; mcp_rs_per_mwh: number }> | null,
   actual: number[] | null | undefined,
   lowerBlocks: number[] = [], higherBlocks: number[] = []
@@ -12,6 +13,12 @@ export function replayCurvePoints(
   const load = forecast?.length === 96 ? forecast.map((block) => ({ block_index: block.block_index,
     time: `${String(Math.floor((block.block_index - 1) / 4)).padStart(2, '0')}:${String(((block.block_index - 1) % 4) * 15).padStart(2, '0')}`,
     forecast_kw: block.forecast_load_kw,
+    ...((block.lower_bound_kw ?? block.confidence_lower_kw) !== null &&
+      (block.lower_bound_kw ?? block.confidence_lower_kw) !== undefined &&
+      (block.upper_bound_kw ?? block.confidence_upper_kw) !== null &&
+      (block.upper_bound_kw ?? block.confidence_upper_kw) !== undefined
+      ? { empirical_lower_kw: block.lower_bound_kw ?? block.confidence_lower_kw,
+          empirical_upper_kw: block.upper_bound_kw ?? block.confidence_upper_kw } : {}),
     ...(availableActual ? { actual_kw: actual![block.block_index - 1] } : {}) })) : [];
   const mcp = prices?.length === 96 ? prices.map((block) => ({ block_index: block.block_index,
     time: `${String(Math.floor((block.block_index - 1) / 4)).padStart(2, '0')}:${String(((block.block_index - 1) % 4) * 15).padStart(2, '0')}`,

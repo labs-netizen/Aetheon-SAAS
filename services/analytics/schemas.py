@@ -77,8 +77,10 @@ class GridForecastBlock(BaseModel):
     end_time: str
     forecast_load_kw: float
     forecast_price_inr_per_mwh: Optional[float] = None
-    confidence_lower_kw: float
-    confidence_upper_kw: float
+    confidence_lower_kw: Optional[float] = None
+    confidence_upper_kw: Optional[float] = None
+    lower_bound_kw: Optional[float] = None
+    upper_bound_kw: Optional[float] = None
     is_high_cost_window: Optional[bool] = None
 
 
@@ -87,12 +89,17 @@ class GridValidationMetrics(BaseModel):
     rmse_kw: float
     smape_pct: float
     observations: int
+    normalized_mae: Optional[float] = None
+    peak_magnitude_error_kw: Optional[float] = None
+    peak_timing_error_minutes: Optional[float] = None
+    daily_mae_mean_kw: Optional[float] = None
+    daily_mae_median_kw: Optional[float] = None
 
 
 class GridForecastProvenance(BaseModel):
     input_source: Literal["COMMITTED_INTERVAL_DATA_96"]
     model_family: Literal["DAY_AHEAD_DEMAND"]
-    validation_method: Literal["CHRONOLOGICAL_HOLDOUT"]
+    validation_method: Literal["CHRONOLOGICAL_HOLDOUT", "WALK_FORWARD"]
     price_source: None = None
 
 
@@ -113,6 +120,14 @@ class GridForecastResponse(BaseModel):
     selected_model: Optional[str] = None
     validation_metrics: Optional[GridValidationMetrics] = None
     baseline_metrics: Dict[str, GridValidationMetrics] = Field(default_factory=dict)
+    runner_up: Optional[str] = None
+    baseline_model: Optional[str] = None
+    model_comparison_metrics: Dict[str, GridValidationMetrics] = Field(default_factory=dict)
+    improvement_vs_baseline_percent: Optional[float] = None
+    validation_days: int = 0
+    ensemble_weights: Dict[str, float] = Field(default_factory=dict)
+    empirical_interval_status: Literal["AVAILABLE", "INSUFFICIENT_EVIDENCE"] = "INSUFFICIENT_EVIDENCE"
+    drift_status: Literal["NORMAL", "DRIFT_WARNING", "INSUFFICIENT_EVIDENCE"] = "INSUFFICIENT_EVIDENCE"
     provenance: GridForecastProvenance
     average_price_inr_per_mwh: Optional[float] = None
     peak_demand_kw: Optional[float] = None

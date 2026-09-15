@@ -109,7 +109,10 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
           {result.forecast && <div className="rounded border border-slate-700 p-4 text-sm text-slate-200">
             <strong className="block text-amber-200">{REPLAY_LABEL}</strong>
             <div>Selected model: {result.forecast.selected_model || 'UNAVAILABLE'} · Version: {result.forecast.model_version}</div>
-            <div>Chronological holdout: MAE {result.forecast.validation_metrics?.mae_kw ?? '—'} kW · RMSE {result.forecast.validation_metrics?.rmse_kw ?? '—'} kW · sMAPE {result.forecast.validation_metrics?.smape_pct ?? '—'}%</div>
+            <div>WALK-FORWARD VALIDATION METRICS: MAE {result.forecast.validation_metrics?.mae_kw ?? '—'} kW · RMSE {result.forecast.validation_metrics?.rmse_kw ?? '—'} kW · sMAPE {result.forecast.validation_metrics?.smape_pct ?? '—'}%</div>
+            {result.forecast.model_version === 'GRID_HISTORICAL_LOAD_V2.0' && <div>
+              Baseline {result.forecast.baseline_model || 'UNAVAILABLE'} · runner-up {result.forecast.runner_up || 'UNAVAILABLE'} · {result.forecast.validation_days ?? 0} walk-forward days · measured improvement vs baseline {result.forecast.improvement_vs_baseline_percent ?? '—'}% · drift {result.forecast.drift_status || 'INSUFFICIENT_EVIDENCE'}
+            </div>}
             <div>Forecast blocks: {result.forecast.blocks.length}/96 · Actual target-day comparison: {result.actual_comparison_available ? 'AVAILABLE' : 'UNAVAILABLE — FORECAST-ONLY REPLAY'}</div>
           </div>}
           <section className="space-y-3" data-testid="replay-visualizations">
@@ -118,6 +121,9 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
               <div><div className="mb-1 text-[11px] font-semibold text-amber-200">{REPLAY_LABEL}</div>
                 <EvidenceCurve title="Historical forecast vs committed actual" unit="kW" testId="replay-forecast-curve"
                   data={curves.load} series={[{ key: 'forecast_kw', label: 'Historical forecast', color: '#38bdf8' },
+                    ...(result.forecast?.empirical_interval_status === 'AVAILABLE'
+                      ? [{ key: 'empirical_lower_kw' as const, label: 'Empirical interval lower', color: '#64748b' },
+                         { key: 'empirical_upper_kw' as const, label: 'Empirical interval upper', color: '#94a3b8' }] : []),
                     ...(curves.actual_available ? [{ key: 'actual_kw' as const, label: 'Committed actual', color: '#34d399' }] : [])]} /></div>
               <div><div className="mb-1 text-[11px] font-semibold text-amber-200">{REPLAY_LABEL}</div>
                 <EvidenceCurve title="Historical exact-date IEX DAM MCP · price windows in tooltips" unit="₹/MWh" testId="replay-price-curve"
@@ -125,7 +131,7 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
             </div>
             {!curves.actual_available && <p className="text-xs text-amber-200" data-testid="replay-actual-unavailable">{REPLAY_LABEL}: committed actual target-day load unavailable; no actual series is drawn.</p>}
             {result.forecast?.validation_metrics && <div className="rounded border border-amber-700 bg-slate-950 p-3 text-xs text-slate-200" data-testid="replay-model-metrics-visual">
-              <strong className="block text-amber-200">{REPLAY_LABEL} · recorded validation · {result.forecast.selected_model || 'UNAVAILABLE'}</strong>
+              <strong className="block text-amber-200">{REPLAY_LABEL} · WALK-FORWARD VALIDATION METRICS · {result.forecast.selected_model || 'UNAVAILABLE'}</strong>
               <div className="mt-2 grid grid-cols-3 gap-2">{[
                 ['MAE', result.forecast.validation_metrics.mae_kw, 'kW'],
                 ['RMSE', result.forecast.validation_metrics.rmse_kw, 'kW'],
@@ -133,6 +139,18 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
               ].map(([name, value, unit]) => <div key={String(name)} className="rounded border border-slate-700 p-2">
                 <div className="text-slate-400">{name}</div><strong>{value ?? '—'} {unit}</strong></div>)}</div>
             </div>}
+            {result.forecast?.model_comparison_metrics && Object.keys(result.forecast.model_comparison_metrics).length > 0 &&
+              <div className="rounded border border-amber-700 bg-slate-950 p-3 text-xs text-slate-200" data-testid="replay-model-tournament">
+                <strong className="block text-amber-200">{REPLAY_LABEL} · WALK-FORWARD MODEL TOURNAMENT</strong>
+                <div className="mt-2 max-h-56 overflow-auto"><table className="w-full text-left"><thead><tr>
+                  <th>Model</th><th>MAE kW</th><th>RMSE kW</th><th>sMAPE %</th><th>Peak magnitude kW</th><th>Peak timing min</th>
+                </tr></thead><tbody>{Object.entries(result.forecast.model_comparison_metrics).map(([name, metric]) =>
+                  <tr key={name} className="border-t border-slate-800"><td>{name}{name === result.forecast?.selected_model ? ' · SELECTED' : ''}</td>
+                    <td>{metric.mae_kw}</td><td>{metric.rmse_kw}</td><td>{metric.smape_pct}</td>
+                    <td>{metric.peak_magnitude_error_kw ?? '—'}</td><td>{metric.peak_timing_error_minutes ?? '—'}</td></tr>)}</tbody></table></div>
+                {Object.keys(result.forecast.ensemble_weights || {}).length > 0 && <p className="mt-2">Validated ensemble weights: {Object.entries(result.forecast.ensemble_weights || {}).map(([name, weight]) => `${name} ${(weight * 100).toFixed(1)}%`).join(' · ')}</p>}
+                <p className="mt-2">Empirical forecast interval: {result.forecast.empirical_interval_status || 'INSUFFICIENT_EVIDENCE'} · descriptive residual quantiles, not guaranteed coverage.</p>
+              </div>}
           </section>
           {result.replay_ready && result.outputs && result.forecast && (
             <>
@@ -148,7 +166,7 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
               </div>
               {result.outputs.actual_comparison && <div className="rounded border border-amber-700 p-4 text-sm text-slate-200">
                 <strong className="block text-xs text-amber-200">{REPLAY_LABEL}</strong>
-                FORECAST vs ACTUAL: MAE {result.outputs.actual_comparison.mae_kw.toFixed(2)} kW · RMSE {result.outputs.actual_comparison.rmse_kw.toFixed(2)} kW · sMAPE {result.outputs.actual_comparison.smape_pct.toFixed(2)}% · peak timing error {result.outputs.actual_comparison.peak_timing_error_minutes} min · peak magnitude error {result.outputs.actual_comparison.peak_magnitude_error_kw.toFixed(2)} kW
+                TARGET-DAY ACTUAL BACKTEST METRICS: MAE {result.outputs.actual_comparison.mae_kw.toFixed(2)} kW · RMSE {result.outputs.actual_comparison.rmse_kw.toFixed(2)} kW · sMAPE {result.outputs.actual_comparison.smape_pct.toFixed(2)}% · peak timing error {result.outputs.actual_comparison.peak_timing_error_minutes} min · peak magnitude error {result.outputs.actual_comparison.peak_magnitude_error_kw.toFixed(2)} kW
               </div>}
               <div className="max-h-80 overflow-auto rounded border border-slate-700" data-testid="replay-block-table">
                 <table className="w-full text-left text-xs text-slate-200"><thead className="sticky top-0 bg-slate-900"><tr>
