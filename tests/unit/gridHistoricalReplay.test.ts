@@ -175,6 +175,8 @@ describe('historical Grid replay safety', () => {
   it('renders the real replay response as historical and keeps 96 forecast, actual and IEX MCP columns distinct', async () => {
     const previousActEnvironment = (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    // JSDOM has no layout observer; Recharts' ResponsiveContainer requires one.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const body = await (await replayGet(request())).json();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
     const container = document.createElement('div');
@@ -185,6 +187,8 @@ describe('historical Grid replay safety', () => {
       expect(container.querySelector('[data-testid="historical-replay-banner"]')?.textContent).toContain('NOT LIVE OPERATIONAL ADVICE');
       await act(async () => (container.querySelector('[data-testid="run-historical-replay"]') as HTMLButtonElement).click());
       expect(container.querySelector('[data-testid="replay-historical-outputs"]')?.textContent).toContain(REPLAY_LABEL);
+      expect(container.querySelector('[data-testid="replay-visualizations"]')?.textContent).toContain(REPLAY_LABEL);
+      expect(container.querySelector('[data-testid="replay-actual-unavailable"]')?.textContent).toContain('no actual series is drawn');
       const table = container.querySelector('[data-testid="replay-block-table"]');
       expect(table?.querySelectorAll('tbody tr')).toHaveLength(96);
       expect(table?.textContent).toContain('FORECAST kW');
@@ -194,6 +198,7 @@ describe('historical Grid replay safety', () => {
       await act(async () => root.unmount());
       container.remove();
       fetchMock.mockRestore();
+      vi.unstubAllGlobals();
       (globalThis as any).IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
     }
   });

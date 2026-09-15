@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { GridForecastResponseContract } from '@/types/analytics-contracts';
 import { REPLAY_LABEL } from '@/lib/analytics/grid-replay';
+import { EvidenceCurve } from '@/components/shared/EvidenceCurve';
+import { replayCurvePoints } from '@/lib/analytics/grid-replay-visualization';
 
 interface ReplayResponse {
   mode: 'HISTORICAL_REPLAY';
@@ -71,6 +73,10 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
   };
 
   const prices = new Map(result?.price_evidence?.blocks.map((block) => [block.block_index, block.mcp_rs_per_mwh]) || []);
+  const curves = replayCurvePoints(result?.forecast?.blocks || null, result?.price_evidence?.blocks || null,
+    result?.actual_comparison_available ? result.actual_load_kw : null,
+    result?.outputs?.price_sensitive_windows.lower_exchange_price_blocks || [],
+    result?.outputs?.price_sensitive_windows.higher_exchange_price_blocks || []);
   return (
     <section className="space-y-5" data-testid="historical-replay-panel">
       <div className="sticky top-0 z-20 rounded border-2 border-amber-500 bg-amber-950 p-4 text-amber-100" data-testid="historical-replay-banner">
@@ -106,6 +112,28 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
             <div>Chronological holdout: MAE {result.forecast.validation_metrics?.mae_kw ?? '—'} kW · RMSE {result.forecast.validation_metrics?.rmse_kw ?? '—'} kW · sMAPE {result.forecast.validation_metrics?.smape_pct ?? '—'}%</div>
             <div>Forecast blocks: {result.forecast.blocks.length}/96 · Actual target-day comparison: {result.actual_comparison_available ? 'AVAILABLE' : 'UNAVAILABLE — FORECAST-ONLY REPLAY'}</div>
           </div>}
+          <section className="space-y-3" data-testid="replay-visualizations">
+            <strong className="block text-xs text-amber-200">{REPLAY_LABEL}</strong>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div><div className="mb-1 text-[11px] font-semibold text-amber-200">{REPLAY_LABEL}</div>
+                <EvidenceCurve title="Historical forecast vs committed actual" unit="kW" testId="replay-forecast-curve"
+                  data={curves.load} series={[{ key: 'forecast_kw', label: 'Historical forecast', color: '#38bdf8' },
+                    ...(curves.actual_available ? [{ key: 'actual_kw' as const, label: 'Committed actual', color: '#34d399' }] : [])]} /></div>
+              <div><div className="mb-1 text-[11px] font-semibold text-amber-200">{REPLAY_LABEL}</div>
+                <EvidenceCurve title="Historical exact-date IEX DAM MCP · price windows in tooltips" unit="₹/MWh" testId="replay-price-curve"
+                  data={curves.mcp} series={[{ key: 'mcp_rs_per_mwh', label: 'Verified MCP', color: '#fbbf24' }]} /></div>
+            </div>
+            {!curves.actual_available && <p className="text-xs text-amber-200" data-testid="replay-actual-unavailable">{REPLAY_LABEL}: committed actual target-day load unavailable; no actual series is drawn.</p>}
+            {result.forecast?.validation_metrics && <div className="rounded border border-amber-700 bg-slate-950 p-3 text-xs text-slate-200" data-testid="replay-model-metrics-visual">
+              <strong className="block text-amber-200">{REPLAY_LABEL} · recorded validation · {result.forecast.selected_model || 'UNAVAILABLE'}</strong>
+              <div className="mt-2 grid grid-cols-3 gap-2">{[
+                ['MAE', result.forecast.validation_metrics.mae_kw, 'kW'],
+                ['RMSE', result.forecast.validation_metrics.rmse_kw, 'kW'],
+                ['sMAPE', result.forecast.validation_metrics.smape_pct, '%'],
+              ].map(([name, value, unit]) => <div key={String(name)} className="rounded border border-slate-700 p-2">
+                <div className="text-slate-400">{name}</div><strong>{value ?? '—'} {unit}</strong></div>)}</div>
+            </div>}
+          </section>
           {result.replay_ready && result.outputs && result.forecast && (
             <>
               <div className="grid gap-3 sm:grid-cols-2" data-testid="replay-historical-outputs">

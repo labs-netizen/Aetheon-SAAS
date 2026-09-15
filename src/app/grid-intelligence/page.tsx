@@ -30,6 +30,7 @@ import { formatPaiseToInr } from '@/lib/units/currency';
 import { PRODUCTS } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 import { HistoricalReplayPanel } from './HistoricalReplayPanel';
+import { EvidenceCurve } from '@/components/shared/EvidenceCurve';
 
 interface GridInputEvidenceResponse {
   site_id: string;
@@ -485,6 +486,28 @@ export default function GridIntelligencePage() {
             Price-dependent recommendations and cost optimisation are suppressed — {priceEvidence?.suppression_reason || 'AUTHORITATIVE_PRICE_FEED_REQUIRED'}.
           </div>
         )}
+
+        {!isDemo && <section className="space-y-3" data-testid="grid-live-evidence-curves">
+          <div className="text-xs text-slate-300">Aligned 15-minute evidence · load in kW and IEX DAM MCP in ₹/MWh use separate axes and panels. Curves are descriptive; price-dependent advice remains gated.</div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <EvidenceCurve title="LIVE forecast load · 96 blocks" unit="kW" testId="live-forecast-curve"
+              data={hasValidForecast ? forecastResult.blocks.map((block: { block_index: number; forecast_load_kw: number }) => ({
+                block_index: block.block_index, time: getBlockTimes(block.block_index).startTime, forecast_kw: block.forecast_load_kw })) : []}
+              series={[{ key: 'forecast_kw', label: 'Validated forecast', color: '#38bdf8' }]} />
+            <EvidenceCurve title={`Official IEX DAM MCP · ${priceEvidence?.delivery_date || 'No matching date'}`} unit="₹/MWh" testId="live-iex-mcp-curve"
+              data={priceEvidence?.blocks.length === 96 ? priceEvidence.blocks.map((block) => ({ block_index: block.block_index,
+                time: block.time_start, mcp_rs_per_mwh: block.mcp_rs_per_mwh })) : []}
+              series={[{ key: 'mcp_rs_per_mwh', label: 'Verified IEX DAM MCP', color: '#fbbf24' }]} />
+          </div>
+          {!hasValidForecast && <p className="rounded border border-amber-700 bg-amber-950/30 p-3 text-xs text-amber-200" data-testid="live-forecast-curve-suppressed">
+            Demand forecast SUPPRESSED — {forecastResult?.suppression_reason || forecastError || 'VALIDATED_LIVE_FORECAST_UNAVAILABLE'}. No forecast curve or recommendation is shown.
+          </p>}
+          {priceEvidence?.blocks.length === 96 && !hasAuthoritativePriceFeed && <p className="text-xs text-amber-200">Verified historical MCP curve is visible as evidence only; current-date price-dependent recommendations remain suppressed.</p>}
+          {forecastResult?.validation_metrics && <div className="rounded border border-slate-700 bg-slate-950 p-3 text-xs text-slate-200" data-testid="live-model-validation-metrics">
+            <strong className="block text-slate-100">Recorded model validation · {forecastResult.selected_model || 'Model unavailable'}</strong>
+            MAE {forecastResult.validation_metrics.mae_kw ?? '—'} kW · RMSE {forecastResult.validation_metrics.rmse_kw ?? '—'} kW · sMAPE {forecastResult.validation_metrics.smape_pct ?? '—'}%
+          </div>}
+        </section>}
 
         {/* Quality Gate Check */}
         {qualityGate.isSuppressed ? (

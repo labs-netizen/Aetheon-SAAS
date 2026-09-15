@@ -29,6 +29,7 @@ import type { CsvSchemaMapping, SchemaDetectionResult } from '@/features/ingesti
 import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
+import { LoadVisualizationPanel } from '@/features/ingestion/LoadVisualizationPanel';
 
 function SettingsContent() {
   const searchParams = useSearchParams();
@@ -53,6 +54,8 @@ function SettingsContent() {
   // Commit State
   const [isCommitting, setIsCommitting] = useState(false);
   const [commitFeedback, setCommitFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [visualRefreshKey, setVisualRefreshKey] = useState(0);
+  const [visualizedSiteId, setVisualizedSiteId] = useState<string | null>(null);
 
   // Site Parameters Form State
   const [siteName, setSiteName] = useState(currentSite?.name || '');
@@ -259,6 +262,8 @@ function SettingsContent() {
         type: 'success',
         message: `Successfully committed ${data.validBlocks || data.totalBlocks} interval blocks across ${data.validDays || 1} operating day(s) (Run ID: ${data.run_id}).`,
       });
+      setVisualRefreshKey((key) => key + 1);
+      setVisualizedSiteId(currentSite.id);
       await refreshSites();
     } catch (err) {
       setCommitFeedback({
@@ -596,6 +601,8 @@ function SettingsContent() {
               </div>
             )}
           </Card>
+          {commitFeedback?.type === 'success' && visualizedSiteId === currentSite.id &&
+            <LoadVisualizationPanel siteId={currentSite.id} refreshKey={visualRefreshKey} />}
         </div>
       )}
 

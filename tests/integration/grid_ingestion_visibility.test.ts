@@ -4,6 +4,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { GET as forecastGet } from '@/app/api/forecast/route';
 import { GET as inputEvidenceGet } from '@/app/api/grid/input-evidence/route';
 import { GET as replayGet } from '@/app/api/grid/replay/route';
+import { GET as visualGet } from '@/app/api/ingestion/load-visualization/route';
 import { loadGridHistoricalInput, resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 import { checkServerEntitlement } from '@/lib/auth/entitlements';
 import { resolveSiteForAuthorization } from '@/lib/auth/api-guard';
@@ -144,6 +145,54 @@ describe('Grid visibility of committed interval data', () => {
     `http://localhost:3000/api/grid/input-evidence?site_id=${siteId}${operatingDate ? `&operating_date=${operatingDate}` : ''}`,
     { method: 'GET', headers: { Authorization: `Bearer ${token}` } }
   );
+  const visualRequest = (siteId: string, operatingDate?: string, bearer = token) => new NextRequest(
+    `http://localhost:3000/api/ingestion/load-visualization?site_id=${siteId}&window_days=30${operatingDate ? `&operating_date=${operatingDate}` : ''}`,
+    { headers: { Authorization: `Bearer ${bearer}` } }
+  );
+
+  it('serves ordered committed load visualization through the bearer site context without analytics', async () => {
+    analytics.grid.mockClear();
+    const response = await visualGet(visualRequest(completeSiteId, '2026-01-01'));
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ site_id: completeSiteId, source: 'COMMITTED_INTERVAL_DATA_96', selected_date: '2026-01-01',
+      summary: { valid_days: 2, valid_blocks: 192 } });
+    expect(body.selected_profile).toHaveLength(96);
+    expect(body.selected_profile[0]).toMatchObject({ block_index: 1, load_kw: 900 });
+    expect(body.selected_profile[95]).toMatchObject({ block_index: 96, load_kw: 995 });
+    expect(analytics.grid).not.toHaveBeenCalled();
+  });
+
+  it('returns only a recent bounded slice of 426 committed days, anchored at latest complete day', async () => {
+    const response = await visualGet(visualRequest(historySiteId));
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    const body = await response.json();
+    expect(body.selected_date).toBe(historyLatestDate);
+    expect(body.selected_profile).toHaveLength(96);
+    expect(body.summary.valid_days).toBe(30);
+    expect(body.summary.valid_blocks).toBe(2880);
+    expect(body.heatmap).toHaveLength(30);
+    expect(body.daily_trend).toHaveLength(30);
+  });
+
+  it('keeps zero input empty and incomplete day out of PASSED aggregates', async () => {
+    const zero = await (await visualGet(visualRequest(zeroSiteId))).json();
+    expect(zero.summary).toMatchObject({ valid_days: 0, valid_blocks: 0, completeness_pct: 0 });
+    expect(zero.selected_profile).toEqual([]);
+    const incomplete = await (await visualGet(visualRequest(incompleteSiteId, '2026-01-03'))).json();
+    expect(incomplete.selected_profile).toHaveLength(91);
+    expect(incomplete.summary.valid_blocks).toBe(0);
+  });
+
+  it('denies missing/invalid bearer and foreign site while keeping ingestion visualization independent of Grid billing', async () => {
+    const noBearer = await visualGet(new NextRequest(`http://localhost:3000/api/ingestion/load-visualization?site_id=${completeSiteId}`));
+    expect(noBearer.status).toBe(401);
+    expect((await visualGet(visualRequest(completeSiteId, undefined, 'invalid'))).status).toBe(401);
+    const foreign = await visualGet(visualRequest(foreignSiteId));
+    expect(foreign.status).toBe(403);
+    expect((await foreign.json()).error).toBe('FORBIDDEN_ORGANISATION');
+    expect((await visualGet(visualRequest(unentitledSiteId))).status).toBe(200);
+  });
 
   it('reads a committed own-site day as 96/96 independently from forecast output', async () => {
     const response = await inputEvidenceGet(evidenceRequest(completeSiteId, '2026-01-01'));
