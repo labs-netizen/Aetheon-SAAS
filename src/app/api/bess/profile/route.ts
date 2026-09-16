@@ -23,12 +23,26 @@ export async function PATCH(req: NextRequest) {
   const auth = await authorizeApiRequest(req, { siteId, productId: 'BESS_ARBITRAGE', requireBearer: true,
     requiredRoles: ['ORGANISATION_ADMIN','ENERGY_MANAGER'] });
   if (!auth.authorized) return auth.response;
-  const profile = validateBessProfile({ ...body.profile, site_id: siteId, organisation_id: auth.organisationId, is_active: true });
-  if (!profile) return NextResponse.json({ error: 'INVALID_BESS_PROFILE' }, { status: 400 });
+  const input = body?.profile || {};
+  const profile = validateBessProfile({ ...input,
+    nameplate_energy_capacity_kwh: input.nameplate_energy_capacity_kwh ?? input.capacity_kwh,
+    minimum_soc_percent: input.minimum_soc_percent ?? input.min_soc_percent,
+    maximum_soc_percent: input.maximum_soc_percent ?? input.max_soc_percent,
+    final_soc_percent: input.final_soc_percent ?? input.minimum_final_soc_percent ?? null,
+    available_blocks: input.available_blocks ?? null,
+    site_id: siteId, organisation_id: auth.organisationId, is_active: true });
+  if (!profile) return NextResponse.json({ error: 'BESS_PROFILE_VALIDATION_FAILED' }, { status: 422 });
   const { data, error } = await createAdminClient().rpc('upsert_site_bess_simulation_profile', {
     p_actor_id: auth.user.id, p_actor_role: auth.role, p_organisation_id: auth.organisationId,
     p_site_id: siteId, p_profile: profile,
   });
-  if (error || !data) return NextResponse.json({ error: 'BESS_PROFILE_SAVE_FAILED', details: error?.message }, { status: 500 });
+  if (error || !data) {
+    console.error('BESS profile RPC failed', { siteId, organisationId: auth.organisationId, actorId: auth.user.id,
+      code: error?.code, message: error?.message, details: error?.details, hint: error?.hint });
+    if (error?.code === '42501' || /BESS_PROFILE_AUTHORITY_DENIED|permission denied/i.test(error?.message || '')) {
+      return NextResponse.json({ error: 'BESS_PROFILE_WRITE_DENIED' }, { status: 403 });
+    }
+    return NextResponse.json({ error: 'BESS_PROFILE_RPC_FAILED' }, { status: 500 });
+  }
   return NextResponse.json({ configured: true, profile: data, suppression_reason: null });
 }
