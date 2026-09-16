@@ -4,6 +4,7 @@ import { authorizeApiRequest } from '@/lib/auth/api-guard';
 import { LIVE_GRID_BLOCK, validDate, operatingToday, validGridDemo, validGridAnalyticsResponse } from '@/lib/analytics/domain-safety';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadGridHistoricalInput } from '@/lib/analytics/grid-input-evidence';
+import { resolveFlexibilityDecision } from '@/lib/analytics/grid-flexibility';
 
 const nextOperatingDate = (value: string) =>
   new Date(Date.parse(`${value}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
@@ -75,13 +76,24 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'INVALID_ANALYTICS_CONTRACT' }, { status: 502 });
       }
       if (forecastResult.forecast_available === false) {
-        return NextResponse.json({ ...forecastResult, organisation_id: authResult.organisationId, persisted: false });
+        return NextResponse.json({ ...forecastResult, organisation_id: authResult.organisationId, persisted: false,
+          flexibility_decision: { status: 'SUPPRESSED', suppression_reason: forecastResult.suppression_reason || 'VALIDATED_FORECAST_REQUIRED' } });
+      }
+      let flexibilityDecision: unknown;
+      try {
+        flexibilityDecision = await resolveFlexibilityDecision({ client: createAdminClient(), siteId,
+          organisationId: authResult.organisationId, mode: 'LIVE',
+          inputDate: historicalInput.latest_observed_date || operatingDate, targetDate: operatingDate,
+          forecast: forecastResult });
+      } catch {
+        flexibilityDecision = { status: 'SUPPRESSED', suppression_reason: 'FLEXIBILITY_DECISION_EVIDENCE_UNAVAILABLE' };
       }
       return NextResponse.json({
         ...forecastResult,
         organisation_id: authResult.organisationId,
         persisted: false,
-        recommendations_suppressed: true,
+        recommendations_suppressed: (flexibilityDecision as { status?: string }).status !== 'READY',
+        flexibility_decision: flexibilityDecision,
       });
     }
 

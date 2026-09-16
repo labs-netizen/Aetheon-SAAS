@@ -31,6 +31,7 @@ import { PRODUCTS } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 import { HistoricalReplayPanel } from './HistoricalReplayPanel';
 import { EvidenceCurve } from '@/components/shared/EvidenceCurve';
+import { flexibilityChartData, type FlexibilityDecision } from '@/lib/analytics/grid-flexibility';
 
 interface GridInputEvidenceResponse {
   site_id: string;
@@ -89,6 +90,8 @@ export default function GridIntelligencePage() {
   const hasValidForecast = Boolean(forecastResult && !forecastResult.is_suppressed && forecastResult.blocks?.length === 96);
   const hasAuthoritativePriceFeed = Boolean(priceEvidence?.readiness_status === 'READY' &&
     priceEvidence.price_available && priceEvidence.blocks.length === 96);
+  const flexibilityDecision = forecastResult?.flexibility_decision as FlexibilityDecision | { status: 'SUPPRESSED'; suppression_reason: string } | undefined;
+  const flexibilityPoints = flexibilityDecision?.status === 'READY' ? flexibilityChartData(flexibilityDecision) : [];
 
   // Load committed input evidence first, then load forecast output independently.
   useEffect(() => {
@@ -507,6 +510,30 @@ export default function GridIntelligencePage() {
             <strong className="block text-slate-100">Recorded model validation · {forecastResult.selected_model || 'Model unavailable'}</strong>
             MAE {forecastResult.validation_metrics.mae_kw ?? '—'} kW · RMSE {forecastResult.validation_metrics.rmse_kw ?? '—'} kW · sMAPE {forecastResult.validation_metrics.smape_pct ?? '—'}%
           </div>}
+        </section>}
+
+        {!isDemo && <section className="space-y-3" data-testid="live-flexibility-decision">
+          {flexibilityDecision?.status !== 'READY' ? <div className="rounded border border-amber-700 bg-amber-950/30 p-3 text-xs text-amber-200">
+            Load-shift decision SUPPRESSED — {flexibilityDecision?.suppression_reason || 'FLEXIBILITY_PROFILE_REQUIRED'}. Configure explicit limits in Settings.
+          </div> : <>
+            <div className="rounded border border-teal-800 bg-teal-950/20 p-3 text-xs text-slate-200">
+              <strong className="block text-teal-300">{flexibilityDecision.component_label}</strong>
+              Baseline ₹{flexibilityDecision.baseline_indicative_component_inr.toFixed(2)} · optimized ₹{flexibilityDecision.optimized_indicative_component_inr.toFixed(2)} · indicative exchange-energy reduction ₹{flexibilityDecision.indicative_difference_inr.toFixed(2)} ({flexibilityDecision.indicative_difference_pct.toFixed(2)}%) · shifted {flexibilityDecision.shifted_energy_kwh.toFixed(2)} kWh.
+              <div>Excludes CSS, additional surcharge, transmission, wheeling, losses, duties, SLDC charges and other OA costs. This is not landed electricity cost.</div>
+              <div>Uncertainty: {flexibilityDecision.uncertainty_status} · drift: {flexibilityDecision.drift_status} · optimizer {flexibilityDecision.runtime_ms.toFixed(2)} ms.</div>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <EvidenceCurve title="Baseline vs optimized demand" unit="kW" testId="live-flexibility-load-curve" data={flexibilityPoints}
+                series={[{ key: 'baseline_kw', label: 'Baseline forecast', color: '#38bdf8' }, { key: 'optimized_kw', label: 'Constrained optimized', color: '#34d399' }]} />
+              <EvidenceCurve title="Shift delta · negative reduced / positive added" unit="kW" testId="live-flexibility-delta-curve" data={flexibilityPoints}
+                series={[{ key: 'delta_kw', label: 'Shift delta', color: '#f59e0b' }]} />
+            </div>
+            <div className="rounded border border-slate-700 p-3 text-xs text-slate-200">
+              <strong>Recommended source/destination blocks</strong>
+              {flexibilityDecision.recommendations.length === 0 ? <p>No beneficial feasible shift exists under the configured constraints.</p>
+                : flexibilityDecision.recommendations.map((recommendation, index) => <p key={index}>{recommendation.explanation}</p>)}
+            </div>
+          </>}
         </section>}
 
         {/* Quality Gate Check */}

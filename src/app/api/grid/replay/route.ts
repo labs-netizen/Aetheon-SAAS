@@ -5,6 +5,7 @@ import { loadGridHistoricalInput, resolveGridInputEvidence } from '@/lib/analyti
 import { fetchGridForecast } from '@/lib/analytics/client';
 import { calculateReplayOutputs, assessReplayPrices, REPLAY_LABEL, type ReplayPriceRow } from '@/lib/analytics/grid-replay';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { resolveFlexibilityDecision } from '@/lib/analytics/grid-flexibility';
 
 const nextDate = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
@@ -95,9 +96,18 @@ export async function GET(req: NextRequest) {
       Number.isFinite(Number(row.load_kw)) && Number(row.load_kw) >= 0)
       ? actualRows.map((row) => Number(row.load_kw)) : null;
     const outputs = calculateReplayOutputs(forecast, prices.blocks, actual);
+    let flexibilityDecision: unknown;
+    try {
+      flexibilityDecision = await resolveFlexibilityDecision({ client: db, siteId,
+        organisationId: auth.organisationId, mode: 'HISTORICAL_REPLAY', inputDate,
+        targetDate, forecast: historicalForecast });
+    } catch {
+      flexibilityDecision = { status: 'SUPPRESSED', suppression_reason: 'FLEXIBILITY_DECISION_EVIDENCE_UNAVAILABLE' };
+    }
     return NextResponse.json({ ...base, load_status: loadStatus, model_validation_status: forecast.validation_status,
       price_status: 'READY', replay_ready: true, suppression_reason: null, input_evidence: input,
       forecast: historicalForecast, price_evidence: priceEvidence, outputs,
+      flexibility_decision: flexibilityDecision,
       actual_comparison_available: actual !== null,
       actual_load_kw: actual,
     });

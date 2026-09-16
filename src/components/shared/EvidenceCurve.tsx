@@ -6,6 +6,8 @@ export type CurvePoint = { block_index?: number; time?: string; operating_date?:
   average_kw?: number | null; peak_kw?: number | null; forecast_kw?: number | null; actual_kw?: number | null;
   mcp_rs_per_mwh?: number | null; weekday_kw?: number | null; weekend_kw?: number | null;
   empirical_lower_kw?: number | null; empirical_upper_kw?: number | null;
+  baseline_kw?: number | null; optimized_kw?: number | null; delta_kw?: number | null;
+  is_source?: boolean; is_destination?: boolean;
   price_window?: 'LOW' | 'HIGH' | null };
 
 export function EvidenceCurve({ data, title, unit, series, height = 280, testId }: {
@@ -31,6 +33,8 @@ export function EvidenceCurve({ data, title, unit, series, height = 280, testId 
                 {series.map((item) => point[item.key] !== null && point[item.key] !== undefined &&
                   <div key={item.key} style={{ color: item.color }}>{item.label}: {Number(point[item.key]).toLocaleString('en-IN', { maximumFractionDigits: 2 })} {unit}</div>)}
                 {point.price_window && <div className="text-amber-200">Historical {point.price_window === 'LOW' ? 'lower' : 'higher'} MCP window</div>}
+                {point.is_source && <div className="text-rose-300">Recommended source block</div>}
+                {point.is_destination && <div className="text-emerald-300">Recommended destination block</div>}
               </div>;
             }} />
             {series.map((item) => <Line key={item.key} type="linear" dataKey={item.key} name={item.label} stroke={item.color}

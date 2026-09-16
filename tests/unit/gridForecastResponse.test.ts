@@ -35,4 +35,12 @@ describe('Grid input and forecast UI independence', () => {
     expect(page).not.toContain('b.forecast_price_inr_per_mwh ?? b.price_mwh');
     expect(page).toContain('IEX DAM MCP (₹/MWh)');
   });
+
+  it('keeps stale or otherwise suppressed LIVE forecasts ahead of flexibility optimization', () => {
+    expect(forecastRoute.indexOf('forecastResult.forecast_available === false'))
+      .toBeLessThan(forecastRoute.lastIndexOf('resolveFlexibilityDecision'));
+    expect(forecastRoute).toContain("suppression_reason: forecastResult.suppression_reason || 'VALIDATED_FORECAST_REQUIRED'");
+    expect(page).toContain('Load-shift decision SUPPRESSED');
+    expect(page).not.toContain('guaranteed savings');
+  });
 });

@@ -6,6 +6,7 @@ import type { GridForecastResponseContract } from '@/types/analytics-contracts';
 import { REPLAY_LABEL } from '@/lib/analytics/grid-replay';
 import { EvidenceCurve } from '@/components/shared/EvidenceCurve';
 import { replayCurvePoints } from '@/lib/analytics/grid-replay-visualization';
+import { flexibilityChartData, type FlexibilityDecision } from '@/lib/analytics/grid-flexibility';
 
 interface ReplayResponse {
   mode: 'HISTORICAL_REPLAY';
@@ -29,6 +30,7 @@ interface ReplayResponse {
       peak_magnitude_error_kw: number } | null } | null;
   actual_comparison_available: boolean;
   actual_load_kw?: number[] | null;
+  flexibility_decision?: FlexibilityDecision | { status: 'SUPPRESSED'; suppression_reason: string };
 }
 
 export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: string; suggestedInputDate: string | null }) {
@@ -77,6 +79,8 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
     result?.actual_comparison_available ? result.actual_load_kw : null,
     result?.outputs?.price_sensitive_windows.lower_exchange_price_blocks || [],
     result?.outputs?.price_sensitive_windows.higher_exchange_price_blocks || []);
+  const flexibility = result?.flexibility_decision?.status === 'READY' ? result.flexibility_decision : null;
+  const flexibilityPoints = flexibility ? flexibilityChartData(flexibility) : [];
   return (
     <section className="space-y-5" data-testid="historical-replay-panel">
       <div className="sticky top-0 z-20 rounded border-2 border-amber-500 bg-amber-950 p-4 text-amber-100" data-testid="historical-replay-banner">
@@ -154,6 +158,29 @@ export function HistoricalReplayPanel({ siteId, suggestedInputDate }: { siteId: 
           </section>
           {result.replay_ready && result.outputs && result.forecast && (
             <>
+              <section className="space-y-3" data-testid="replay-flexibility-decision">
+                <strong className="block text-amber-200">{REPLAY_LABEL}</strong>
+                {!flexibility ? <div className="rounded border border-amber-700 p-3 text-xs text-amber-200">
+                  Load-shift decision SUPPRESSED — {result.flexibility_decision?.suppression_reason || 'FLEXIBILITY_PROFILE_REQUIRED'}.
+                </div> : <>
+                  <div className="rounded border border-amber-700 p-3 text-xs text-slate-200">
+                    <strong className="block text-amber-200">{flexibility.component_label}</strong>
+                    Baseline ₹{flexibility.baseline_indicative_component_inr.toFixed(2)} · optimized ₹{flexibility.optimized_indicative_component_inr.toFixed(2)} · indicative exchange-energy reduction ₹{flexibility.indicative_difference_inr.toFixed(2)} · shifted {flexibility.shifted_energy_kwh.toFixed(2)} kWh.
+                    <div>NOT LANDED ELECTRICITY COST. Excludes CSS, additional surcharge, transmission, wheeling, losses, duties, SLDC charges and other OA costs.</div>
+                    <div>Uncertainty: {flexibility.uncertainty_status} · drift: {flexibility.drift_status}.</div>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <EvidenceCurve title="Historical baseline vs constrained optimized demand" unit="kW" testId="replay-flexibility-load-curve"
+                      data={flexibilityPoints} series={[{ key: 'baseline_kw', label: 'Baseline forecast', color: '#38bdf8' },
+                        { key: 'optimized_kw', label: 'Constrained optimized', color: '#34d399' }]} />
+                    <EvidenceCurve title="Historical shift delta · negative reduced / positive added" unit="kW" testId="replay-flexibility-delta-curve"
+                      data={flexibilityPoints} series={[{ key: 'delta_kw', label: 'Shift delta', color: '#f59e0b' }]} />
+                  </div>
+                  <div className="rounded border border-amber-700 p-3 text-xs text-slate-200">{flexibility.recommendations.length === 0
+                    ? 'No beneficial feasible shift exists under the configured constraints.'
+                    : flexibility.recommendations.map((recommendation, index) => <p key={index}>{recommendation.explanation}</p>)}</div>
+                </>}
+              </section>
               <div className="grid gap-3 sm:grid-cols-2" data-testid="replay-historical-outputs">
                 <div className="rounded border border-amber-700 p-4 text-sm text-slate-200"><strong className="block text-xs text-amber-200">{REPLAY_LABEL}</strong>
                   FORECAST peak: Block {result.outputs.peak_forecast_block} · {result.outputs.peak_forecast_kw.toFixed(2)} kW</div>

@@ -30,6 +30,7 @@ import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
 import { LoadVisualizationPanel } from '@/features/ingestion/LoadVisualizationPanel';
+import { FlexibilityProfileForm } from '@/features/grid/FlexibilityProfileForm';
 
 function SettingsContent() {
   const searchParams = useSearchParams();
@@ -608,6 +609,7 @@ function SettingsContent() {
 
       {/* Subtab 2: Site Operational Parameters Form */}
       {activeSubTab === 'site' && (
+        <div className="space-y-6">
         <Card variant="default">
           <CardHeader>
             <div>
@@ -691,6 +693,8 @@ function SettingsContent() {
             </div>
           </form>
         </Card>
+        <FlexibilityProfileForm siteId={currentSite.id} />
+        </div>
       )}
 
       {/* Subtab 3: Data Readiness Checklist */}

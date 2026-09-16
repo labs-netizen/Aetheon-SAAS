@@ -41,10 +41,16 @@ describe('historical Grid replay safety', () => {
   let priceRows: ReplayPriceRow[];
   let actualRows: Array<{ block_index: number; load_kw: number; data_quality: string }>;
   let bearerClient: unknown;
+  let flexibilityProfile: Record<string, unknown> | null;
   beforeEach(() => {
     vi.clearAllMocks();
     priceRows = prices();
     actualRows = [];
+    flexibilityProfile = { site_id: siteId, organisation_id: orgId, flexible_load_kw: 100,
+      maximum_shift_energy_kwh_per_day: 25, maximum_upward_shift_kw_per_block: 100,
+      maximum_downward_shift_kw_per_block: 100, earliest_shift_block: 1, latest_shift_block: 96,
+      maximum_shift_duration_blocks: 1, critical_blocks: [], energy_conservation_required: true,
+      minimum_operating_load_kw: 0, maximum_operating_load_kw: 2000, is_active: true };
     const client = { from: (table: string) => ({
       select: () => ({ eq: () => ({ eq: () => ({ order: async () => ({ data: table === 'interval_data_96' ? actualRows : null, error: null }) }),
         maybeSingle: async () => ({ data: { id: siteId, organisation_id: orgId, is_demo: false, contract_demand_value: 1000 }, error: null }) }) }),
@@ -58,9 +64,11 @@ describe('historical Grid replay safety', () => {
     mocks.analytics.mockResolvedValue({ ...liveFixture, site_id: siteId, operating_date: targetDate,
       forecast_target_date: targetDate, latest_input_date: inputDate, training_end_date: inputDate,
       freshness_days: 138, freshness: 'STALE' });
-    mocks.admin.mockReturnValue({ from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({
-      order: async () => ({ data: priceRows, error: null }),
-    }) }) }) }) }) });
+    mocks.admin.mockReturnValue({ from: (table: string) => table === 'site_flexibility_profiles'
+      ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: flexibilityProfile, error: null }) }) }) }
+      : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({
+          order: async () => ({ data: priceRows.map((row) => ({ ...row, import_id: 'import-fixture' })), error: null }),
+        }) }) }) }) } });
   });
 
   it('runs April 30 to May 1 with exact verified 96-block prices and historical-only outputs', async () => {
@@ -75,9 +83,20 @@ describe('historical Grid replay safety', () => {
     expect(body.forecast.recommendations_suppressed).toBe(true);
     expect(body.price_evidence.blocks).toHaveLength(96);
     expect(body.outputs.indicative_iex_energy_component_inr).toBeGreaterThan(0);
+    expect(body.flexibility_decision).toMatchObject({ status: 'READY', mode: 'HISTORICAL_REPLAY',
+      input_date: inputDate, target_date: targetDate });
+    expect(body.flexibility_decision.optimized_indicative_component_inr)
+      .toBeLessThanOrEqual(body.flexibility_decision.baseline_indicative_component_inr);
     expect(mocks.history).toHaveBeenCalledWith(bearerClient, siteId, 426, inputDate);
     expect(mocks.analytics).toHaveBeenCalledWith(expect.objectContaining({ historicalReplay: true, operatingDate: targetDate }));
     expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), { siteId, productId: 'GRID_INTELLIGENCE', requireBearer: true });
+  });
+
+  it('suppresses recommendations when no explicit profile exists without suppressing replay evidence', async () => {
+    flexibilityProfile = null;
+    const body = await (await replayGet(request())).json();
+    expect(body.replay_ready).toBe(true);
+    expect(body.flexibility_decision).toEqual({ status: 'SUPPRESSED', suppression_reason: 'FLEXIBILITY_PROFILE_REQUIRED' });
   });
 
   it('computes target-day actual errors only when 96 committed PASSED blocks exist', async () => {
@@ -189,6 +208,9 @@ describe('historical Grid replay safety', () => {
       expect(container.querySelector('[data-testid="replay-historical-outputs"]')?.textContent).toContain(REPLAY_LABEL);
       expect(container.querySelector('[data-testid="replay-visualizations"]')?.textContent).toContain(REPLAY_LABEL);
       expect(container.querySelector('[data-testid="replay-model-tournament"]')?.textContent).toContain('WALK-FORWARD MODEL TOURNAMENT');
+      expect(container.querySelector('[data-testid="replay-flexibility-decision"]')?.textContent).toContain('INDICATIVE IEX DAM ENERGY COMPONENT');
+      expect(container.querySelector('[data-testid="replay-flexibility-load-curve"]')).not.toBeNull();
+      expect(container.querySelector('[data-testid="replay-flexibility-delta-curve"]')).not.toBeNull();
       expect(container.querySelector('[data-testid="replay-actual-unavailable"]')?.textContent).toContain('no actual series is drawn');
       const table = container.querySelector('[data-testid="replay-block-table"]');
       expect(table?.querySelectorAll('tbody tr')).toHaveLength(96);
