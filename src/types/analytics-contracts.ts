@@ -133,6 +133,38 @@ export interface BESSBehindMeterResponseContract {
   safety_disclaimer: string;
 }
 
+export interface BESSSizingCandidateContract {
+  capacity_kwh: number; power_kw: number; duration_hours: number;
+  energy_charged_kwh: number; energy_discharged_kwh: number;
+  throughput_kwh: number; maximum_throughput_kwh: number; equivalent_full_cycles: number;
+  minimum_soc_percent: number; maximum_soc_percent: number; final_soc_percent: number;
+  charge_power_utilization_percent: number; discharge_power_utilization_percent: number;
+  throughput_utilization_percent: number; usable_energy_utilization_percent: number;
+  baseline_iex_component_inr: number; battery_iex_component_inr: number;
+  gross_iex_component_reduction_inr: number; degradation_cost_inr: number;
+  net_indicative_benefit_inr: number; net_benefit_per_kwh_capacity: number; net_benefit_per_kw_power: number;
+  no_action: boolean; uncertainty_status: string; drift_status: string;
+  pareto_status: 'PARETO_EFFICIENT' | 'DOMINATED'; solve_runtime_ms: number;
+  dispatch: BESSBehindMeterResponseContract;
+}
+
+export interface BESSSizingResponseContract {
+  site_id: string; operating_date: string;
+  analysis_label: 'HISTORICAL BESS SIZING SCREEN'; analyzed_days: 1;
+  evidence_warning: 'SINGLE-DAY HISTORICAL SIZING SCREEN — NOT SUFFICIENT FOR INVESTMENT SIZING';
+  base_profile_id: string; base_max_efc_per_day: number; candidate_count: number;
+  candidates: BESSSizingCandidateContract[];
+  marginal_values: Array<{ dimension: 'CAPACITY' | 'POWER'; fixed_value: number; from_value: number;
+    to_value: number; incremental_net_benefit_inr: number; incremental_benefit_per_unit_inr: number }>;
+  best_candidate: { capacity_kwh: number; power_kw: number; net_indicative_benefit_inr: number };
+  best_per_kwh_candidate: { capacity_kwh: number; power_kw: number; net_indicative_benefit_inr: number };
+  best_per_kw_candidate: { capacity_kwh: number; power_kw: number; net_indicative_benefit_inr: number };
+  compact_value_candidate: { capacity_kwh: number; power_kw: number; net_indicative_benefit_inr: number } | null;
+  pareto_efficient_count: number; dominated_count: number; uncertainty_result: string;
+  total_runtime_ms: number; median_candidate_runtime_ms: number;
+  component_label: 'INDICATIVE IEX DAM ENERGY COMPONENT'; safety_disclaimer: string;
+}
+
 export interface DSMDeviationBlockContract {
   block_index: number;
   scheduled_drawal_kw: number;

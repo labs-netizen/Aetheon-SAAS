@@ -6,6 +6,7 @@ Defines strongly-typed request and response contracts for 96-block numerical pro
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict, field_validator
 from datetime import date
+import math
 
 
 class BlockData(BaseModel):
@@ -322,6 +323,100 @@ class BESSBehindMeterResponse(BaseModel):
     profile: Dict[str, object]
     provenance: Dict[str, object]
     safety_disclaimer: str = "Advisory simulation only. No BMS, inverter, SCADA, bid, trade, or physical dispatch instruction is issued."
+
+
+class BESSSizingRequest(DatedNumericalRequest):
+    site_id: str = Field(..., min_length=1)
+    operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    base_profile_id: str = Field(..., min_length=1)
+    base_profile: Dict[str, object]
+    capacity_candidates_kwh: List[float] = Field(..., min_length=1, max_length=30)
+    power_candidates_kw: List[float] = Field(..., min_length=1, max_length=30)
+    forecast_load_kw: List[float] = Field(..., min_length=96, max_length=96)
+    forecast_lower_kw: Optional[List[float]] = Field(None, min_length=96, max_length=96)
+    forecast_upper_kw: Optional[List[float]] = Field(None, min_length=96, max_length=96)
+    prices_inr_per_mwh: List[float] = Field(..., min_length=96, max_length=96)
+    price_source_reference: str = Field(..., min_length=1)
+    price_source_file_hash: str = Field(..., min_length=1)
+    price_provenance_status: Literal["OFFICIAL_SOURCE_CONFIRMED"]
+    price_verification_status: Literal["VERIFIED"]
+    forecast_model_version: str = Field(..., min_length=1)
+    forecast_selected_model: str = Field(..., min_length=1)
+    forecast_drift_status: str = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_candidates(self) -> "BESSSizingRequest":
+        if len(self.capacity_candidates_kwh) * len(self.power_candidates_kw) > 30:
+            raise ValueError("candidate combinations must not exceed 30")
+        if any(not math.isfinite(value) or value <= 0 for value in self.capacity_candidates_kwh + self.power_candidates_kw):
+            raise ValueError("candidate capacity and power values must be finite and positive")
+        if len(set(self.capacity_candidates_kwh)) != len(self.capacity_candidates_kwh) or len(set(self.power_candidates_kw)) != len(self.power_candidates_kw):
+            raise ValueError("candidate arrays must not contain duplicates")
+        return self
+
+
+class BESSSizingCandidate(BaseModel):
+    capacity_kwh: float
+    power_kw: float
+    duration_hours: float
+    energy_charged_kwh: float
+    energy_discharged_kwh: float
+    throughput_kwh: float
+    maximum_throughput_kwh: float
+    equivalent_full_cycles: float
+    minimum_soc_percent: float
+    maximum_soc_percent: float
+    final_soc_percent: float
+    charge_power_utilization_percent: float
+    discharge_power_utilization_percent: float
+    throughput_utilization_percent: float
+    usable_energy_utilization_percent: float
+    baseline_iex_component_inr: float
+    battery_iex_component_inr: float
+    gross_iex_component_reduction_inr: float
+    degradation_cost_inr: float
+    net_indicative_benefit_inr: float
+    net_benefit_per_kwh_capacity: float
+    net_benefit_per_kw_power: float
+    no_action: bool
+    uncertainty_status: str
+    drift_status: str
+    pareto_status: Literal["PARETO_EFFICIENT", "DOMINATED"]
+    solve_runtime_ms: float
+    dispatch: BESSBehindMeterResponse
+
+
+class BESSSizingMarginal(BaseModel):
+    dimension: Literal["CAPACITY", "POWER"]
+    fixed_value: float
+    from_value: float
+    to_value: float
+    incremental_net_benefit_inr: float
+    incremental_benefit_per_unit_inr: float
+
+
+class BESSSizingResponse(BaseModel):
+    site_id: str
+    operating_date: str
+    analysis_label: str = "HISTORICAL BESS SIZING SCREEN"
+    analyzed_days: int = 1
+    evidence_warning: str = "SINGLE-DAY HISTORICAL SIZING SCREEN — NOT SUFFICIENT FOR INVESTMENT SIZING"
+    base_profile_id: str
+    base_max_efc_per_day: float
+    candidate_count: int
+    candidates: List[BESSSizingCandidate]
+    marginal_values: List[BESSSizingMarginal]
+    best_candidate: Dict[str, float]
+    best_per_kwh_candidate: Dict[str, float]
+    best_per_kw_candidate: Dict[str, float]
+    compact_value_candidate: Optional[Dict[str, float]]
+    pareto_efficient_count: int
+    dominated_count: int
+    uncertainty_result: str
+    total_runtime_ms: float
+    median_candidate_runtime_ms: float
+    component_label: str = "INDICATIVE IEX DAM ENERGY COMPONENT"
+    safety_disclaimer: str = "THIS IS NOT AN INVESTMENT RECOMMENDATION. Project-finance economics are outside this historical screen."
 
 
 class RenewableReconciliationRequest(BaseModel):
