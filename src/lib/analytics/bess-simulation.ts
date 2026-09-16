@@ -59,7 +59,7 @@ export async function loadBessProfile(client: SupabaseClient, siteId: string, or
 }
 
 export async function runBessSimulation(args: { client: SupabaseClient; siteId: string; organisationId: string;
-  targetDate: string; forecast: GridForecastResponseContract; historicalReplay: boolean }) {
+  targetDate: string; forecast: GridForecastResponseContract; historicalReplay: boolean; priceClient?: SupabaseClient }) {
   const profile = await loadBessProfile(args.client, args.siteId, args.organisationId);
   if (!profile) return { status: 'SUPPRESSED', suppression_reason: 'BESS_PROFILE_REQUIRED' };
   if (!args.forecast.forecast_available || args.forecast.blocks.length !== 96) {
@@ -68,7 +68,7 @@ export async function runBessSimulation(args: { client: SupabaseClient; siteId: 
   if (!args.historicalReplay && args.forecast.freshness !== 'RECENT') {
     return { status: 'SUPPRESSED', suppression_reason: 'RECENT_LIVE_FORECAST_REQUIRED' };
   }
-  const { data: prices, error } = await args.client.from('market_price_blocks')
+  const { data: prices, error } = await (args.priceClient || args.client).from('market_price_blocks')
     .select('block_index,mcp_rs_per_mwh,source_reference,source_file_hash,provenance_status,verification_status')
     .eq('exchange','IEX').eq('market_product','DAM').eq('delivery_date',args.targetDate).order('block_index');
   if (error) throw new Error(`BESS_PRICE_LOOKUP_FAILED: ${error.message}`);

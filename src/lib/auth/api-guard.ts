@@ -25,6 +25,7 @@ export interface GuardSuccess {
   role: PlatformRole;
   isDemo: boolean;
   authenticatedClient?: SupabaseClient;
+  site?: SiteScope;
 }
 
 export interface GuardFailure {
@@ -34,13 +35,14 @@ export interface GuardFailure {
 
 export type GuardResult = GuardSuccess | GuardFailure;
 
-type SiteScope = {
+export type SiteScope = {
   id: string;
   organisation_id: string;
   name: string;
   state: string;
   discom: string;
   is_demo: boolean;
+  contract_demand_value: number;
 };
 
 export type SiteLookupResult =
@@ -55,7 +57,7 @@ export async function resolveSiteForAuthorization(
 ): Promise<SiteLookupResult> {
   const authenticatedLookup = await authenticatedClient
     .from('sites')
-    .select('id, organisation_id, name, state, discom, is_demo')
+    .select('id, organisation_id, name, state, discom, is_demo, contract_demand_value')
     .eq('id', siteId)
     .maybeSingle();
 
@@ -70,7 +72,7 @@ export async function resolveSiteForAuthorization(
   // the guard preserve foreign-site 403 versus genuinely nonexistent-site 404.
   const privilegedLookup = await adminClient
     .from('sites')
-    .select('id, organisation_id, name, state, discom, is_demo')
+    .select('id, organisation_id, name, state, discom, is_demo, contract_demand_value')
     .eq('id', siteId)
     .maybeSingle();
 
@@ -232,6 +234,7 @@ export async function authorizeApiRequest(
   // 3. Resolve Organisation and Site Scope
   let resolvedOrgId = options.organisationId;
   let siteIsDemo = false;
+  let resolvedSite: SiteScope | undefined;
   if (options.siteId) {
     const siteLookup = await resolveSiteForAuthorization(authenticatedClient, adminClient, options.siteId);
     if (siteLookup.status === 'LOOKUP_FAILED') {
@@ -258,6 +261,7 @@ export async function authorizeApiRequest(
       };
     }
     const siteData = siteLookup.site;
+    resolvedSite = siteData;
 
     if (resolvedOrgId && resolvedOrgId !== siteData.organisation_id) {
       return { authorized: false, response: NextResponse.json({ error: 'SITE_ORGANISATION_MISMATCH' }, { status: 403 }) };
@@ -390,5 +394,6 @@ export async function authorizeApiRequest(
     role: userRole,
     isDemo: siteIsDemo,
     authenticatedClient,
+    site: resolvedSite,
   };
 }
