@@ -52,6 +52,83 @@ export interface FlexibilityDecision {
   runtime_ms: number;
 }
 
+export interface GroupedFlexibilityAction {
+  action: 'REDUCE' | 'INCREASE';
+  start_block: number;
+  end_block: number;
+  time_window: string;
+  peak_delta_kw: number;
+  energy_kwh: number;
+  average_mcp_rs_per_mwh: number;
+  counterparty_average_mcp_rs_per_mwh: number | null;
+  indicative_effect_inr: number;
+}
+
+export function blockTimeWindow(block: number) {
+  if (!Number.isInteger(block) || block < 1 || block > 96) throw new Error('INVALID_GRID_BLOCK');
+  const format = (minutes: number) => minutes === 1440 ? '24:00'
+    : `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  return `${format((block - 1) * 15)}–${format(block * 15)}`;
+}
+
+export function summarizeFlexibilityDecision(decision: FlexibilityDecision) {
+  const tolerance = 1e-6;
+  const sourceBlocks = decision.delta_kw.flatMap((value, index) => value < -tolerance ? [index + 1] : []);
+  const destinationBlocks = decision.delta_kw.flatMap((value, index) => value > tolerance ? [index + 1] : []);
+  const netEnergyKwh = decision.delta_kw.reduce((sum, value) => sum + value * 0.25, 0);
+  const critical = new Set(decision.flexibility_constraints.critical_blocks);
+  const criticalPass = decision.delta_kw.every((value, index) => !critical.has(index + 1) || Math.abs(value) <= tolerance);
+  const min = decision.flexibility_constraints.minimum_operating_load_kw;
+  const max = decision.flexibility_constraints.maximum_operating_load_kw;
+  const boundsPass = decision.optimized_profile_kw.every((value) =>
+    (min === null || value >= min - tolerance) && (max === null || value <= max + tolerance));
+  return { flexibility_used_kwh: decision.shifted_energy_kwh,
+    configured_maximum_kwh: decision.flexibility_constraints.maximum_shift_energy_kwh_per_day,
+    source_blocks_modified: sourceBlocks.length, destination_blocks_modified: destinationBlocks.length,
+    total_modified_blocks: sourceBlocks.length + destinationBlocks.length,
+    energy_conservation_status: Math.abs(netEnergyKwh) <= tolerance ? 'PASS' as const : 'FAIL' as const,
+    critical_block_status: criticalPass ? 'PASS' as const : 'FAIL' as const,
+    operating_bound_status: boundsPass ? 'PASS' as const : 'FAIL' as const };
+}
+
+export function groupFlexibilityActions(decision: FlexibilityDecision): GroupedFlexibilityAction[] {
+  const groups: Array<{ action: 'REDUCE' | 'INCREASE'; blocks: number[] }> = [];
+  decision.delta_kw.forEach((value, index) => {
+    if (Math.abs(value) <= 1e-7) return;
+    const action = value < 0 ? 'REDUCE' : 'INCREASE';
+    const block = index + 1;
+    const previous = groups.at(-1);
+    if (previous?.action === action && previous.blocks.at(-1) === block - 1) previous.blocks.push(block);
+    else groups.push({ action, blocks: [block] });
+  });
+  const sourceBlocks = decision.delta_kw.flatMap((value, index) => value < -1e-7 ? [index + 1] : []);
+  const destinationBlocks = decision.delta_kw.flatMap((value, index) => value > 1e-7 ? [index + 1] : []);
+  const average = (blocks: number[]) => blocks.length
+    ? blocks.reduce((sum, block) => sum + decision.mcp_rs_per_mwh[block - 1], 0) / blocks.length : null;
+  return groups.map(({ action, blocks }) => {
+    const start = blocks[0]; const end = blocks.at(-1)!;
+    const energy = blocks.reduce((sum, block) => sum + Math.abs(decision.delta_kw[block - 1]) * 0.25, 0);
+    const ownMcp = energy > 0 ? blocks.reduce((sum, block) => sum +
+      decision.mcp_rs_per_mwh[block - 1] * Math.abs(decision.delta_kw[block - 1]) * 0.25, 0) / energy : average(blocks)!;
+    const related = decision.recommendations.filter((recommendation) =>
+      (action === 'REDUCE' ? recommendation.source_blocks : recommendation.destination_blocks)
+        .some((block) => blocks.includes(block)));
+    const relatedEnergy = related.reduce((sum, recommendation) => sum + recommendation.energy_shifted_kwh, 0);
+    const counterpartyMcp = relatedEnergy > 0 ? related.reduce((sum, recommendation) => {
+      const counterpart = action === 'REDUCE' ? recommendation.destination_blocks : recommendation.source_blocks;
+      return sum + (average(counterpart) || 0) * recommendation.energy_shifted_kwh;
+    }, 0) / relatedEnergy : average(action === 'REDUCE' ? destinationBlocks : sourceBlocks);
+    return { action, start_block: start, end_block: end,
+      time_window: `${blockTimeWindow(start).split('–')[0]}–${blockTimeWindow(end).split('–')[1]}`,
+      peak_delta_kw: Math.max(...blocks.map((block) => Math.abs(decision.delta_kw[block - 1]))),
+      energy_kwh: energy, average_mcp_rs_per_mwh: ownMcp,
+      counterparty_average_mcp_rs_per_mwh: counterpartyMcp,
+      indicative_effect_inr: related.length > 0
+        ? related.reduce((sum, recommendation) => sum + recommendation.indicative_impact_inr, 0)
+        : counterpartyMcp === null ? 0 : energy * Math.abs(ownMcp - counterpartyMcp) / 1000 };
+  });
+}
+
 export function validateFlexibilityProfile(value: unknown): SiteFlexibilityProfile | null {
   if (!value || typeof value !== 'object') return null;
   const p = value as SiteFlexibilityProfile;
@@ -175,6 +252,7 @@ export function optimizeGridFlexibility(args: {
 
 export function flexibilityChartData(decision: FlexibilityDecision) {
   return Array.from({ length: 96 }, (_, i) => ({ block_index: i + 1,
+    time: blockTimeWindow(i + 1),
     baseline_kw: decision.baseline_profile_kw[i], optimized_kw: decision.optimized_profile_kw[i],
     delta_kw: decision.delta_kw[i], mcp_rs_per_mwh: decision.mcp_rs_per_mwh[i],
     is_source: decision.delta_kw[i] < 0, is_destination: decision.delta_kw[i] > 0 }));

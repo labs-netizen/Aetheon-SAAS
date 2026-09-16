@@ -31,6 +31,7 @@ import { INDIAN_STATES, VOLTAGE_CATEGORIES, LOAD_CLASSES } from '@/lib/constants
 import { createClient } from '@/lib/supabase/client';
 import { LoadVisualizationPanel } from '@/features/ingestion/LoadVisualizationPanel';
 import { FlexibilityProfileForm } from '@/features/grid/FlexibilityProfileForm';
+import { BessProfileForm } from '@/features/bess/BessProfileForm';
 
 function SettingsContent() {
   const searchParams = useSearchParams();
@@ -694,6 +695,7 @@ function SettingsContent() {
           </form>
         </Card>
         <FlexibilityProfileForm siteId={currentSite.id} />
+        <BessProfileForm siteId={currentSite.id} />
         </div>
       )}
 

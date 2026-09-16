@@ -10,9 +10,10 @@ import os
 from schemas import (
     GridForecastRequest, GridForecastResponse,
     DSMCalculationRequest, DSMCalculationResponse,
-    BESSSolverRequest, BESSSolverResponse,
+    BESSSolverRequest, BESSSolverResponse, BESSBehindMeterRequest, BESSBehindMeterResponse,
     RenewableReconciliationRequest, RenewableReconciliationResponse
 )
+from bess_dispatch import solve_bess_behind_meter
 from solvers import (
     solve_grid_forecast, solve_dsm_deviation,
     solve_bess_advisory, solve_renewable_reconciliation
@@ -77,6 +78,11 @@ def calculate_dsm_deviation(req: DSMCalculationRequest, _=Depends(verify_service
 @app.post("/v1/bess/optimise-demo", response_model=BESSSolverResponse)
 def optimise_bess(req: BESSSolverRequest, _=Depends(verify_service_token)):
     return solve_bess_advisory(req)
+
+
+@app.post("/v1/bess/dispatch", response_model=BESSBehindMeterResponse)
+def dispatch_bess(req: BESSBehindMeterRequest, _=Depends(verify_service_token)):
+    return solve_bess_behind_meter(req)
 
 
 @app.post("/v1/renewables/reconcile", response_model=RenewableReconciliationResponse)

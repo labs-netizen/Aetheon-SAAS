@@ -97,6 +97,42 @@ export interface BESSSolverResponseContract {
   suppression_reason?: string | null;
 }
 
+export interface BESSBehindMeterResponseContract {
+  profile_id: string;
+  site_id: string;
+  operating_date: string;
+  solver_version: 'BESS_BEHIND_METER_SCIPY_MILP_v1.0';
+  simulation_label: 'BEHIND-THE-METER BESS ENERGY-SHIFT SIMULATION';
+  status: 'DISPATCH_IDENTIFIED' | 'NO_ECONOMIC_BESS_DISPATCH_IDENTIFIED' | 'SUPPRESSED';
+  suppression_reason: string | null;
+  feasibility_verified: boolean;
+  uncertainty_status: 'ROBUST' | 'SENSITIVE_TO_FORECAST_UNCERTAINTY' | 'INSUFFICIENT_FORECAST_INTERVAL_EVIDENCE';
+  drift_status: string;
+  baseline_load_kw: number[];
+  optimized_grid_import_kw: number[];
+  charge_kw: number[];
+  discharge_kw: number[];
+  soc_kwh: number[];
+  soc_pct: number[];
+  mcp_inr_per_mwh: number[];
+  baseline_iex_component_inr: number;
+  battery_iex_component_inr: number;
+  gross_iex_component_reduction_inr: number;
+  degradation_cost_inr: number;
+  net_indicative_benefit_inr: number;
+  throughput_kwh: number;
+  equivalent_full_cycles: number;
+  minimum_soc_pct_observed: number;
+  maximum_soc_pct_observed: number;
+  final_soc_pct: number;
+  charge_blocks: number[];
+  discharge_blocks: number[];
+  scenario_net_benefit_inr: Record<string, number>;
+  profile: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  safety_disclaimer: string;
+}
+
 export interface DSMDeviationBlockContract {
   block_index: number;
   scheduled_drawal_kw: number;

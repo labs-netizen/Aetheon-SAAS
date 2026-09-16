@@ -31,7 +31,8 @@ import { PRODUCTS } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 import { HistoricalReplayPanel } from './HistoricalReplayPanel';
 import { EvidenceCurve } from '@/components/shared/EvidenceCurve';
-import { flexibilityChartData, type FlexibilityDecision } from '@/lib/analytics/grid-flexibility';
+import { blockTimeWindow, flexibilityChartData, groupFlexibilityActions, summarizeFlexibilityDecision,
+  type FlexibilityDecision } from '@/lib/analytics/grid-flexibility';
 
 interface GridInputEvidenceResponse {
   site_id: string;
@@ -92,6 +93,8 @@ export default function GridIntelligencePage() {
     priceEvidence.price_available && priceEvidence.blocks.length === 96);
   const flexibilityDecision = forecastResult?.flexibility_decision as FlexibilityDecision | { status: 'SUPPRESSED'; suppression_reason: string } | undefined;
   const flexibilityPoints = flexibilityDecision?.status === 'READY' ? flexibilityChartData(flexibilityDecision) : [];
+  const flexibilitySummary = flexibilityDecision?.status === 'READY' ? summarizeFlexibilityDecision(flexibilityDecision) : null;
+  const groupedFlexibilityActions = flexibilityDecision?.status === 'READY' ? groupFlexibilityActions(flexibilityDecision) : [];
 
   // Load committed input evidence first, then load forecast output independently.
   useEffect(() => {
@@ -516,11 +519,22 @@ export default function GridIntelligencePage() {
           {flexibilityDecision?.status !== 'READY' ? <div className="rounded border border-amber-700 bg-amber-950/30 p-3 text-xs text-amber-200">
             Load-shift decision SUPPRESSED — {flexibilityDecision?.suppression_reason || 'FLEXIBILITY_PROFILE_REQUIRED'}. Configure explicit limits in Settings.
           </div> : <>
-            <div className="rounded border border-teal-800 bg-teal-950/20 p-3 text-xs text-slate-200">
-              <strong className="block text-teal-300">{flexibilityDecision.component_label}</strong>
-              Baseline ₹{flexibilityDecision.baseline_indicative_component_inr.toFixed(2)} · optimized ₹{flexibilityDecision.optimized_indicative_component_inr.toFixed(2)} · indicative exchange-energy reduction ₹{flexibilityDecision.indicative_difference_inr.toFixed(2)} ({flexibilityDecision.indicative_difference_pct.toFixed(2)}%) · shifted {flexibilityDecision.shifted_energy_kwh.toFixed(2)} kWh.
-              <div>Excludes CSS, additional surcharge, transmission, wheeling, losses, duties, SLDC charges and other OA costs. This is not landed electricity cost.</div>
-              <div>Uncertainty: {flexibilityDecision.uncertainty_status} · drift: {flexibilityDecision.drift_status} · optimizer {flexibilityDecision.runtime_ms.toFixed(2)} ms.</div>
+            <div className="rounded border border-teal-800 bg-teal-950/20 p-4 text-xs text-slate-200" data-testid="live-optimization-summary">
+              <strong className="block text-sm text-teal-300">OPTIMIZATION STATUS · {flexibilityDecision.uncertainty_status}</strong>
+              <strong className="mt-2 block">{flexibilityDecision.component_label}</strong>
+              <div className="mt-2 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+                <span>Flexibility used: {flexibilitySummary!.flexibility_used_kwh.toFixed(2)} / {flexibilitySummary!.configured_maximum_kwh.toFixed(2)} kWh</span>
+                <span>Source blocks modified: {flexibilitySummary!.source_blocks_modified}</span>
+                <span>Destination blocks modified: {flexibilitySummary!.destination_blocks_modified}</span>
+                <span>Total modified blocks: {flexibilitySummary!.total_modified_blocks}</span>
+                <span>Energy conservation: {flexibilitySummary!.energy_conservation_status}</span>
+                <span>Critical-block constraint: {flexibilitySummary!.critical_block_status}</span>
+                <span>Operating-bound constraint: {flexibilitySummary!.operating_bound_status}</span>
+                <span>Indicative reduction: ₹{flexibilityDecision.indicative_difference_inr.toFixed(2)} ({flexibilityDecision.indicative_difference_pct.toFixed(2)}%)</span>
+                <span>Drift status: {flexibilityDecision.drift_status}</span>
+              </div>
+              <div className="mt-2">Baseline ₹{flexibilityDecision.baseline_indicative_component_inr.toFixed(2)} · optimized ₹{flexibilityDecision.optimized_indicative_component_inr.toFixed(2)}.</div>
+              <div>NOT LANDED ELECTRICITY COST. Excludes CSS, additional surcharge, transmission, wheeling, losses, duties, SLDC charges and other OA costs.</div>
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
               <EvidenceCurve title="Baseline vs optimized demand" unit="kW" testId="live-flexibility-load-curve" data={flexibilityPoints}
@@ -528,11 +542,23 @@ export default function GridIntelligencePage() {
               <EvidenceCurve title="Shift delta · negative reduced / positive added" unit="kW" testId="live-flexibility-delta-curve" data={flexibilityPoints}
                 series={[{ key: 'delta_kw', label: 'Shift delta', color: '#f59e0b' }]} />
             </div>
-            <div className="rounded border border-slate-700 p-3 text-xs text-slate-200">
-              <strong>Recommended source/destination blocks</strong>
-              {flexibilityDecision.recommendations.length === 0 ? <p>No beneficial feasible shift exists under the configured constraints.</p>
-                : flexibilityDecision.recommendations.map((recommendation, index) => <p key={index}>{recommendation.explanation}</p>)}
-            </div>
+            {groupedFlexibilityActions.length === 0 ? <div className="rounded border border-slate-700 p-4 text-xs text-slate-200" data-testid="live-no-beneficial-shift">
+              <strong>NO BENEFICIAL FEASIBLE SHIFT IDENTIFIED</strong><p>All configured flexibility constraints were respected, but no feasible shift reduced the indicative IEX DAM energy component.</p>
+            </div> : <div className="grid gap-3 md:grid-cols-2" data-testid="live-grouped-recommendations">{groupedFlexibilityActions.map((action) =>
+              <div key={`${action.action}-${action.start_block}`} className="rounded border border-slate-700 p-4 text-xs text-slate-200">
+                <strong className={action.action === 'REDUCE' ? 'text-rose-300' : 'text-emerald-300'}>{action.action === 'REDUCE' ? 'REDUCE FLEXIBLE LOAD' : 'INCREASE / REALLOCATE LOAD'}</strong>
+                <div className="mt-1 text-base font-semibold">{action.time_window}</div><div>Blocks {action.start_block}{action.end_block === action.start_block ? '' : `–${action.end_block}`}</div>
+                <div className="mt-2">Up to {action.peak_delta_kw.toFixed(2)} kW · {action.energy_kwh.toFixed(2)} kWh shifted</div>
+                <div>Average {action.action === 'REDUCE' ? 'source' : 'destination'} MCP: ₹{action.average_mcp_rs_per_mwh.toFixed(2)}/MWh</div>
+                {action.counterparty_average_mcp_rs_per_mwh !== null && <div>{action.action === 'REDUCE' ? 'Destination' : 'Source'} MCP: ₹{action.counterparty_average_mcp_rs_per_mwh.toFixed(2)}/MWh</div>}
+                <div>Indicative ₹ effect: ₹{action.indicative_effect_inr.toFixed(2)}</div>
+              </div>)}</div>}
+            <details className="rounded border border-slate-700 p-3 text-xs text-slate-200"><summary className="cursor-pointer font-semibold">Detailed block-level shifts</summary>
+              <table className="mt-2 w-full text-left"><thead><tr><th>Block / time</th><th>Delta kW</th><th>Energy kWh</th><th>MCP ₹/MWh</th></tr></thead>
+                <tbody>{flexibilityDecision.delta_kw.map((delta, index) => Math.abs(delta) > 1e-7 && <tr key={index} className="border-t border-slate-800">
+                  <td>Block {index + 1} · {blockTimeWindow(index + 1)}</td><td>{delta > 0 ? '+' : ''}{delta.toFixed(2)}</td>
+                  <td>{(Math.abs(delta) * 0.25).toFixed(2)}</td><td>{flexibilityDecision.mcp_rs_per_mwh[index].toFixed(2)}</td></tr>)}</tbody></table>
+            </details>
           </>}
         </section>}
 

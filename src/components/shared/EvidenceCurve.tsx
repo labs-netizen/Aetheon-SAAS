@@ -7,6 +7,7 @@ export type CurvePoint = { block_index?: number; time?: string; operating_date?:
   mcp_rs_per_mwh?: number | null; weekday_kw?: number | null; weekend_kw?: number | null;
   empirical_lower_kw?: number | null; empirical_upper_kw?: number | null;
   baseline_kw?: number | null; optimized_kw?: number | null; delta_kw?: number | null;
+  charge_kw?: number | null; discharge_kw?: number | null; soc_pct?: number | null; mcp?: number | null;
   is_source?: boolean; is_destination?: boolean;
   price_window?: 'LOW' | 'HIGH' | null };
 
@@ -32,6 +33,10 @@ export function EvidenceCurve({ data, title, unit, series, height = 280, testId 
                 <div>{point.operating_date || `Block ${point.block_index} · ${point.time || ''} IST`}</div>
                 {series.map((item) => point[item.key] !== null && point[item.key] !== undefined &&
                   <div key={item.key} style={{ color: item.color }}>{item.label}: {Number(point[item.key]).toLocaleString('en-IN', { maximumFractionDigits: 2 })} {unit}</div>)}
+                {point.baseline_kw !== undefined && point.optimized_kw !== undefined && point.delta_kw !== undefined && point.delta_kw !== null &&
+                  <div className={point.delta_kw < 0 ? 'text-rose-300' : point.delta_kw > 0 ? 'text-emerald-300' : 'text-slate-400'}>
+                    Difference: {point.delta_kw > 0 ? '+' : ''}{point.delta_kw.toLocaleString('en-IN', { maximumFractionDigits: 2 })} kW
+                  </div>}
                 {point.price_window && <div className="text-amber-200">Historical {point.price_window === 'LOW' ? 'lower' : 'higher'} MCP window</div>}
                 {point.is_source && <div className="text-rose-300">Recommended source block</div>}
                 {point.is_destination && <div className="text-emerald-300">Recommended destination block</div>}
@@ -42,6 +47,9 @@ export function EvidenceCurve({ data, title, unit, series, height = 280, testId 
             {data.filter((point) => point.price_window && point.block_index && point.mcp_rs_per_mwh !== null && point.mcp_rs_per_mwh !== undefined)
               .map((point) => <ReferenceDot key={`window-${point.block_index}`} x={point.block_index} y={point.mcp_rs_per_mwh!}
                 r={4} fill={point.price_window === 'LOW' ? '#2dd4bf' : '#fb7185'} stroke="#0f172a" isFront />)}
+            {data.filter((point) => (point.is_source || point.is_destination) && point.block_index && point.optimized_kw !== undefined)
+              .map((point) => <ReferenceDot key={`shift-${point.block_index}`} x={point.block_index} y={point.optimized_kw!}
+                r={3} fill={point.is_source ? '#fb7185' : '#34d399'} stroke="#0f172a" isFront />)}
           </LineChart>
         </ResponsiveContainer>
       </div>}

@@ -3,7 +3,7 @@
  * Communicates server-to-server: Next.js API/Server Actions -> FastAPI (port 8000)
  * Secret tokens are held exclusively on the server and never exposed to client browsers.
  */
-import type { GridForecastResponseContract } from '@/types/analytics-contracts';
+import type { BESSBehindMeterResponseContract, GridForecastResponseContract } from '@/types/analytics-contracts';
 
 const isProduction = process.env.NODE_ENV === 'production';
 const ANALYTICS_BASE_URL = process.env.ANALYTICS_SERVICE_URL || 'http://127.0.0.1:8000';
@@ -52,6 +52,15 @@ export interface BESSSolverParams {
   maintenanceLockActive?: boolean;
   telemetryStale?: boolean;
   interconnectionRestricted?: boolean;
+}
+
+export interface BESSBehindMeterParams {
+  profileId: string; siteId: string; operatingDate: string;
+  profile: Record<string, unknown>;
+  forecastLoadKw: number[]; forecastLowerKw: number[] | null; forecastUpperKw: number[] | null;
+  pricesInrPerMwh: number[];
+  priceSourceReference: string; priceSourceFileHash: string;
+  forecastModelVersion: string; forecastSelectedModel: string; forecastDriftStatus: string;
 }
 
 export interface RenewableReconciliationParams {
@@ -132,6 +141,18 @@ export async function fetchBESSAdvisory(params: BESSSolverParams) {
     discharge_efficiency: params.dischargeEfficiency ?? 0.92,
     degradation_cost_per_cycle_inr: params.degradationCostPerCycleInr ?? 1500.0,
     prices_inr_per_mwh: params.pricesInrPerMwh,
+  });
+}
+
+export async function fetchBESSBehindMeterDispatch(params: BESSBehindMeterParams) {
+  return callAnalyticsEndpoint<BESSBehindMeterResponseContract>('/v1/bess/dispatch', {
+    is_demo: false, profile_id: params.profileId, site_id: params.siteId, operating_date: params.operatingDate,
+    ...params.profile, forecast_load_kw: params.forecastLoadKw, forecast_lower_kw: params.forecastLowerKw,
+    forecast_upper_kw: params.forecastUpperKw, prices_inr_per_mwh: params.pricesInrPerMwh,
+    price_source_reference: params.priceSourceReference, price_source_file_hash: params.priceSourceFileHash,
+    price_provenance_status: 'OFFICIAL_SOURCE_CONFIRMED', price_verification_status: 'VERIFIED',
+    forecast_model_version: params.forecastModelVersion, forecast_selected_model: params.forecastSelectedModel,
+    forecast_drift_status: params.forecastDriftStatus,
   });
 }
 

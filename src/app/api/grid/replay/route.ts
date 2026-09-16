@@ -6,6 +6,7 @@ import { fetchGridForecast } from '@/lib/analytics/client';
 import { calculateReplayOutputs, assessReplayPrices, REPLAY_LABEL, type ReplayPriceRow } from '@/lib/analytics/grid-replay';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveFlexibilityDecision } from '@/lib/analytics/grid-flexibility';
+import { runBessSimulation } from '@/lib/analytics/bess-simulation';
 
 const nextDate = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
@@ -104,10 +105,19 @@ export async function GET(req: NextRequest) {
     } catch {
       flexibilityDecision = { status: 'SUPPRESSED', suppression_reason: 'FLEXIBILITY_DECISION_EVIDENCE_UNAVAILABLE' };
     }
+    let bessSimulation: unknown;
+    try {
+      bessSimulation = await runBessSimulation({ client: db, siteId, organisationId: auth.organisationId,
+        targetDate, forecast: historicalForecast, historicalReplay: true });
+    } catch (error) {
+      bessSimulation = { status: 'SUPPRESSED', suppression_reason: 'BESS_SIMULATION_EVIDENCE_UNAVAILABLE',
+        details: error instanceof Error ? error.message : String(error) };
+    }
     return NextResponse.json({ ...base, load_status: loadStatus, model_validation_status: forecast.validation_status,
       price_status: 'READY', replay_ready: true, suppression_reason: null, input_evidence: input,
       forecast: historicalForecast, price_evidence: priceEvidence, outputs,
       flexibility_decision: flexibilityDecision,
+      bess_simulation: bessSimulation,
       actual_comparison_available: actual !== null,
       actual_load_kw: actual,
     });

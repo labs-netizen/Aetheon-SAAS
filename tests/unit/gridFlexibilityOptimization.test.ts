@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { flexibilityChartData, optimizeGridFlexibility, validateFlexibilityProfile } from '@/lib/analytics/grid-flexibility';
+import { blockTimeWindow, flexibilityChartData, groupFlexibilityActions, optimizeGridFlexibility,
+  summarizeFlexibilityDecision, validateFlexibilityProfile } from '@/lib/analytics/grid-flexibility';
 
 const siteId = 'b4233eac-4f81-4bd2-bab7-8f4e1b1314ab';
 const orgId = '129cfc77-f611-4191-9b9c-b248452e5641';
@@ -22,6 +23,12 @@ const run = (overrides: Record<string, unknown> = {}, priceRows = prices, foreca
     profile: { ...profile, ...overrides } });
 
 describe('constrained Grid demand flexibility', () => {
+  it('converts boundary blocks to auditable 15-minute windows', () => {
+    expect(blockTimeWindow(1)).toBe('00:00–00:15');
+    expect(blockTimeWindow(96)).toBe('23:45–24:00');
+    expect(() => blockTimeWindow(0)).toThrow('INVALID_GRID_BLOCK');
+  });
+
   it('shifts energy deterministically from high to low MCP and lowers only the indicative component', () => {
     const first = run(); const second = run();
     expect(first.delta_kw[79]).toBe(-500);
@@ -46,6 +53,28 @@ describe('constrained Grid demand flexibility', () => {
     expect(Math.min(...decision.delta_kw)).toBeGreaterThanOrEqual(-25);
     expect(decision.delta_kw.filter((value) => value < 0)).toHaveLength(2);
     expect(decision.optimized_profile_kw.every((value) => value >= 950 && value <= 1025)).toBe(true);
+  });
+
+  it('groups only consecutive compatible actions without changing energy totals', () => {
+    const decision = run();
+    const deltas = Array(96).fill(0);
+    deltas[0] = -100; deltas[1] = -100; deltas[3] = -50;
+    deltas[49] = 100; deltas[50] = 100; deltas[52] = 50;
+    const grouped = groupFlexibilityActions({ ...decision, delta_kw: deltas, shifted_energy_kwh: 62.5,
+      optimized_profile_kw: decision.baseline_profile_kw.map((value, index) => value + deltas[index]), modified_blocks: 6 });
+    expect(grouped.map((group) => [group.action, group.start_block, group.end_block])).toEqual([
+      ['REDUCE', 1, 2], ['REDUCE', 4, 4], ['INCREASE', 50, 51], ['INCREASE', 53, 53],
+    ]);
+    expect(grouped.filter((group) => group.action === 'REDUCE').reduce((sum, group) => sum + group.energy_kwh, 0)).toBe(62.5);
+    expect(grouped.filter((group) => group.action === 'INCREASE').reduce((sum, group) => sum + group.energy_kwh, 0)).toBe(62.5);
+    expect(grouped[0].time_window).toBe('00:00–00:30');
+  });
+
+  it('summarizes constraint evidence from unchanged optimization output', () => {
+    expect(summarizeFlexibilityDecision(run())).toMatchObject({ flexibility_used_kwh: 125,
+      configured_maximum_kwh: 125, source_blocks_modified: 1, destination_blocks_modified: 1,
+      total_modified_blocks: 2, energy_conservation_status: 'PASS', critical_block_status: 'PASS',
+      operating_bound_status: 'PASS' });
   });
 
   it('does not force a change without a beneficial price difference', () => {

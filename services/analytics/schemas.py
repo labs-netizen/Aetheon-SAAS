@@ -240,6 +240,90 @@ class BESSSolverResponse(BaseModel):
     )
 
 
+class BESSBehindMeterRequest(DatedNumericalRequest):
+    profile_id: str = Field(..., min_length=1)
+    site_id: str = Field(..., min_length=1)
+    operating_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    nameplate_energy_capacity_kwh: float = Field(..., gt=0)
+    max_charge_power_kw: float = Field(..., gt=0)
+    max_discharge_power_kw: float = Field(..., gt=0)
+    minimum_soc_percent: float = Field(..., ge=0, le=100)
+    maximum_soc_percent: float = Field(..., ge=0, le=100)
+    initial_soc_percent: float = Field(..., ge=0, le=100)
+    final_soc_requirement: Literal["RETURN_TO_INITIAL_SOC", "MINIMUM_FINAL_SOC"]
+    final_soc_percent: Optional[float] = Field(None, ge=0, le=100)
+    charge_efficiency_percent: float = Field(..., gt=0, le=100)
+    discharge_efficiency_percent: float = Field(..., gt=0, le=100)
+    maximum_daily_throughput_kwh: float = Field(..., gt=0)
+    degradation_cost_rs_per_kwh_throughput: float = Field(..., ge=0)
+    available_blocks: Optional[List[int]] = None
+    forecast_load_kw: List[float] = Field(..., min_length=96, max_length=96)
+    forecast_lower_kw: Optional[List[float]] = Field(None, min_length=96, max_length=96)
+    forecast_upper_kw: Optional[List[float]] = Field(None, min_length=96, max_length=96)
+    prices_inr_per_mwh: List[float] = Field(..., min_length=96, max_length=96)
+    price_source_reference: str = Field(..., min_length=1)
+    price_source_file_hash: str = Field(..., min_length=1)
+    price_provenance_status: Literal["OFFICIAL_SOURCE_CONFIRMED"]
+    price_verification_status: Literal["VERIFIED"]
+    forecast_model_version: str = Field(..., min_length=1)
+    forecast_selected_model: str = Field(..., min_length=1)
+    forecast_drift_status: str = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_profile_and_arrays(self) -> "BESSBehindMeterRequest":
+        if self.minimum_soc_percent >= self.maximum_soc_percent:
+            raise ValueError("minimum_soc_percent must be strictly less than maximum_soc_percent")
+        if not self.minimum_soc_percent <= self.initial_soc_percent <= self.maximum_soc_percent:
+            raise ValueError("initial_soc_percent must be within SOC bounds")
+        if self.final_soc_requirement == "MINIMUM_FINAL_SOC" and self.final_soc_percent is None:
+            raise ValueError("final_soc_percent is required for MINIMUM_FINAL_SOC")
+        if self.final_soc_percent is not None and not self.minimum_soc_percent <= self.final_soc_percent <= self.maximum_soc_percent:
+            raise ValueError("final_soc_percent must be within SOC bounds")
+        if self.available_blocks is not None and (len(set(self.available_blocks)) != len(self.available_blocks) or
+                                                   any(block < 1 or block > 96 for block in self.available_blocks)):
+            raise ValueError("available_blocks must contain unique block indexes from 1 to 96")
+        if any(value < 0 for values in [self.forecast_load_kw, self.forecast_lower_kw or [], self.forecast_upper_kw or []]
+               for value in values):
+            raise ValueError("forecast load values must be non-negative")
+        return self
+
+
+class BESSBehindMeterResponse(BaseModel):
+    profile_id: str
+    site_id: str
+    operating_date: str
+    solver_version: str = "BESS_BEHIND_METER_SCIPY_MILP_v1.0"
+    simulation_label: str = "BEHIND-THE-METER BESS ENERGY-SHIFT SIMULATION"
+    status: str
+    suppression_reason: Optional[str] = None
+    feasibility_verified: bool
+    uncertainty_status: str
+    drift_status: str
+    baseline_load_kw: List[float]
+    optimized_grid_import_kw: List[float]
+    charge_kw: List[float]
+    discharge_kw: List[float]
+    soc_kwh: List[float]
+    soc_pct: List[float]
+    mcp_inr_per_mwh: List[float]
+    baseline_iex_component_inr: float
+    battery_iex_component_inr: float
+    gross_iex_component_reduction_inr: float
+    degradation_cost_inr: float
+    net_indicative_benefit_inr: float
+    throughput_kwh: float
+    equivalent_full_cycles: float
+    minimum_soc_pct_observed: float
+    maximum_soc_pct_observed: float
+    final_soc_pct: float
+    charge_blocks: List[int]
+    discharge_blocks: List[int]
+    scenario_net_benefit_inr: Dict[str, float]
+    profile: Dict[str, object]
+    provenance: Dict[str, object]
+    safety_disclaimer: str = "Advisory simulation only. No BMS, inverter, SCADA, bid, trade, or physical dispatch instruction is issued."
+
+
 class RenewableReconciliationRequest(BaseModel):
     site_id: str
     operating_date: str

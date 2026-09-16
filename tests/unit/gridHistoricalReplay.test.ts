@@ -189,6 +189,35 @@ describe('historical Grid replay safety', () => {
     expect(panel).toContain('NOT LIVE OPERATIONAL ADVICE');
     expect(panel).toContain('result.replay_ready && result.outputs');
     expect(panel).not.toContain('landed electricity cost');
+    expect(page).not.toContain('landed electricity cost');
+    expect(panel).toContain('NO BENEFICIAL FEASIBLE SHIFT IDENTIFIED');
+  });
+
+  it('renders the no-action state without forcing a recommendation and retains the replay warning', async () => {
+    const previousActEnvironment = (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const body = await (await replayGet(request())).json();
+    body.flexibility_decision.delta_kw = Array(96).fill(0);
+    body.flexibility_decision.optimized_profile_kw = [...body.flexibility_decision.baseline_profile_kw];
+    body.flexibility_decision.shifted_energy_kwh = 0;
+    body.flexibility_decision.modified_blocks = 0;
+    body.flexibility_decision.indicative_difference_inr = 0;
+    body.flexibility_decision.indicative_difference_pct = 0;
+    body.flexibility_decision.recommendations = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
+    const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(HistoricalReplayPanel, { siteId, suggestedInputDate: inputDate })));
+      await act(async () => (container.querySelector('[data-testid="run-historical-replay"]') as HTMLButtonElement).click());
+      const state = container.querySelector('[data-testid="replay-no-beneficial-shift"]');
+      expect(state?.textContent).toContain('NO BENEFICIAL FEASIBLE SHIFT IDENTIFIED');
+      expect(state?.textContent).toContain(REPLAY_LABEL);
+      expect(state?.textContent).toContain('constraints were respected');
+    } finally {
+      await act(async () => root.unmount()); container.remove(); fetchMock.mockRestore(); vi.unstubAllGlobals();
+      (globalThis as any).IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+    }
   });
 
   it('renders the real replay response as historical and keeps 96 forecast, actual and IEX MCP columns distinct', async () => {
