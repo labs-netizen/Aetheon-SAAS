@@ -247,10 +247,12 @@ export default function DashboardPage() {
             </div>
             <h4 className="font-semibold text-slate-100 mb-1">{PRODUCTS.BESS_ARBITRAGE.name}</h4>
             <p className="text-xs text-slate-400 mb-4 line-clamp-2">{PRODUCTS.BESS_ARBITRAGE.description}</p>
-            <Link href="/bess">
-              <Button variant="outline" size="sm" className="w-full text-xs">
-                View Opportunity Windows
-              </Button>
+            <Link
+              href="/bess"
+              data-testid="launch-bess-module"
+              className="inline-flex w-full items-center justify-center rounded-md border border-slate-700 bg-transparent px-2.5 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-secondary"
+            >
+              View Opportunity Windows
             </Link>
           </Card>
 
