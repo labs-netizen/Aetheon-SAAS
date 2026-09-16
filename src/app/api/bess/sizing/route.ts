@@ -8,6 +8,7 @@ import { loadBessProfile } from '@/lib/analytics/bess-simulation';
 import { requestBessSizing, validateSizingCandidates } from '@/lib/analytics/bess-sizing';
 
 const nextDate = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+const previousDate = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
 
 export async function POST(req: NextRequest) {
   if (!req.headers.get('authorization')?.startsWith('Bearer ')) {
@@ -16,12 +17,19 @@ export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'INVALID_SIZING_REQUEST' }, { status: 400 }); }
   const siteId = typeof body.site_id === 'string' ? body.site_id : '';
-  const inputDate = body.input_date;
+  if (Array.isArray(body.selected_target_dates) || Array.isArray(body.target_dates)) {
+    return NextResponse.json({ error: 'ONE_HISTORICAL_TARGET_DATE_PER_REQUEST' }, { status: 400 });
+  }
+  const requestedTargetDate = body.target_date;
+  const inputDate = validDate(requestedTargetDate) ? previousDate(requestedTargetDate) : body.input_date;
   const grid = validateSizingCandidates(body.capacity_candidates_kwh, body.power_candidates_kw);
   if (!siteId || !validDate(inputDate) || !grid) {
     return NextResponse.json({ error: 'INVALID_SIZING_REQUEST' }, { status: 400 });
   }
   const targetDate = nextDate(inputDate);
+  if (validDate(requestedTargetDate) && requestedTargetDate !== targetDate) {
+    return NextResponse.json({ error: 'INVALID_SIZING_REQUEST' }, { status: 400 });
+  }
   if (targetDate >= operatingToday()) {
     return NextResponse.json({ error: 'HISTORICAL_TARGET_DATE_REQUIRED' }, { status: 400 });
   }

@@ -34,6 +34,11 @@ describe('BESS historical sizing route',()=>{
     expect((await POST(request(body))).status).toBe(403);expect(mocks.evidence).not.toHaveBeenCalled();expect(mocks.profile).not.toHaveBeenCalled();});
   it('requires bearer auth and a bounded valid candidate grid',async()=>{expect((await POST(request(body,''))).status).toBe(401);
     expect((await POST(request({...body,capacity_candidates_kwh:Array.from({length:31},(_,i)=>i+1)}))).status).toBe(400);});
+  it('enforces exactly one target date per bounded compute request',async()=>{
+    expect((await POST(request({...body,selected_target_dates:['2026-05-01','2026-05-02']}))).status).toBe(400);
+    const response=await POST(request({...body,input_date:undefined,target_date:'2026-05-01'}));expect(response.status).toBe(200);
+    expect(mocks.history).toHaveBeenLastCalledWith(tenant,siteId,426,'2026-04-30');
+  });
   it('fails closed when profile, forecast, or exact-date verified prices are unavailable',async()=>{mocks.profile.mockResolvedValue(null);expect((await POST(request(body))).status).toBe(422);
     mocks.profile.mockResolvedValue({});mocks.from.mockReturnValue({select(){return this},eq(){return this},order:vi.fn().mockResolvedValue({data:prices.slice(1),error:null})});
     expect((await POST(request(body))).status).toBe(422);});

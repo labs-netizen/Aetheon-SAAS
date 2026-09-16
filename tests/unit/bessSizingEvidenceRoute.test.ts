@@ -1,0 +1,16 @@
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {NextRequest,NextResponse} from 'next/server';
+vi.mock('server-only',()=>({}));
+const mocks=vi.hoisted(()=>({authorize:vi.fn(),history:vi.fn(),profile:vi.fn(),prices:vi.fn(),catalog:vi.fn()}));
+vi.mock('@/lib/auth/api-guard',()=>({authorizeApiRequest:mocks.authorize}));
+vi.mock('@/lib/analytics/grid-input-evidence',()=>({loadGridHistoricalInput:mocks.history}));
+vi.mock('@/lib/analytics/bess-simulation',()=>({loadBessProfile:mocks.profile}));
+vi.mock('@/lib/analytics/bess-sizing-evidence',()=>({loadBessSizingPriceEvidence:mocks.prices,buildBessSizingEvidenceCatalog:mocks.catalog}));
+vi.mock('@/lib/supabase/admin',()=>({createAdminClient:()=>({})}));
+vi.mock('@/lib/analytics/domain-safety',()=>({operatingToday:()=> '2026-09-16'}));
+import {GET} from '@/app/api/bess/sizing/evidence/route';
+const siteId='site-1',client={} as any;const request=(token='token')=>new NextRequest(`http://localhost/api/bess/sizing/evidence?site_id=${siteId}`,{headers:token?{Authorization:`Bearer ${token}`}:{}});
+describe('BESS sizing evidence endpoint',()=>{beforeEach(()=>{vi.clearAllMocks();mocks.authorize.mockResolvedValue({authorized:true,organisationId:'org',isDemo:false,authenticatedClient:client,site:{id:siteId,organisation_id:'org'}});mocks.history.mockResolvedValue({complete_days:[]});mocks.profile.mockResolvedValue({});mocks.prices.mockResolvedValue([]);mocks.catalog.mockReturnValue([]);});
+  it('authenticates, authorizes BESS entitlement and returns sanitized catalog',async()=>{const response=await GET(request());expect(response.status).toBe(200);expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(),{siteId,productId:'BESS_ARBITRAGE',requireBearer:true});expect(mocks.catalog).toHaveBeenCalled();});
+  it('denies cross-tenant access before any evidence load',async()=>{mocks.authorize.mockResolvedValue({authorized:false,response:NextResponse.json({error:'SITE_ACCESS_DENIED'},{status:403})});expect((await GET(request())).status).toBe(403);expect(mocks.history).not.toHaveBeenCalled();expect(mocks.prices).not.toHaveBeenCalled();});
+  it('requires bearer authentication',async()=>{expect((await GET(request(''))).status).toBe(401);expect(mocks.authorize).not.toHaveBeenCalled();});});

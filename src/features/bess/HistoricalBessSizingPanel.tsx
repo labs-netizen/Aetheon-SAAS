@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/client';
 import { BessSimulationPanel } from '@/features/bess/BessSimulationPanel';
 import { BESS_SIZING_LABEL, BESS_SIZING_WARNING, candidateName, sizingCandidate, sizingHeatmap } from '@/lib/analytics/bess-sizing-presentation';
 import type { BESSSizingCandidateContract, BESSSizingResponseContract } from '@/types/analytics-contracts';
+import { MultiDayBessSizingPanel } from '@/features/bess/MultiDayBessSizingPanel';
 
 const defaultCapacities=[500,1000,1500,2000,3000,4000];
 const defaultPowers=[250,500,750,1000];
@@ -11,6 +12,7 @@ const money=(value:number)=>`₹${value.toLocaleString(undefined,{maximumFractio
 const parseCandidates=(value:string)=>value.split(',').map(item=>Number(item.trim())).filter(Number.isFinite);
 
 export function HistoricalBessSizingPanel({siteId}:{siteId:string}) {
+  const [mode,setMode]=useState<'single'|'multi'>('single');
   const [inputDate,setInputDate]=useState('');
   const [capacityInput,setCapacityInput]=useState(defaultCapacities.join(', '));
   const [powerInput,setPowerInput]=useState(defaultPowers.join(', '));
@@ -31,6 +33,8 @@ export function HistoricalBessSizingPanel({siteId}:{siteId:string}) {
     setResult(body.result);setSelected(sizingCandidate(body.result,body.result.best_candidate.capacity_kwh,body.result.best_candidate.power_kw));
   }catch(failure){setError(failure instanceof Error?failure.message:String(failure));}finally{setLoading(false);}}
   return <section className="space-y-4 rounded border border-purple-800 p-4" data-testid="historical-bess-sizing">
+    <div className="flex gap-2"><button className={`rounded px-3 py-2 text-sm ${mode==='single'?'bg-purple-700':'border border-slate-700'}`} onClick={()=>setMode('single')}>Single Day</button><button className={`rounded px-3 py-2 text-sm ${mode==='multi'?'bg-purple-700':'border border-slate-700'}`} onClick={()=>setMode('multi')}>Multi-Day Evidence</button></div>
+    {mode==='multi'?<MultiDayBessSizingPanel siteId={siteId}/>:<>
     <header><h2 className="font-bold text-purple-200">{BESS_SIZING_LABEL}</h2><strong className="text-xs text-amber-200">{BESS_SIZING_WARNING}</strong>
       <p className="text-xs text-slate-400">THIS IS NOT AN INVESTMENT RECOMMENDATION. Candidate values cover only the analyzed historical day and the INDICATIVE IEX DAM ENERGY COMPONENT.</p></header>
     <div className="flex flex-wrap items-end gap-3"><label className="text-xs">Forecast input cutoff<input aria-label="Sizing input date" className="mt-1 block rounded border border-slate-700 bg-slate-950 p-2" type="date" value={inputDate} onChange={event=>setInputDate(event.target.value)}/></label>
@@ -45,6 +49,7 @@ export function HistoricalBessSizingPanel({siteId}:{siteId:string}) {
       <div className="overflow-x-auto"><h3 className="font-semibold">Marginal value steps</h3><table className="w-full text-xs"><thead><tr><th>Dimension</th><th>Fixed value</th><th>Step</th><th>Incremental benefit</th><th>Benefit per added unit</th></tr></thead><tbody>{result.marginal_values.map((step,index)=><tr key={`${step.dimension}-${step.fixed_value}-${index}`} className="border-t border-slate-800"><td>{step.dimension}</td><td>{step.fixed_value}</td><td>{step.from_value} → {step.to_value}</td><td>{money(step.incremental_net_benefit_inr)}</td><td>{money(step.incremental_benefit_per_unit_inr)}</td></tr>)}</tbody></table></div>
       <div className="overflow-x-auto"><h3 className="font-semibold">Economic frontier and utilization</h3><table className="w-full text-xs"><thead><tr><th>Capacity</th><th>Power</th><th>Duration</th><th>Net benefit</th><th>Gross reduction</th><th>Degradation</th><th>EFC</th><th>Power / throughput / SOC use</th><th>Uncertainty</th><th>Pareto status</th></tr></thead><tbody>{result.candidates.map(candidate=><tr key={`${candidate.capacity_kwh}-${candidate.power_kw}`} className="border-t border-slate-800"><td><button className="p-2 text-left text-purple-300 underline" onClick={()=>setSelected(candidate)}>{candidate.capacity_kwh} kWh</button></td><td>{candidate.power_kw} kW</td><td>{candidate.duration_hours.toFixed(2)} h</td><td>{money(candidate.net_indicative_benefit_inr)}</td><td>{money(candidate.gross_iex_component_reduction_inr)}</td><td>{money(candidate.degradation_cost_inr)}</td><td>{candidate.equivalent_full_cycles.toFixed(3)}</td><td>{Math.max(candidate.charge_power_utilization_percent,candidate.discharge_power_utilization_percent).toFixed(1)}% / {candidate.throughput_utilization_percent.toFixed(1)}% / {candidate.usable_energy_utilization_percent.toFixed(1)}%</td><td>{candidate.uncertainty_status}</td><td>{candidate.pareto_status}</td></tr>)}</tbody></table></div>
       {selected&&<div data-testid="sizing-candidate-detail"><h3 className="mb-2 font-semibold">Candidate detail · {candidateName(selected)}</h3><BessSimulationPanel result={selected.dispatch} historical/></div>}</>}
+    </>}
   </section>;
 }
 function Metric({title,value}:{title:string;value:string}){return <div className="rounded border border-slate-700 p-3"><div className="text-xs text-slate-400">{title}</div><strong className="text-sm">{value}</strong></div>}
