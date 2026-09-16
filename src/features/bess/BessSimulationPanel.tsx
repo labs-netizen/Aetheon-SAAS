@@ -1,7 +1,7 @@
 'use client';
 import type { BESSBehindMeterResponseContract } from '@/types/analytics-contracts';
 import { EvidenceCurve } from '@/components/shared/EvidenceCurve';
-import { BESS_COMPONENT_LABEL, BESS_SIMULATION_LABEL, groupBessDispatch } from '@/lib/analytics/bess-simulation';
+import { BESS_COMPONENT_LABEL, BESS_SIMULATION_LABEL, groupBessDispatch } from '@/lib/analytics/bess-presentation';
 import { blockTimeWindow } from '@/lib/analytics/grid-flexibility';
 
 export function BessSimulationPanel({ result, historical=false }: { result: BESSBehindMeterResponseContract | {status:string;suppression_reason?:string|null}; historical?:boolean }) {

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runBessSimulation } from '@/lib/analytics/bess-simulation';
 import type { GridForecastResponseContract } from '@/types/analytics-contracts';
 
+vi.mock('server-only',()=>({}));
+
 const analytics=vi.hoisted(()=>({dispatch:vi.fn()}));
 vi.mock('@/lib/analytics/client',()=>({fetchBESSBehindMeterDispatch:analytics.dispatch}));
 

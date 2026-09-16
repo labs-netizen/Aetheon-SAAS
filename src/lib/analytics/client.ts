@@ -1,3 +1,5 @@
+import 'server-only';
+
 /**
  * Server-Side Typed Client for Python FastAPI Analytics Microservice
  * Communicates server-to-server: Next.js API/Server Actions -> FastAPI (port 8000)

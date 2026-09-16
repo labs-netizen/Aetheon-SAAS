@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { BESS_SIMULATION_LABEL, groupBessDispatch, validateBessProfile, validBessSimulationResponse } from '@/lib/analytics/bess-simulation';
+import { vi } from 'vitest';
+vi.mock('server-only', () => ({}));
+import { validateBessProfile, validBessSimulationResponse } from '@/lib/analytics/bess-simulation';
+import { BESS_SIMULATION_LABEL, groupBessDispatch } from '@/lib/analytics/bess-presentation';
 import type { BESSBehindMeterResponseContract } from '@/types/analytics-contracts';
 
 const profile = { site_id:'site-1',organisation_id:'org-1',nameplate_energy_capacity_kwh:2000,max_charge_power_kw:500,
