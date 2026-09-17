@@ -31,11 +31,13 @@ export async function requestBessSizing(args:{siteId:string;targetDate:string;pr
   forecast:GridForecastResponseContract;prices:Array<{block_index:number;mcp_rs_per_mwh:number;source_reference:string;
     source_file_hash:string;provenance_status:string;verification_status:string}>;capacities:number[];powers:number[]}) {
   const blocks=args.forecast.blocks;
+  const lowerBounds=blocks.map(block=>block.confidence_lower_kw??block.lower_bound_kw);
+  const upperBounds=blocks.map(block=>block.confidence_upper_kw??block.upper_bound_kw);
   const result=await fetchBESSSizing({baseProfileId:args.siteId,siteId:args.siteId,operatingDate:args.targetDate,
     profile:{...args.profile},capacityCandidatesKwh:args.capacities,powerCandidatesKw:args.powers,
     forecastLoadKw:blocks.map((block)=>block.forecast_load_kw),
-    forecastLowerKw:blocks.every((block)=>Number.isFinite(block.confidence_lower_kw))?blocks.map((block)=>Number(block.confidence_lower_kw)):null,
-    forecastUpperKw:blocks.every((block)=>Number.isFinite(block.confidence_upper_kw))?blocks.map((block)=>Number(block.confidence_upper_kw)):null,
+    forecastLowerKw:lowerBounds.every(value=>Number.isFinite(value))?lowerBounds.map(Number):null,
+    forecastUpperKw:upperBounds.every(value=>Number.isFinite(value))?upperBounds.map(Number):null,
     pricesInrPerMwh:args.prices.map((row)=>Number(row.mcp_rs_per_mwh)),
     priceSourceReference:args.prices[0].source_reference,priceSourceFileHash:args.prices[0].source_file_hash,
     forecastModelVersion:args.forecast.model_version,forecastSelectedModel:args.forecast.selected_model||'UNAVAILABLE',

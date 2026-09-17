@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from 'vitest';
-import {aggregateMultiDaySizing,runSequentialSizing} from '@/lib/analytics/bess-multiday';
+import {aggregateMultiDaySizing,runSequentialSizing,selectableBessSizingDates} from '@/lib/analytics/bess-multiday';
 import type {BESSSizingResponseContract} from '@/types/analytics-contracts';
 import fs from 'node:fs';
 
@@ -10,8 +10,8 @@ const candidate=(capacity:number,power:number,net:number,noAction=false,uncertai
   gross_iex_component_reduction_inr:net+5,degradation_cost_inr:5,net_indicative_benefit_inr:net,net_benefit_per_kwh_capacity:net/capacity,
   net_benefit_per_kw_power:net/power,no_action:noAction,uncertainty_status:uncertainty,drift_status:'NORMAL',pareto_status:'PARETO_EFFICIENT' as const,
   solve_runtime_ms:1,dispatch:{} as any});
-const day=(date:string,values:number[],noAction=false)=>({date,request_runtime_ms:Number(date.slice(-2))*100,result:{site_id:'site',operating_date:date,
-  candidates:[candidate(500,250,values[0],noAction),candidate(1000,250,values[1]),candidate(500,500,values[2])],
+const day=(date:string,values:number[],noAction=false,uncertainty='ROBUST')=>({date,request_runtime_ms:Number(date.slice(-2))*100,result:{site_id:'site',operating_date:date,
+  candidates:[candidate(500,250,values[0],noAction,uncertainty),candidate(1000,250,values[1],false,uncertainty),candidate(500,500,values[2],false,uncertainty)],
   best_candidate:{},candidate_count:3} as unknown as BESSSizingResponseContract});
 
 describe('multi-day BESS sizing aggregation',()=>{
@@ -33,6 +33,12 @@ describe('multi-day BESS sizing aggregation',()=>{
     expect(aggregateMultiDaySizing(seven)?.evidence_status).toBe('MULTI_DAY_SCREEN_AVAILABLE');
     expect(aggregateMultiDaySizing(seven)?.leader_stability).toBe('SIZING_LEADER_STABLE_ACROSS_ANALYZED_DAYS');
   });
+  it('separates robust, sensitive, and insufficient interval evidence and selects only ready dates',()=>{
+    const result=aggregateMultiDaySizing([day('2026-01-01',[1,2,1],false,'ROBUST'),day('2026-01-02',[1,2,1],false,'SENSITIVE_TO_FORECAST_UNCERTAINTY'),
+      day('2026-01-03',[1,2,1],false,'INSUFFICIENT_FORECAST_INTERVAL_EVIDENCE')])!;
+    expect(result.best_candidate).toMatchObject({uncertainty_robust_days:1,uncertainty_sensitive_days:1,uncertainty_insufficient_interval_days:1});
+    expect(selectableBessSizingDates([{date:'ready',sizing_ready:true},{date:'invalid',sizing_ready:false}])).toEqual(['ready']);
+  });
   it('processes unique dates sequentially and retains per-day failures',async()=>{
     const order:string[]=[];const outcome=await runSequentialSizing(['2026-01-02','2026-01-01','2026-01-01'],async date=>{order.push(date);if(date.endsWith('02'))throw new Error('DAY_FAILED');return date;},()=>false);
     expect(order).toEqual(['2026-01-01','2026-01-02']);expect(outcome.completed).toHaveLength(1);expect(outcome.failures).toEqual([{date:'2026-01-02',error:'DAY_FAILED'}]);
@@ -44,5 +50,6 @@ describe('multi-day BESS sizing aggregation',()=>{
   });
   it('contains required safety labels without investment calculations',()=>{const source=fs.readFileSync('src/features/bess/MultiDayBessSizingPanel.tsx','utf8');
     expect(source).toContain('NOT AN INVESTMENT RECOMMENDATION');expect(source).toContain('NOT ANNUALIZED');expect(source).toContain('NOT LANDED ELECTRICITY COST');
+    expect(source).toContain('READY FOR SIZING');expect(source).toContain('VERIFIED PRICE — SIZING UNAVAILABLE');expect(source).toContain('Select all READY');
     expect(source).not.toMatch(/payback|\bROI\b|\bNPV\b|\bIRR\b/i);});
 });

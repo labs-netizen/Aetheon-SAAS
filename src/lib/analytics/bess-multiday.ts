@@ -8,7 +8,9 @@ export interface AggregatedSizingCandidate {
   mean_daily_net_benefit:number;median_daily_net_benefit:number;minimum_daily_net_benefit:number;maximum_daily_net_benefit:number;
   p10_daily_net_benefit:number;p90_daily_net_benefit:number;standard_deviation:number;positive_day_percent:number;
   no_action_day_percent:number;median_efc:number;median_throughput_kwh:number;mean_power_utilization_percent:number;
-  mean_usable_energy_utilization_percent:number;uncertainty_robust_day_percent:number;leader_days:number;leader_percent:number;
+  mean_usable_energy_utilization_percent:number;uncertainty_robust_days:number;uncertainty_sensitive_days:number;
+  uncertainty_insufficient_interval_days:number;uncertainty_robust_day_percent:number;uncertainty_sensitive_day_percent:number;
+  uncertainty_insufficient_interval_day_percent:number;leader_days:number;leader_percent:number;
   pareto_status:MultiDayPareto;daily_net_benefits:Array<{date:string;value:number}>;
 }
 const mean=(values:number[])=>values.reduce((sum,value)=>sum+value,0)/values.length;
@@ -16,6 +18,7 @@ const percentile=(values:number[],fraction:number)=>{const sorted=[...values].so
   const low=Math.floor(position),high=Math.ceil(position);return sorted[low]+(sorted[high]-sorted[low])*(position-low);};
 const median=(values:number[])=>percentile(values,.5);
 const key=(candidate:Pick<BESSSizingCandidateContract,'capacity_kwh'|'power_kw'>)=>`${candidate.capacity_kwh}:${candidate.power_kw}`;
+export const selectableBessSizingDates=<T extends {date:string;sizing_ready:boolean}>(days:T[])=>days.filter(day=>day.sizing_ready).map(day=>day.date);
 
 export function aggregateMultiDaySizing(days:CompletedSizingDay[]){
   if(!days.length)return null;
@@ -25,6 +28,9 @@ export function aggregateMultiDaySizing(days:CompletedSizingDay[]){
   const first=days[0].result.candidates;const candidates:AggregatedSizingCandidate[]=first.map(seed=>{
     const series=days.map(day=>{const candidate=day.result.candidates.find(item=>key(item)===key(seed));if(!candidate)throw new Error('MULTI_DAY_CANDIDATE_GRID_MISMATCH');return {date:day.date,candidate};});
     const net=series.map(item=>item.candidate.net_indicative_benefit_inr);const average=mean(net);
+    const robustDays=series.filter(item=>item.candidate.uncertainty_status==='ROBUST').length;
+    const sensitiveDays=series.filter(item=>item.candidate.uncertainty_status==='SENSITIVE_TO_FORECAST_UNCERTAINTY').length;
+    const insufficientDays=series.filter(item=>item.candidate.uncertainty_status.includes('INSUFFICIENT')).length;
     return {capacity_kwh:seed.capacity_kwh,power_kw:seed.power_kw,duration_hours:seed.duration_hours,analyzed_days:days.length,
       dispatch_days:series.filter(item=>!item.candidate.no_action).length,no_action_days:series.filter(item=>item.candidate.no_action).length,
       mean_daily_net_benefit:average,median_daily_net_benefit:median(net),minimum_daily_net_benefit:Math.min(...net),maximum_daily_net_benefit:Math.max(...net),
@@ -33,7 +39,9 @@ export function aggregateMultiDaySizing(days:CompletedSizingDay[]){
       median_efc:median(series.map(item=>item.candidate.equivalent_full_cycles)),median_throughput_kwh:median(series.map(item=>item.candidate.throughput_kwh)),
       mean_power_utilization_percent:mean(series.map(item=>Math.max(item.candidate.charge_power_utilization_percent,item.candidate.discharge_power_utilization_percent))),
       mean_usable_energy_utilization_percent:mean(series.map(item=>item.candidate.usable_energy_utilization_percent),),
-      uncertainty_robust_day_percent:100*series.filter(item=>item.candidate.uncertainty_status==='ROBUST').length/days.length,
+      uncertainty_robust_days:robustDays,uncertainty_sensitive_days:sensitiveDays,uncertainty_insufficient_interval_days:insufficientDays,
+      uncertainty_robust_day_percent:100*robustDays/days.length,uncertainty_sensitive_day_percent:100*sensitiveDays/days.length,
+      uncertainty_insufficient_interval_day_percent:100*insufficientDays/days.length,
       leader_days:winners.get(key(seed))||0,leader_percent:100*(winners.get(key(seed))||0)/days.length,pareto_status:'MULTI_DAY_PARETO_EFFICIENT',
       daily_net_benefits:series.map(item=>({date:item.date,value:item.candidate.net_indicative_benefit_inr}))};
   });

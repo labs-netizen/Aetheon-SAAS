@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
-import { validateSizingCandidates, validSizingResponse } from '@/lib/analytics/bess-sizing';
+const mocks=vi.hoisted(()=>({fetchSizing:vi.fn()}));
+vi.mock('@/lib/analytics/client',()=>({fetchBESSSizing:mocks.fetchSizing}));
+import { requestBessSizing,validateSizingCandidates, validSizingResponse } from '@/lib/analytics/bess-sizing';
 import { BESS_SIZING_LABEL, BESS_SIZING_WARNING, candidateName, sizingHeatmap } from '@/lib/analytics/bess-sizing-presentation';
 import type { BESSSizingResponseContract } from '@/types/analytics-contracts';
 import fs from 'node:fs';
@@ -33,6 +35,14 @@ describe('historical BESS sizing contract and presentation',()=>{
     expect(validSizingResponse(response,siteId,'2026-05-01',2)).toBe(true);
     const malformed=structuredClone(response);malformed.candidates[0].dispatch.optimized_grid_import_kw=[];
     expect(validSizingResponse(malformed,siteId,'2026-05-01',2)).toBe(false);
+  });
+  it('passes Python lower_bound and upper_bound interval aliases into BESS uncertainty analysis',async()=>{mocks.fetchSizing.mockResolvedValue(response);
+    const blocks=Array.from({length:96},(_,index)=>({block_index:index+1,forecast_load_kw:1000,confidence_lower_kw:null,confidence_upper_kw:null,
+      lower_bound_kw:900,upper_bound_kw:1100}));
+    await requestBessSizing({siteId,targetDate:'2026-05-01',profile:{} as any,forecast:{blocks,model_version:'v',selected_model:'RIDGE',drift_status:'NORMAL'} as any,
+      prices:Array.from({length:96},(_,index)=>({block_index:index+1,mcp_rs_per_mwh:5000,source_reference:'IEX',source_file_hash:'hash',
+        provenance_status:'OFFICIAL_SOURCE_CONFIRMED',verification_status:'VERIFIED'})),capacities:[500,1000],powers:[250]});
+    expect(mocks.fetchSizing).toHaveBeenCalledWith(expect.objectContaining({forecastLowerKw:Array(96).fill(900),forecastUpperKw:Array(96).fill(1100)}));
   });
   it('builds a true relative heatmap and auditable candidate names',()=>{
     expect(sizingHeatmap(response).map(item=>item.intensity)).toEqual([.5,1]);
