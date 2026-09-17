@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { useSite } from '@/components/layout/SiteContext';
 import { createClient } from '@/lib/supabase/client';
+import { IexDamBatchImporter } from '@/features/market-prices/IexDamBatchImporter';
 
 export default function AdminPage() {
   const { activeRole } = useSite();
@@ -44,34 +45,7 @@ export default function AdminPage() {
     };
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [marketFile, setMarketFile] = useState<File | null>(null);
-  const [marketSource, setMarketSource] = useState('');
-  const [marketDateFormat, setMarketDateFormat] = useState<'AUTO' | 'DD/MM/YYYY' | 'DD-MM-YYYY'>('AUTO');
-  const [marketPublishedAt, setMarketPublishedAt] = useState('');
   const [marketResult, setMarketResult] = useState<any>(null);
-  const [marketBusy, setMarketBusy] = useState(false);
-  const [marketPreview, setMarketPreview] = useState<any>(null);
-
-  const importMarketPrices = async (action: 'preview' | 'commit') => {
-    if (!marketFile) return;
-    setMarketBusy(true);
-    const { data: { session } } = await createClient().auth.getSession();
-    const body = new FormData();
-    body.set('file', marketFile);
-    body.set('action', action);
-    body.set('source_reference', marketSource);
-    body.set('official_source_confirmed', 'true');
-    body.set('date_format', marketDateFormat);
-    if (action === 'commit' && marketPreview?.checksum_sha256) body.set('preview_checksum_sha256', marketPreview.checksum_sha256);
-    if (marketPublishedAt) body.set('published_at', new Date(marketPublishedAt).toISOString());
-    const response = await fetch('/api/admin/market-prices', {
-      method: 'POST', body, headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-    });
-    const result = await response.json();
-    if (action === 'preview' && response.ok) setMarketPreview(result.preview);
-    setMarketResult(result);
-    setMarketBusy(false);
-  };
 
   useEffect(() => {
     createClient().auth.getSession().then(async ({ data: { session } }) => {
@@ -352,24 +326,7 @@ export default function AdminPage() {
             <CardDescription>Privileged import of the official exchange export. Every delivery day must contain exactly 96 MCP blocks.</CardDescription>
           </CardHeader>
           <div className="p-6 pt-0 space-y-3 text-xs">
-            <input data-testid="iex-dam-file" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onChange={(event) => { setMarketFile(event.target.files?.[0] || null); setMarketPreview(null); }} className="block w-full text-slate-300" />
-            <input data-testid="iex-source-reference" value={marketSource} onChange={(event) => { setMarketSource(event.target.value); setMarketPreview(null); }} placeholder="Official IEX export URL" className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-200" />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="text-slate-400">Export date format<select value={marketDateFormat} onChange={(event) => { setMarketDateFormat(event.target.value as typeof marketDateFormat); setMarketPreview(null); }} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-200"><option value="AUTO">Auto (official DD-MM-YYYY)</option><option value="DD/MM/YYYY">DD/MM/YYYY</option><option value="DD-MM-YYYY">DD-MM-YYYY</option></select></label>
-              <label className="text-slate-400">Exchange published at (if shown)<input type="datetime-local" value={marketPublishedAt} onChange={(event) => setMarketPublishedAt(event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-200" /></label>
-            </div>
-            <p className="text-slate-400">By importing, the analyst confirms this file is an unmodified official IEX Day-Ahead Market export. SHA-256 provenance and the source URL are retained.</p>
-            <div className="flex gap-2">
-              <Button data-testid="iex-preview-submit" disabled={!marketFile || !marketSource || marketBusy} onClick={() => importMarketPrices('preview')} size="sm">{marketBusy ? 'Validating…' : 'Validate & Preview'}</Button>
-              <Button data-testid="iex-import-submit" disabled={!marketPreview || marketBusy} onClick={() => importMarketPrices('commit')} size="sm">Confirm Official Export & Import</Button>
-            </div>
-            {marketPreview && <div data-testid="iex-market-preview" className="rounded border border-teal-800 bg-slate-950 p-3 text-slate-200 space-y-1">
-              <div>Sheet: {marketPreview.detected_sheet || 'CSV'} · Delivery date(s): {marketPreview.delivery_dates?.join(', ')}</div>
-              <div>Blocks: {marketPreview.received_blocks}/{marketPreview.expected_blocks} · Summary rows ignored: {marketPreview.summary_rows_ignored}</div>
-              <div>IEX DAM MCP (Rs/MWh): min {marketPreview.mcp?.mcp_min_rs_per_mwh}, max {marketPreview.mcp?.mcp_max_rs_per_mwh}, average {marketPreview.mcp?.mcp_average_rs_per_mwh?.toFixed(2)}</div>
-              <div>File: {marketPreview.source_filename} · Format: {marketPreview.source_format} · Verification: {marketPreview.verification_status}</div>
-              <div>SHA-256: {marketPreview.checksum_sha256}</div>
-            </div>}
+            <IexDamBatchImporter />
             {marketResult && <pre data-testid="iex-import-result" className="overflow-auto rounded bg-slate-950 p-3 text-[11px] text-slate-300">{JSON.stringify(marketResult, null, 2)}</pre>}
           </div>
         </Card>
