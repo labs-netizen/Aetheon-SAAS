@@ -50,6 +50,6 @@ describe('multi-day BESS sizing aggregation',()=>{
   });
   it('contains required safety labels without investment calculations',()=>{const source=fs.readFileSync('src/features/bess/MultiDayBessSizingPanel.tsx','utf8');
     expect(source).toContain('NOT AN INVESTMENT RECOMMENDATION');expect(source).toContain('NOT ANNUALIZED');expect(source).toContain('NOT LANDED ELECTRICITY COST');
-    expect(source).toContain('READY FOR SIZING');expect(source).toContain('VERIFIED PRICE — SIZING UNAVAILABLE');expect(source).toContain('Select all READY');
+    expect(source).toContain('READY FOR SIZING');expect(source).toContain('UNAVAILABLE HISTORICAL EVIDENCE');expect(source).toContain('Select all READY');
     expect(source).not.toMatch(/payback|\bROI\b|\bNPV\b|\bIRR\b/i);});
 });
