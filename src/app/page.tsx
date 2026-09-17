@@ -11,28 +11,30 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Lock,
-  TrendingDown,
   BarChart3,
-  Calendar,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { useSite } from '@/components/layout/SiteContext';
-import { DataQualityBadge } from '@/components/shared/DataQualityBadge';
 import { FreshnessBadge } from '@/components/shared/FreshnessBadge';
 import { ProvenanceFooter } from '@/components/shared/ProvenanceFooter';
 import { formatPower, formatEnergy, formatPercentage } from '@/lib/units/energy';
 import { PRODUCTS } from '@/lib/constants';
 
 export default function DashboardPage() {
-  const { currentSite, currentOrg } = useSite();
+  const { currentSite, currentOrg, isEntitled } = useSite();
 
   if (!currentSite || !currentOrg) {
     return null;
   }
 
   const isMonitoringActive = currentSite.activation_status === 'ACTIVE';
+  const isDemo = currentSite.is_demo === true;
+  const evidenceUnavailable = 'No verified dashboard evidence is available for this live site.';
+
+  const productStatus = (productId: keyof typeof PRODUCTS) =>
+    isDemo ? 'DEMO / UNVERIFIED' : isEntitled(productId) ? 'ENTITLED' : 'UNSUBSCRIBED';
 
   return (
     <div className="space-y-6">
@@ -53,8 +55,17 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <DataQualityBadge status={isMonitoringActive ? 'PASSED' : 'WARNING'} />
-          <FreshnessBadge status={isMonitoringActive ? 'RECENT' : 'DELAYED'} />
+          {isDemo ? (
+            <>
+              <Badge variant="demo" data-testid="dashboard-demo-label">DEMO / UNVERIFIED</Badge>
+              <FreshnessBadge status="DEMO" />
+            </>
+          ) : (
+            <>
+              <Badge variant="outline" data-testid="dashboard-live-evidence-state">Evidence: NOT VERIFIED</Badge>
+              <FreshnessBadge status="UNKNOWN" />
+            </>
+          )}
           <Link href="/settings">
             <Button variant="outline" size="sm" className="text-xs">
               Upload Interval Data
@@ -70,11 +81,11 @@ export default function DashboardPage() {
             <span>Forecast Peak Demand (Tomorrow)</span>
             <Zap className="w-4 h-4 text-sky-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-slate-100">
-            {isMonitoringActive ? formatPower(2180.5) : '-- kW'}
+          <div className="text-2xl font-bold font-mono text-slate-100" data-testid="dashboard-demand-kpi">
+            {isDemo && isMonitoringActive ? formatPower(2180.5) : 'UNAVAILABLE'}
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
-            Peak window: <strong>Block 38 (09:15 - 09:30)</strong>
+            {isDemo && isMonitoringActive ? <>Synthetic peak window: <strong>Block 38 (09:15 - 09:30)</strong></> : evidenceUnavailable}
           </p>
         </Card>
 
@@ -83,12 +94,11 @@ export default function DashboardPage() {
             <span>Day-Ahead Average Price</span>
             <BarChart3 className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-amber-300">
-            {isMonitoringActive ? '₹4,820/MWh' : '--'}
+          <div className="text-2xl font-bold font-mono text-amber-300" data-testid="dashboard-price-kpi">
+            {isDemo && isMonitoringActive ? '₹4,820/MWh' : 'UNAVAILABLE'}
           </div>
-          <p className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1">
-            <TrendingDown className="w-3 h-3" />
-            4.2% lower than yesterday&apos;s clearing price
+          <p className="text-[11px] text-slate-400 mt-1">
+            {isDemo && isMonitoringActive ? 'Synthetic demo price; not verified market evidence.' : 'Authoritative verified market evidence is required.'}
           </p>
         </Card>
 
@@ -97,11 +107,11 @@ export default function DashboardPage() {
             <span>DSM Deviation Status</span>
             <Activity className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-emerald-300">
-            {isMonitoringActive ? 'NORMAL (2.4%)' : 'AWAITING'}
+          <div className="text-2xl font-bold font-mono text-emerald-300" data-testid="dashboard-dsm-kpi">
+            {isDemo && isMonitoringActive ? 'NORMAL (2.4%)' : 'UNAVAILABLE'}
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
-            Zero active penalty exposure today
+            {isDemo && isMonitoringActive ? 'Synthetic technical status; no authoritative penalty claim.' : 'Validated schedule and actual-drawal evidence is required.'}
           </p>
         </Card>
 
@@ -110,11 +120,11 @@ export default function DashboardPage() {
             <span>Solar Self-Consumption</span>
             <Sun className="w-4 h-4 text-yellow-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-yellow-300">
-            {isMonitoringActive ? formatPercentage(88.4) : '--%'}
+          <div className="text-2xl font-bold font-mono text-yellow-300" data-testid="dashboard-solar-kpi">
+            {isDemo && isMonitoringActive ? formatPercentage(88.4) : 'UNAVAILABLE'}
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
-            Avoided 3.42 tCO₂e emissions today
+            {isDemo && isMonitoringActive ? 'Synthetic demo generation and emissions estimate.' : 'Verified generation and emissions-factor evidence is required.'}
           </p>
         </Card>
       </div>
@@ -139,17 +149,18 @@ export default function DashboardPage() {
           </Link>
         </CardHeader>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2" data-testid="dashboard-grid-brief">
           <div className="p-4 rounded-md bg-slate-950/60 border border-slate-800 space-y-2">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
               Top High-Cost Window
             </span>
             <div className="text-lg font-bold text-rose-400 font-mono">
-              18:30 - 21:00 IST
+              {isDemo && isMonitoringActive ? '18:30 - 21:00 IST' : 'SUPPRESSED'}
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Evening peak tariff window. Projected DAM clearing price exceeds <strong>₹7,800/MWh</strong>.
-              Recommended load curtailment or BESS discharge.
+              {isDemo && isMonitoringActive
+                ? <>Synthetic demo window. Projected demo DAM price exceeds <strong>₹7,800/MWh</strong>.</>
+                : 'No operational recommendation is published without a validated forecast and authoritative price evidence.'}
             </p>
           </div>
 
@@ -158,11 +169,12 @@ export default function DashboardPage() {
               Optimal Sourcing Window
             </span>
             <div className="text-lg font-bold text-emerald-400 font-mono">
-              11:30 - 15:00 IST
+              {isDemo && isMonitoringActive ? '11:30 - 15:00 IST' : 'SUPPRESSED'}
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Solar peak generation surplus. Projected price softens to <strong>₹3,200/MWh</strong>.
-              Recommended window for thermal/battery energy storage charging.
+              {isDemo && isMonitoringActive
+                ? <>Synthetic demo window. Projected demo price softens to <strong>₹3,200/MWh</strong>.</>
+                : 'No sourcing or charging window is published without verified forecast, price, and asset evidence.'}
             </p>
           </div>
 
@@ -170,11 +182,13 @@ export default function DashboardPage() {
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
               Estimated Avoided Landed Cost
             </span>
-            <div className="text-lg font-bold text-teal-300 font-mono">
-              ₹48,250 / day
+            <div className="text-lg font-bold text-teal-300 font-mono" data-testid="dashboard-cost-kpi">
+              {isDemo && isMonitoringActive ? '₹48,250 / day' : 'UNAVAILABLE'}
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Achieved via rooftop solar self-consumption and peak shaving against baseline MSEDCL HT-1 ToD tariff.
+              {isDemo && isMonitoringActive
+                ? 'Synthetic demo estimate; not a landed-cost or savings claim.'
+                : 'Complete load, tariff, price, and operational evidence is required before an indicative monetary result can be shown.'}
             </p>
           </div>
         </div>
@@ -192,7 +206,7 @@ export default function DashboardPage() {
               <div className="p-2 rounded bg-teal-950/80 border border-teal-800/60 text-teal-400">
                 <Zap className="w-5 h-5" />
               </div>
-              <Badge variant="success">ACTIVE</Badge>
+              <Badge variant={isDemo || isEntitled('GRID_INTELLIGENCE') ? 'success' : 'outline'}>{productStatus('GRID_INTELLIGENCE')}</Badge>
             </div>
             <h4 className="font-semibold text-slate-100 mb-1">{PRODUCTS.GRID_INTELLIGENCE.name}</h4>
             <p className="text-xs text-slate-400 mb-4 line-clamp-2">{PRODUCTS.GRID_INTELLIGENCE.description}</p>
@@ -209,7 +223,7 @@ export default function DashboardPage() {
               <div className="p-2 rounded bg-sky-950/80 border border-sky-800/60 text-sky-400">
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              <Badge variant="demo">DEMO / UNVERIFIED</Badge>
+              <Badge variant={isDemo ? 'demo' : isEntitled('OA_COMPLIANCE') ? 'success' : 'outline'}>{productStatus('OA_COMPLIANCE')}</Badge>
             </div>
             <h4 className="font-semibold text-slate-100 mb-1">{PRODUCTS.OA_COMPLIANCE.name}</h4>
             <p className="text-xs text-slate-400 mb-4 line-clamp-2">{PRODUCTS.OA_COMPLIANCE.description}</p>
@@ -226,7 +240,7 @@ export default function DashboardPage() {
               <div className="p-2 rounded bg-rose-950/80 border border-rose-800/60 text-rose-400">
                 <Activity className="w-5 h-5" />
               </div>
-              <Badge variant="demo">DEMO / UNVERIFIED</Badge>
+              <Badge variant={isDemo ? 'demo' : isEntitled('DSM_RISK') ? 'success' : 'outline'}>{productStatus('DSM_RISK')}</Badge>
             </div>
             <h4 className="font-semibold text-slate-100 mb-1">{PRODUCTS.DSM_RISK.name}</h4>
             <p className="text-xs text-slate-400 mb-4 line-clamp-2">{PRODUCTS.DSM_RISK.description}</p>
@@ -243,7 +257,7 @@ export default function DashboardPage() {
               <div className="p-2 rounded bg-purple-950/80 border border-purple-800/60 text-purple-400">
                 <BatteryCharging className="w-5 h-5" />
               </div>
-              <Badge variant="demo">DEMO / UNVERIFIED</Badge>
+              <Badge variant={isDemo ? 'demo' : isEntitled('BESS_ARBITRAGE') ? 'success' : 'outline'}>{productStatus('BESS_ARBITRAGE')}</Badge>
             </div>
             <h4 className="font-semibold text-slate-100 mb-1">{PRODUCTS.BESS_ARBITRAGE.name}</h4>
             <p className="text-xs text-slate-400 mb-4 line-clamp-2">{PRODUCTS.BESS_ARBITRAGE.description}</p>
@@ -262,7 +276,7 @@ export default function DashboardPage() {
               <div className="p-2 rounded bg-amber-950/80 border border-amber-800/60 text-amber-400">
                 <Sun className="w-5 h-5" />
               </div>
-              <Badge variant="demo">DEMO / UNVERIFIED</Badge>
+              <Badge variant={isDemo ? 'demo' : isEntitled('RENEWABLE_PORTFOLIO') ? 'success' : 'outline'}>{productStatus('RENEWABLE_PORTFOLIO')}</Badge>
             </div>
             <h4 className="font-semibold text-slate-100 mb-1">{PRODUCTS.RENEWABLE_PORTFOLIO.name}</h4>
             <p className="text-xs text-slate-400 mb-4 line-clamp-2">{PRODUCTS.RENEWABLE_PORTFOLIO.description}</p>
@@ -276,11 +290,20 @@ export default function DashboardPage() {
       </div>
 
       {/* Provenance and Disclaimer Footer */}
-      <ProvenanceFooter
-        modelVersion="GRID_FORECAST_HEURISTIC_v1.0"
-        modelGenerationTime="2026-09-06T18:00:00Z"
-        tariffVersion="MSEDCL_HT1_2024_DEMO"
-      />
+      {isDemo ? (
+        <div data-testid="dashboard-demo-provenance">
+          <ProvenanceFooter
+            sourceType="Synthetic demo dataset"
+            modelVersion="GRID_FORECAST_HEURISTIC_v1.0_DEMO"
+            modelGenerationTime="2026-09-06T18:00:00Z"
+            tariffVersion="MSEDCL_HT1_2024_DEMO"
+          />
+        </div>
+      ) : (
+        <div data-testid="dashboard-live-provenance" className="mt-8 pt-4 border-t border-slate-800 text-xs text-slate-400">
+          <strong className="text-slate-300">Dashboard evidence:</strong> UNAVAILABLE / NOT VERIFIED. Open each entitled module to view its independently validated evidence and suppression status.
+        </div>
+      )}
     </div>
   );
 }
