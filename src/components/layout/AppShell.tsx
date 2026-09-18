@@ -31,6 +31,7 @@ import {
 import { useSite } from './SiteContext';
 import { DemoBadge } from '@/components/shared/DemoBadge';
 import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { createClient } from '@/lib/supabase/client';
@@ -490,7 +491,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           )}
 
-          <DemoBadge />
+          {currentSite?.is_demo ? (
+            <DemoBadge />
+          ) : currentSite ? (
+            <Badge variant="outline">LIVE SITE · EVIDENCE PER MODULE</Badge>
+          ) : null}
         </div>
 
         {/* Right: Role Indicator / Demo Role Switcher & User Profile */}

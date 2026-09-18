@@ -33,6 +33,23 @@ import { LoadVisualizationPanel } from '@/features/ingestion/LoadVisualizationPa
 import { FlexibilityProfileForm } from '@/features/grid/FlexibilityProfileForm';
 import { BessProfileForm } from '@/features/bess/BessProfileForm';
 
+interface SiteReadinessEvidence {
+  site_id: string;
+  activation_status: string;
+  is_demo: boolean;
+  interval_evidence: {
+    has_validated_history: boolean;
+    validated_complete_days: number;
+    latest_operating_date: string | null;
+    latest_evidence_valid: boolean;
+    quality_status: 'PASSED' | 'WARNING' | 'FAILED' | 'NO_DATA';
+    freshness_status: 'RECENT' | 'DELAYED' | 'STALE' | 'UNKNOWN';
+  };
+  alert_recipient: { configured: boolean; source: string; detail: string };
+  renewable_asset: { configured: boolean; source: string };
+  bess_asset: { configured: boolean; source: string };
+}
+
 function SettingsContent() {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get('tab') === 'billing' ? 'billing' : 'upload';
@@ -52,6 +69,10 @@ function SettingsContent() {
   const [mappingErrors, setMappingErrors] = useState<string[]>([]);
   const [sampleRows, setSampleRows] = useState<Array<{ operating_date: string; block_index: number; load_kw: number }>>([]);
   const [validatedSiteId, setValidatedSiteId] = useState<string | null>(null);
+  const [readinessEvidence, setReadinessEvidence] = useState<SiteReadinessEvidence | null>(null);
+  const [isLoadingReadiness, setIsLoadingReadiness] = useState(false);
+  const [readinessError, setReadinessError] = useState<string | null>(null);
+  const [readinessRefreshKey, setReadinessRefreshKey] = useState(0);
 
   // Commit State
   const [isCommitting, setIsCommitting] = useState(false);
@@ -100,6 +121,46 @@ function SettingsContent() {
       setSiteLoadClass(currentSite.load_class);
     }
   }, [currentSite]);
+
+  useEffect(() => {
+    if (!currentSite?.id) return;
+    const requestedSiteId = currentSite.id;
+    let active = true;
+    setReadinessEvidence(null);
+    setReadinessError(null);
+
+    if (currentSite.is_demo) {
+      setIsLoadingReadiness(false);
+      setReadinessEvidence({
+        site_id: requestedSiteId,
+        activation_status: currentSite.activation_status,
+        is_demo: true,
+        interval_evidence: { has_validated_history: false, validated_complete_days: 0, latest_operating_date: null,
+          latest_evidence_valid: false, quality_status: 'NO_DATA', freshness_status: 'UNKNOWN' },
+        alert_recipient: { configured: false, source: 'DEMO_UNVERIFIED', detail: 'Demo recipients are not authoritative configuration.' },
+        renewable_asset: { configured: false, source: 'DEMO_UNVERIFIED' },
+        bess_asset: { configured: false, source: 'DEMO_UNVERIFIED' },
+      });
+      return;
+    }
+
+    setIsLoadingReadiness(true);
+    createClient().auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error || !session?.access_token) throw new Error('AUTHENTICATED_SESSION_REQUIRED');
+      const response = await fetch(`/api/sites/${requestedSiteId}/readiness`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `HTTP_${response.status}`);
+      if (active && result.site_id === requestedSiteId) setReadinessEvidence(result);
+    }).catch((error) => {
+      if (active) setReadinessError(error instanceof Error ? error.message : 'SITE_READINESS_LOOKUP_FAILED');
+    }).finally(() => {
+      if (active) setIsLoadingReadiness(false);
+    });
+
+    return () => { active = false; };
+  }, [currentSite?.id, currentSite?.is_demo, currentSite?.activation_status, readinessRefreshKey]);
 
   const loadBillingData = async () => {
     setIsLoadingBilling(true);
@@ -167,11 +228,16 @@ function SettingsContent() {
     discom: currentSite.discom,
     contractDemandValue: currentSite.contract_demand_value,
     voltageCategory: currentSite.voltage_category,
-    hasAlertRecipient: true,
-    hasHistoricalIntervals: true,
-    intervalDaysCount: 30,
-    hasSolarAsset: true,
-    hasBessAsset: true,
+    hasAlertRecipient: readinessEvidence?.alert_recipient.configured ?? false,
+    hasHistoricalIntervals: readinessEvidence?.interval_evidence.has_validated_history ?? false,
+    intervalDaysCount: readinessEvidence?.interval_evidence.validated_complete_days ?? 0,
+    intervalQualityStatus: readinessEvidence?.interval_evidence.quality_status ?? 'NO_DATA',
+    intervalFreshnessStatus: readinessEvidence?.interval_evidence.freshness_status ?? 'UNKNOWN',
+    latestIntervalDate: readinessEvidence?.interval_evidence.latest_operating_date ?? null,
+    latestIntervalValid: readinessEvidence?.interval_evidence.latest_evidence_valid ?? false,
+    hasSolarAsset: readinessEvidence?.renewable_asset.configured ?? false,
+    hasBessAsset: readinessEvidence?.bess_asset.configured ?? false,
+    isDemo: currentSite.is_demo,
   });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -267,6 +333,7 @@ function SettingsContent() {
       setVisualRefreshKey((key) => key + 1);
       setVisualizedSiteId(currentSite.id);
       await refreshSites();
+      setReadinessRefreshKey((key) => key + 1);
     } catch (err) {
       setCommitFeedback({
         type: 'error',
@@ -355,7 +422,7 @@ function SettingsContent() {
             onClick={() => setActiveSubTab('readiness')}
             className="text-xs gap-1.5"
           >
-            Data Readiness ({readiness.readinessPct}%)
+            Data Readiness ({isLoadingReadiness ? 'Loading…' : `${readiness.readinessPct}%`})
           </Button>
           <Button
             variant={activeSubTab === 'billing' ? 'primary' : 'outline'}
@@ -710,11 +777,19 @@ function SettingsContent() {
               </CardDescription>
             </div>
             <Badge variant={readiness.isReadyForMonitoring ? 'success' : 'warning'}>
-              {readiness.readinessPct}% Ready
+              {readiness.readinessPct}% Required Ready
             </Badge>
           </CardHeader>
 
           <div className="space-y-3 p-6 pt-0">
+            <p className="text-[11px] text-slate-400">
+              Percentage counts required site and operational evidence only. Recommended and optional resources are reported separately.
+            </p>
+            {readinessError && (
+              <div className="rounded border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300">
+                Readiness evidence unavailable: {readinessError}. Missing evidence is not treated as ready.
+              </div>
+            )}
             {readiness.items.map((item) => (
               <div
                 key={item.key}
@@ -725,11 +800,15 @@ function SettingsContent() {
                     <Badge variant={item.category === 'REQUIRED' ? 'danger' : item.category === 'RECOMMENDED' ? 'warning' : 'outline'}>
                       {item.category}
                     </Badge>
+                    <Badge variant={item.status === 'READY' ? 'success' : item.status === 'DEMO_UNVERIFIED' ? 'demo' : item.status === 'STALE' ? 'warning' : 'outline'}>
+                      {item.status.replace(/_/g, ' ')}
+                    </Badge>
                     <span className="text-xs font-semibold text-slate-200">{item.label}</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
                     Current value: <strong className="text-slate-300">{item.currentValue}</strong>
                   </p>
+                  <p className="text-[10px] text-slate-500">Evidence: {item.evidenceSource}</p>
                   {!item.isSatisfied && (
                     <p className="text-[11px] text-amber-400">
                       Remediation: {item.remediationAction}
@@ -743,15 +822,17 @@ function SettingsContent() {
                       <Check className="w-4 h-4" />
                       Satisfied
                     </span>
-                  ) : (
+                  ) : item.key === 'historical_load' || item.key === 'interval_freshness' ? (
                     <Button
-                      onClick={() => setActiveSubTab(item.key.includes('load') ? 'upload' : 'site')}
+                      onClick={() => setActiveSubTab('upload')}
                       variant="outline"
                       size="sm"
                       className="text-xs"
                     >
-                      Configure
+                      Upload Data
                     </Button>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">Not configured</span>
                   )}
                 </div>
               </div>

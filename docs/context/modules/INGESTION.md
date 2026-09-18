@@ -3,16 +3,16 @@
 - **Status**: `VERIFIED_IMPLEMENTED` (Core Platform Gateway).
 - **Authoritative UI**: `src/app/settings/page.tsx` (Data Ingestion tab).
 - **Authoritative API**: `src/app/api/ingestion/commit/route.ts`
+- **Readiness API**: `src/app/api/sites/[id]/readiness/route.ts` (tenant-authorized persisted evidence summary used by Settings).
 - **Auth/Entitlement**: Requires `ENERGY_MANAGER` or `ORGANISATION_ADMIN` role and `has_site_access(siteId)`.
 - **Reads**: Multipart raw CSV stream.
 - **Writes**: `ingestion_runs`, `interval_data_96`, `sites`, `site_activation_history`, `audit_logs`.
 - **RPCs**: `commit_ingestion_transaction` (Migration 14 canonical 8-arg signature: `site_id`, `filename`, `checksum_sha256`, `uploaded_by`, `rows`, `freshness_status`, `actor_role`, `org_id`).
 - **External Service**: None (PostgreSQL transactional RPC).
 - **Authoritative V1 Contract**:
-  - **ONE CSV = ONE operating_date = EXACTLY 96 rows = block_index 1–96 exactly once.**
+  - A CSV may contain one or more operating dates; every accepted date must contain exactly 96 unique blocks indexed 1–96.
   - Both HTTP API parser (`src/features/ingestion/csvParser.ts`) and PostgreSQL RPC (`commit_ingestion_transaction`) strictly enforce:
-    - Rejection of 95, 97, 192 rows.
-    - Rejection of multiple operating dates in a single CSV.
+    - Per-day rejection of 95/97 blocks, duplicates, missing blocks, and malformed dates; valid multi-day files are accepted without truncation.
     - Rejection of duplicate blocks or missing blocks in range 1–96.
     - Rejection of impossible calendar dates (e.g. `2026-02-31`) via real calendar day validation beyond regex.
     - Rejection of client JSON bypass; raw CSV payload with server-side SHA-256 is required.
@@ -22,7 +22,8 @@
 - **Reports**: Ingestion run summary with validation metrics.
 - **Alerts**: Alerts hub records state; automated dispatch is `NOT_IMPLEMENTED` in V1.
 - **Demo Behavior**: Provides deterministic 96-block sample CSV template download.
-- **Live Behavior**: Persists exactly 96 intervals per date into `interval_data_96`; transitions site status (`CALIBRATING` $\to$ `ACTIVE` upon accumulating contiguous data).
+- **Live Behavior**: Persists exactly 96 intervals per accepted date into `interval_data_96`; activation remains governed by the server-side ingestion state transition.
+- **Settings Readiness**: Required-readiness percentage is computed from persisted site metadata, current interval freshness, and the required alert-recipient configuration. Historical interval load is recommended configuration evidence; active `renewable_assets` and `bess_assets` are optional configuration evidence. Entitlements are never treated as configuration. The current schema has no site-scoped alert-recipient configuration, so the required alert item remains `MISSING` rather than being inferred from memberships or notification delivery logs.
 - **Tests**: `tests/unit/csvParser.test.ts` (exhaustive contract tests for 95, 97, 192 rows, duplicate/missing blocks, impossible calendar dates), `tests/integration/adversarial_api.test.ts` (Test 8, 9), `tests/e2e/persistence_journey.spec.ts`, `tests/e2e/demo_smoke.spec.ts` (Test 5), `tests/e2e/real_auth_workflows.spec.ts` (Test 4, 5).
 - **External Requirements**: Live AMR meter SFTP/API connectors when available.
 - **Known Limitations**: V1 supports 96-block CSV files only; Excel (.xlsx) support intentionally excluded for schema rigor.
