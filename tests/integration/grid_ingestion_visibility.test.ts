@@ -3,12 +3,16 @@ import { NextRequest } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { GET as forecastGet } from '@/app/api/forecast/route';
 import { GET as inputEvidenceGet } from '@/app/api/grid/input-evidence/route';
+import { GET as readinessGet } from '@/app/api/sites/[id]/readiness/route';
 import { GET as replayGet } from '@/app/api/grid/replay/route';
 import { GET as visualGet } from '@/app/api/ingestion/load-visualization/route';
 import { loadGridHistoricalInput, resolveGridInputEvidence } from '@/lib/analytics/grid-input-evidence';
 import { checkServerEntitlement } from '@/lib/auth/entitlements';
 import { resolveSiteForAuthorization } from '@/lib/auth/api-guard';
+import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { POST as dsmPost } from '@/app/api/dsm/route';
+
+vi.mock('server-only', () => ({}));
 
 const analytics = vi.hoisted(() => ({
   dsm: vi.fn(async (_input: any) => ({})),
@@ -42,8 +46,7 @@ const analytics = vi.hoisted(() => ({
     price_status: 'AUTHORITATIVE_PRICE_FEED_REQUIRED',
   })),
 }));
-vi.mock('@/lib/analytics/client', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/analytics/client')>()),
+vi.mock('@/lib/analytics/client', () => ({
   fetchDSMCalculation: analytics.dsm,
   fetchGridForecast: analytics.grid,
 }));
@@ -126,6 +129,10 @@ describe('Grid visibility of committed interval data', () => {
     for (let offset = 0; offset < historyRows.length; offset += 2000) {
       await must(db.from('interval_data_96').insert(historyRows.slice(offset, offset + 2000)));
     }
+    await must(db.from('data_quality_evaluations').insert(historyRows.filter((_, index) => index % 96 === 0)
+      .map((row) => ({ site_id: historySiteId, evaluation_date: row.operating_date,
+        completeness_pct: 100, missing_blocks_count: 0, freshness_status: 'STALE',
+        validation_status: 'PASSED', publication_gate_status: 'BLOCKED_STALE_DATA' }))));
 
     const userClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
     token = (await must(userClient.auth.signInWithPassword({ email, password }))).session.access_token;
@@ -149,6 +156,62 @@ describe('Grid visibility of committed interval data', () => {
     `http://localhost:3000/api/ingestion/load-visualization?site_id=${siteId}&window_days=30${operatingDate ? `&operating_date=${operatingDate}` : ''}`,
     { headers: { Authorization: `Bearer ${bearer}` } }
   );
+
+  const readinessRequest = (siteId: string, bearer = token) => new NextRequest(
+    `http://localhost:3000/api/sites/${siteId}/readiness`,
+    { headers: { Authorization: `Bearer ${bearer}` } }
+  );
+
+  it('reads 426 complete committed days through the bearer, keeps old input stale and optional evidence missing', async () => {
+    const response = await readinessGet(readinessRequest(historySiteId), { params: { id: historySiteId } });
+    expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      site_id: historySiteId,
+      interval_evidence: { has_validated_history: true, validated_complete_days: 426,
+        latest_operating_date: historyLatestDate, latest_evidence_valid: true,
+        quality_status: 'PASSED', freshness_status: 'STALE', source: 'interval_data_96' },
+      alert_recipient: { configured: false, source: 'NOT_CONFIGURED' },
+      renewable_asset: { configured: false }, bess_asset: { configured: false },
+    });
+    expect(evaluateGridReadiness({ state: 'Maharashtra', discom: 'MSEDCL', contractDemandValue: 1000,
+      voltageCategory: '33kV', hasHistoricalIntervals: body.interval_evidence.has_validated_history,
+      intervalDaysCount: body.interval_evidence.validated_complete_days,
+      latestIntervalValid: body.interval_evidence.latest_evidence_valid,
+      intervalQualityStatus: body.interval_evidence.quality_status,
+      intervalFreshnessStatus: body.interval_evidence.freshness_status,
+      hasAlertRecipient: body.alert_recipient.configured,
+      hasSolarAsset: body.renewable_asset.configured, hasBessAsset: body.bess_asset.configured,
+    }).readinessPct).toBe(60);
+  }, 120000);
+
+  it('keeps zero and incomplete interval evidence distinct from an API error', async () => {
+    const zero = await readinessGet(readinessRequest(zeroSiteId), { params: { id: zeroSiteId } });
+    expect(zero.status).toBe(200);
+    expect(await zero.json()).toMatchObject({ interval_evidence: {
+      has_validated_history: false, validated_complete_days: 0, latest_operating_date: null,
+      quality_status: 'NO_DATA', freshness_status: 'UNKNOWN',
+    } });
+    const incomplete = await readinessGet(readinessRequest(incompleteSiteId), { params: { id: incompleteSiteId } });
+    expect(incomplete.status).toBe(200);
+    expect(await incomplete.json()).toMatchObject({ interval_evidence: {
+      has_validated_history: false, validated_complete_days: 0, latest_operating_date: '2026-01-03',
+      latest_evidence_valid: false, quality_status: 'FAILED', freshness_status: 'STALE',
+    } });
+    const partialHistory = await readinessGet(readinessRequest(completeSiteId), { params: { id: completeSiteId } });
+    expect(partialHistory.status).toBe(200);
+    expect(await partialHistory.json()).toMatchObject({ interval_evidence: {
+      has_validated_history: true, validated_complete_days: 2, latest_operating_date: '2026-01-03',
+      latest_evidence_valid: false, quality_status: 'FAILED', freshness_status: 'STALE',
+    } });
+  }, 30000);
+
+  it('denies invalid bearer and foreign-site readiness before reading evidence', async () => {
+    const invalid = await readinessGet(readinessRequest(completeSiteId, 'invalid-token'), { params: { id: completeSiteId } });
+    expect(invalid.status).toBe(401);
+    const foreign = await readinessGet(readinessRequest(foreignSiteId), { params: { id: foreignSiteId } });
+    expect(foreign.status).toBe(403);
+  });
 
   it('serves ordered committed load visualization through the bearer site context without analytics', async () => {
     analytics.grid.mockClear();

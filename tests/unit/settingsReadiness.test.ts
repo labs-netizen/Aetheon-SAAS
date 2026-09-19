@@ -5,9 +5,12 @@ import { resolve } from 'node:path';
 import { evaluateGridReadiness } from '@/features/onboarding/readiness';
 import { GET as readinessGet } from '@/app/api/sites/[id]/readiness/route';
 
-const mocks = vi.hoisted(() => ({ authorize: vi.fn(), admin: vi.fn() }));
+const mocks = vi.hoisted(() => ({ authorize: vi.fn(), history: vi.fn(), evidence: vi.fn() }));
 vi.mock('@/lib/auth/api-guard', () => ({ authorizeApiRequest: mocks.authorize }));
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.admin }));
+vi.mock('@/lib/analytics/grid-input-evidence', () => ({
+  loadGridHistoricalInput: mocks.history,
+  resolveGridInputEvidence: mocks.evidence,
+}));
 
 const baseConfig = {
   state: 'Maharashtra', discom: 'MSEDCL', contractDemandValue: 1500, voltageCategory: '33kV',
@@ -24,12 +27,8 @@ function item(result: ReturnType<typeof evaluateGridReadiness>, key: string) {
 function database(overrides: Record<string, { data: any; error: any }> = {}) {
   const results: Record<string, { data: any; error: any }> = {
     sites: { data: { id: 'site-1', is_demo: false, activation_status: 'CALIBRATING' }, error: null },
-    data_quality_evaluations: { data: [
-      { evaluation_date: '2026-09-17', completeness_pct: 100, missing_blocks_count: 0,
-        freshness_status: 'RECENT', validation_status: 'PASSED', publication_gate_status: 'PUBLISHABLE' },
-      { evaluation_date: '2026-09-16', completeness_pct: 100, missing_blocks_count: 0,
-        freshness_status: 'DELAYED', validation_status: 'PASSED', publication_gate_status: 'PUBLISHABLE' },
-    ], error: null },
+    data_quality_evaluations: { data: [], error: null },
+    interval_data_96: { data: { operating_date: '2026-04-30' }, error: null },
     renewable_assets: { data: [{ id: 'solar-1' }], error: null },
     bess_assets: { data: [{ id: 'bess-1' }], error: null },
     ...overrides,
@@ -38,9 +37,12 @@ function database(overrides: Record<string, { data: any; error: any }> = {}) {
     const builder: any = {};
     builder.select = vi.fn(() => builder);
     builder.eq = vi.fn(() => builder);
-    builder.order = vi.fn(() => builder);
-    builder.limit = vi.fn(async () => results[table]);
+    builder.limit = vi.fn(() => builder);
     builder.single = vi.fn(async () => results[table]);
+    builder.maybeSingle = vi.fn(async () => results[table]);
+    builder.order = vi.fn(() => builder);
+    builder.then = (resolve: (value: any) => void, reject: (error: unknown) => void) =>
+      Promise.resolve(results[table]).then(resolve, reject);
     return builder;
   }) };
 }
@@ -48,8 +50,10 @@ function database(overrides: Record<string, { data: any; error: any }> = {}) {
 describe('Settings authoritative readiness contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.authorize.mockResolvedValue({ authorized: true, organisationId: 'org-1' });
-    mocks.admin.mockReturnValue(database());
+    mocks.authorize.mockResolvedValue({ authorized: true, organisationId: 'org-1', authenticatedClient: database() });
+    mocks.history.mockResolvedValue({ complete_days: [{ operating_date: '2026-04-29' }, { operating_date: '2026-04-30' }],
+      latest_observed_date: '2026-04-30', latest_observed_complete: true });
+    mocks.evidence.mockResolvedValue({ is_complete: true, quality_status: 'PASSED', freshness: 'STALE' });
   });
 
   it('does not report missing historical interval evidence as ready', () => {
@@ -99,34 +103,74 @@ describe('Settings authoritative readiness contract', () => {
     }
   });
 
-  it('loads tenant-scoped persisted quality and asset evidence without entitlement inference', async () => {
+  it('loads bearer-scoped committed history and asset evidence without entitlement inference', async () => {
     const response = await readinessGet(new NextRequest('http://localhost/api/sites/site-1/readiness', {
       headers: { Authorization: 'Bearer token' },
     }), { params: { id: 'site-1' } });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       site_id: 'site-1',
-      interval_evidence: { has_validated_history: true, validated_complete_days: 2, latest_operating_date: '2026-09-17' },
+      interval_evidence: { has_validated_history: true, validated_complete_days: 2,
+        latest_operating_date: '2026-04-30', latest_evidence_valid: true, quality_status: 'PASSED', freshness_status: 'STALE',
+        source: 'interval_data_96' },
       alert_recipient: { configured: false, source: 'NOT_CONFIGURED' },
       renewable_asset: { configured: true },
       bess_asset: { configured: true },
     });
     expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), { siteId: 'site-1', requireBearer: true });
-    expect(mocks.admin.mock.results[0].value.from).not.toHaveBeenCalledWith('entitlements');
+    const bearerClient = (await mocks.authorize.mock.results[0].value).authenticatedClient;
+    expect(mocks.history).toHaveBeenCalledWith(bearerClient, 'site-1', 426, '2026-04-30');
+    expect(mocks.evidence).toHaveBeenCalledWith(bearerClient, 'site-1', '2026-04-30');
+    expect(bearerClient.from).not.toHaveBeenCalledWith('entitlements');
+  });
+
+  it('returns missing optional assets and recipient without failing the route', async () => {
+    mocks.authorize.mockResolvedValueOnce({ authorized: true, organisationId: 'org-1', authenticatedClient: database({
+      renewable_assets: { data: [], error: null }, bess_assets: { data: [], error: null },
+    }) });
+    const response = await readinessGet(new NextRequest('http://localhost/api/sites/site-1/readiness'), { params: { id: 'site-1' } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      alert_recipient: { configured: false, source: 'NOT_CONFIGURED' },
+      renewable_asset: { configured: false }, bess_asset: { configured: false },
+    });
+  });
+
+  it('counts canonical persisted quality days without scanning the entire load history', async () => {
+    mocks.authorize.mockResolvedValueOnce({ authorized: true, organisationId: 'org-1', authenticatedClient: database({
+      data_quality_evaluations: { data: [
+        { evaluation_date: '2026-04-29', completeness_pct: 100, missing_blocks_count: 0, validation_status: 'PASSED' },
+        { evaluation_date: '2026-04-30', completeness_pct: 100, missing_blocks_count: 0, validation_status: 'PASSED' },
+      ], error: null },
+    }) });
+    const response = await readinessGet(new NextRequest('http://localhost/api/sites/site-1/readiness'), { params: { id: 'site-1' } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ interval_evidence: { validated_complete_days: 2, freshness_status: 'STALE' } });
+    expect(mocks.history).not.toHaveBeenCalled();
   });
 
   it('denies a foreign site before any readiness evidence query', async () => {
     mocks.authorize.mockResolvedValueOnce({ authorized: false, response: NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 }) });
     const response = await readinessGet(new NextRequest('http://localhost/api/sites/foreign/readiness'), { params: { id: 'foreign' } });
     expect(response.status).toBe(403);
-    expect(mocks.admin).not.toHaveBeenCalled();
+    expect(mocks.history).not.toHaveBeenCalled();
   });
 
   it('fails closed when persisted readiness evidence cannot be read', async () => {
-    mocks.admin.mockReturnValueOnce(database({ data_quality_evaluations: { data: null, error: { message: 'permission denied' } } }));
+    mocks.history.mockRejectedValueOnce(new Error('permission denied for table interval_data_96'));
     const response = await readinessGet(new NextRequest('http://localhost/api/sites/site-1/readiness'), { params: { id: 'site-1' } });
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: 'SITE_READINESS_LOOKUP_FAILED' });
+  });
+
+  it('does not treat an optional asset query error as an absent asset', async () => {
+    mocks.authorize.mockResolvedValueOnce({ authorized: true, organisationId: 'org-1', authenticatedClient: database({
+      renewable_assets: { data: null, error: { message: 'permission denied for table renewable_assets' } },
+    }) });
+    const response = await readinessGet(new NextRequest('http://localhost/api/sites/site-1/readiness'), { params: { id: 'site-1' } });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'SITE_READINESS_LOOKUP_FAILED' });
+    expect(mocks.history).not.toHaveBeenCalled();
   });
 
   it('contains no hard-coded satisfied readiness evidence in Settings', () => {
