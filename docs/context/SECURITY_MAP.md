@@ -36,6 +36,7 @@ graph LR
 - **Server-Only Operational Writes**: Tables `forecast_runs`, `grid_forecast_blocks`, `bess_signal_runs`, `dsm_incidents`, `dsm_evaluation_runs`, `interval_data_96`, `ingestion_runs`, `site_activation_history`, and `report_records` reject all direct INSERT/UPDATE/DELETE from client sessions (`auth.role() = 'service_role'` required).
 - **Notification Privacy**: `notification_logs` allows SELECT only for `ORGANISATION_ADMIN`, `FINANCE_SUSTAINABILITY_VIEWER`, or `recipient_email = auth.users.email`.
 - **Site Access Grants**: `site_access` allows SELECT only to the specific user or Org Admins; writes restricted to Org Admins.
+- **Settings Readiness Reads**: Migration 34 grants `authenticated` base SELECT on `data_quality_evaluations`, `renewable_assets`, and `bess_assets`; their existing `has_site_access(site_id)` RLS policies continue to restrict visible rows. No anon or write grant is added.
 - **Durable Webhook Quarantine**: Unmapped webhook events insert into `processed_webhook_events` with status `'QUARANTINED'` without granting customer entitlements, preventing silent transaction rollbacks.
 
 ## 4. Cryptographic Audit Immutability
@@ -54,4 +55,3 @@ graph LR
 - **MFA / AAL2**: Requires production Supabase Auth authenticator configuration (`PRODUCTION_CONFIG_REQUIRED`).
 - **External Penetration Testing**: Third-party verification of JWT token reuse, forged signatures, and side-channel leakage.
 - **Live Razorpay Webhook Secrets**: Live signature verification key rotation in vault.
-

@@ -119,6 +119,7 @@ describe('Grid visibility of committed interval data', () => {
       ...rowsFor(completeSiteId, '2026-01-02', 96),
       ...rowsFor(completeSiteId, '2026-01-03', 91),
       ...rowsFor(incompleteSiteId, '2026-01-03', 91),
+      ...rowsFor(foreignSiteId, '2026-01-01', 96),
     ]));
 
     const historyRows = Array.from({ length: 426 }, (_, dayIndex) => {
@@ -133,6 +134,17 @@ describe('Grid visibility of committed interval data', () => {
       .map((row) => ({ site_id: historySiteId, evaluation_date: row.operating_date,
         completeness_pct: 100, missing_blocks_count: 0, freshness_status: 'STALE',
         validation_status: 'PASSED', publication_gate_status: 'BLOCKED_STALE_DATA' }))));
+    await must(db.from('data_quality_evaluations').insert({ site_id: foreignSiteId,
+      evaluation_date: '2026-01-01', completeness_pct: 100, missing_blocks_count: 0,
+      freshness_status: 'STALE', validation_status: 'PASSED', publication_gate_status: 'BLOCKED_STALE_DATA' }));
+    await must(db.from('renewable_assets').insert([
+      { site_id: unentitledSiteId, name: 'Own solar', installed_capacity_kw: 100 },
+      { site_id: foreignSiteId, name: 'Foreign solar', installed_capacity_kw: 100 },
+    ]));
+    await must(db.from('bess_assets').insert([
+      { site_id: unentitledSiteId, name: 'Own battery', usable_capacity_kwh: 500, power_rating_kw: 250 },
+      { site_id: foreignSiteId, name: 'Foreign battery', usable_capacity_kwh: 500, power_rating_kw: 250 },
+    ]));
 
     const userClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
     token = (await must(userClient.auth.signInWithPassword({ email, password }))).session.access_token;
@@ -211,6 +223,27 @@ describe('Grid visibility of committed interval data', () => {
     expect(invalid.status).toBe(401);
     const foreign = await readinessGet(readinessRequest(foreignSiteId), { params: { id: foreignSiteId } });
     expect(foreign.status).toBe(403);
+  });
+
+  it('reads own readiness tables under bearer RLS and hides foreign rows', async () => {
+    const bearerClient = createClient(url, anonKey, { accessToken: async () => token });
+    for (const [table, ownSiteId] of [
+      ['data_quality_evaluations', historySiteId],
+      ['renewable_assets', unentitledSiteId],
+      ['bess_assets', unentitledSiteId],
+    ] as const) {
+      const own = await bearerClient.from(table).select('id').eq('site_id', ownSiteId).limit(1);
+      expect(own.error, `${table}: ${own.error?.message}`).toBeNull();
+      expect(own.data).toHaveLength(1);
+      const foreign = await bearerClient.from(table).select('id').eq('site_id', foreignSiteId);
+      expect(foreign.error, `${table}: ${foreign.error?.message}`).toBeNull();
+      expect(foreign.data).toEqual([]);
+    }
+    const anonymousClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    for (const table of ['data_quality_evaluations', 'renewable_assets', 'bess_assets'] as const) {
+      const anonymous = await anonymousClient.from(table).select('id').eq('site_id', unentitledSiteId);
+      expect(anonymous.data || []).toEqual([]);
+    }
   });
 
   it('serves ordered committed load visualization through the bearer site context without analytics', async () => {
